@@ -18,6 +18,6 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
-  artifactName: ${productName}-Setup-${version}.${ext}
+  artifactName: aa-browser-setup-${version}.${ext}
   uninstallDisplayName: Aa Browser
   createDesktopShortcut: true

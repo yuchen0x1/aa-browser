@@ -85,6 +85,22 @@ title: Aa Browser - 搜索
 
 ## 快速开始
 
+### ⚡ 复制粘贴给 AI，全自动安装接入（推荐给 AI 客户端用户）
+
+把 [PROMPT.md](./PROMPT.md) 里的提示词**整段复制给你的 AI 客户端**（ZCode / Claude Code / Cursor…），AI 会自动完成下载 → 安装 → 启动 → 写入你本机的 MCP 配置。
+
+不用 AI 的话，等价的手动命令（先拿到 install.mjs 与安装包）：
+
+```bash
+node install.mjs --url  <安装包直链或本地路径>     # 下载/安装/启动/接入一条龙
+node install.mjs --repo <owner>/<repo>            # 自动拉 GitHub Releases 最新版
+node install.mjs --url <...> --clients zcode,cursor   # 只接入指定客户端
+```
+
+> 需要先把安装包发布到可公开下载的位置（GitHub Releases / 网盘直链），步骤见 [PROMPT.md](./PROMPT.md) 末尾"给发布者"。
+
+### 其他方式
+
 要求：Node.js ≥ 20，Windows / macOS / Linux。
 
 ### 方式一：Windows 安装包（推荐给普通用户）
