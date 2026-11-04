@@ -87,6 +87,16 @@ title: Aa Browser - 搜索
 
 要求：Node.js ≥ 20，Windows / macOS / Linux。
 
+### 方式一：Windows 安装包（推荐给普通用户）
+
+```bash
+npm run dist       # 产出 release/Aa Browser-Setup-<版本>.exe（NSIS 安装器）
+```
+
+双击安装（未做代码签名，Windows SmartScreen 会提示"更多信息 → 仍要运行"）。装好后打开 Aa Browser，新标签页上有**「一键接入你的 AI 客户端」**卡片，勾选客户端点一下即完成 MCP 配置。
+
+### 方式二：源码运行（开发者）
+
 ```bash
 git clone <本仓库> aa-browser
 cd aa-browser
@@ -104,25 +114,46 @@ npm run dev
 
 ## 接入你的 Agent
 
-**第一步**：启动 Aa Browser（保持运行）。它会在 `~/.aabrowser/connection.json` 写入本地端口与 token。
+**方式 A · 一键接入（推荐）**：Aa Browser 新标签页 → 「一键接入你的 AI 客户端」卡片 → 勾选 → 写入。
+命令行等效：`node cli/setup.mjs --yes`（`--list` 查看，`--client zcode,cursor` 指定目标）。
+支持：**ZCode / Claude Code / Cursor / Windsurf / Cline / VS Code / Gemini CLI / Qwen Code**。写入前自动备份原配置为 `<file>.aa-backup-<时间戳>`，幂等可重复执行。
 
-**第二步**：在 MCP 客户端配置中添加：
+**方式 B · 手动配置**：在 MCP 客户端配置中添加：
 
 ```jsonc
 {
   "mcpServers": {
     "aa-browser": {
       "command": "node",
-      "args": ["<本仓库绝对路径>/cli/mcp.mjs"]
+      "args": ["<安装目录>/cli/mcp.mjs"]
     }
   }
 }
 ```
 
-> Claude Code：`claude mcp add aa-browser -- node <仓库路径>/cli/mcp.mjs`
-> Cursor / ZCode / 其他客户端：把上面的 JSON 写入对应 `mcp.json`。
+**前提**：Aa Browser 保持运行（它会在 `~/.aabrowser/connection.json` 写入本地端口与 token，MCP 桥通过它发现浏览器）。
 
-**第三步**：让 Agent 干活。例如："用浏览器打开 GitHub trending，把前 10 个项目整理成表格。"
+然后让 Agent 干活，例如："用浏览器打开 GitHub trending，把前 10 个项目整理成表格" 或 "打开 xx 后台，把登录后的接口响应都抓给我看"。
+
+## MCP 工具
+
+| 工具 | 说明 |
+| --- | --- |
+| `browser_navigate` | 导航到 URL（非 URL 文本自动转搜索词；结果内嵌完整快照，`snapshot: false` 可跳过） |
+| `browser_snapshot` | 结构化页面快照（增量模式省 token；`full: true` 强制完整树） |
+| `browser_click` | 按 ref 点击（自动返回增量快照） |
+| `browser_type` | 按 ref 输入文本（支持 `submit` 回车提交、`clear` 清空） |
+| `browser_select_option` | 按 ref 选择下拉项（按 value 或可见文本匹配） |
+| `browser_scroll` | 滚动页面（先主文档，后最大滚动区域） |
+| `browser_extract` | 提取整页或指定元素的纯文本 |
+| `browser_wait` | 等待指定文本出现（轮询） |
+| `browser_press_key` | 按键：Enter / Escape / 方向键 / 单字符等 |
+| `browser_screenshot` | PNG 截图（图像 + 保存路径） |
+| `browser_console` | 读取页面控制台日志 |
+| `browser_network_requests` | **抓包**：列出捕获的 HTTP 请求（方法/状态/类型/大小/耗时/URL，支持过滤） |
+| `browser_network_detail` | **抓包**：单个请求的完整请求/响应头 + 响应体（`body: true`） |
+| `browser_har` | **抓包**：导出 HAR 1.2 文件（可导入 DevTools/Fiddler 人工分析） |
+| `browser_tabs` | 列表 / 新建 / 切换 / 关闭标签页 |
 
 ## MCP 工具
 
@@ -145,27 +176,31 @@ npm run dev
 
 - Agent 服务只监听 `127.0.0.1`，连接需携带启动时生成的随机 token
 - token 与端口写在用户目录 `~/.aabrowser/connection.json`（仅当前用户可读）
-- **注意**：Agent 能看到你登录的页面内容。请勿让不可信的 Agent 访问网银、工作邮箱等高敏站点；后续版本将加入"操作确认弹窗"与站点白名单（见 Roadmap）
+- 一键接入写入其他客户端配置前**自动备份**、只改 `aa-browser` 一个键、幂等可重复
+- **注意**：Agent 能看到你登录的页面内容与网络流量。请勿让不可信的 Agent 访问网银、工作邮箱等高敏站点；后续版本将加入"操作确认弹窗"与站点白名单（见 Roadmap）
 
 ## 项目结构
 
 ```text
 aa-browser/
 ├── src/
-│   ├── main/          # 主进程：窗口 / 标签 / 动作 / Agent 服务 / MCP 工具
-│   ├── preload/       # 外壳 UI 的 IPC 桥
-│   ├── renderer/      # 浏览器外壳 UI + 新标签页
+│   ├── main/          # 主进程：窗口 / 标签 / 动作 / 抓包 / Agent 服务 / MCP 工具 / 客户端接入
+│   ├── preload/       # 外壳 UI 与新标签页的 IPC 桥
+│   ├── renderer/      # 浏览器外壳 UI + 新标签页（一键接入卡片）
 │   ├── shared/        # 三方共享的协议类型
 │   └── snapshot/      # 注入引擎（DOM → 快照）与动作脚本
-├── cli/mcp.mjs        # stdio MCP 桥（零依赖）
-├── scripts/           # 冒烟测试 / 实战测试脚本
-└── electron.vite.config.ts
+├── cli/
+│   ├── mcp.mjs        # stdio MCP 桥（零依赖）
+│   └── setup.mjs      # 一键接入 CLI（零依赖）
+├── scripts/           # 冒烟测试 / 实战测试 / 图标生成
+├── electron.vite.config.ts
+└── electron-builder.yml
 ```
 
 ## 测试
 
 ```bash
-npm run smoke   # 端到端冒烟：启动浏览器 → MCP 驱动 → 断言（无网络依赖）
+npm run smoke   # 端到端冒烟：启动浏览器 → MCP 驱动 → 断言（含抓包，无外网依赖）
 node scripts/live-test.mjs   # 实战示例：MCP 驱动必应搜索全流程
 ```
 
@@ -174,9 +209,10 @@ node scripts/live-test.mjs   # 实战示例：MCP 驱动必应搜索全流程
 - [ ] 操作确认弹窗：Agent 点击/提交前可选人工确认
 - [ ] 站点白名单 / 会话隔离分区
 - [x] ~~快照增量更新与缓存（进一步降 token）~~（v0.2.0 已完成）
-- [ ] 下载管理、书签、多窗口
+- [x] ~~一键接入各大 AI 客户端 + 网络抓包工具集 + Windows 安装包~~（v0.3.0 已完成）
+- [ ] 请求拦截与 Mock（Agent 修改/重放请求）
 - [ ] npm 发布 `aa-browser-mcp`，支持 `npx` 一行接入
-- [ ] macOS / Linux 打包分发
+- [ ] macOS / Linux 打包分发、代码签名
 
 ## License
 

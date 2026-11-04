@@ -18,3 +18,11 @@ contextBridge.exposeInMainWorld('aa', {
     ipcRenderer.on('aa:focus-omnibox', () => cb())
   }
 })
+
+/** 新标签页专用 API（仅 newtab 页面注入；导航到普通网站时不暴露） */
+if (/newtab\.html$/.test(location.pathname)) {
+  contextBridge.exposeInMainWorld('aaNewtab', {
+    detectClients: (): Promise<unknown> => ipcRenderer.invoke('aa:clients-detect'),
+    setupClients: (ids: string[]): Promise<unknown> => ipcRenderer.invoke('aa:clients-setup', ids)
+  })
+}

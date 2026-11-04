@@ -42,6 +42,37 @@
       .cfg .k { color: #7ee787; }
       .cfg .c { color: #66676e; }
       .hint { margin-top: 22px; color: #66676e; font-size: 12.5px; }
+      .setup-card {
+        background: #232429;
+        border: 1px solid #34353c;
+        border-radius: 12px;
+        padding: 18px 20px;
+        margin-bottom: 26px;
+      }
+      .setup-head { margin-bottom: 12px; }
+      .setup-title { font-size: 15px; font-weight: 600; color: #e9eaee; }
+      .setup-sub { display: block; margin-top: 4px; color: #85868e; font-size: 12.5px; }
+      .client-list { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+      .client-item {
+        display: inline-flex; align-items: center; gap: 7px;
+        background: #2c2d34; border: 1px solid #3a3b42; border-radius: 8px;
+        padding: 7px 12px; font-size: 13px; cursor: pointer; color: #d7d8db;
+      }
+      .client-item:hover { border-color: #4f8cff; }
+      .client-item input { accent-color: #4f8cff; }
+      .client-name { font-weight: 500; }
+      .pill { font-size: 11px; padding: 2px 8px; border-radius: 9px; background: #1d1e23; color: #85868e; }
+      .pill.ok { background: rgba(76,175,80,.15); color: #66bb6a; }
+      .pill.warn { background: rgba(255,180,0,.15); color: #ffb340; }
+      .setup-btn {
+        padding: 9px 22px; border: none; border-radius: 8px; cursor: pointer;
+        background: #4f8cff; color: #fff; font-size: 14px; font-weight: 500;
+      }
+      .setup-btn:hover { background: #3d7bf0; }
+      .setup-btn:disabled { opacity: .5; cursor: default; }
+      .setup-result { margin-top: 12px; font-size: 12.5px; line-height: 1.8; color: #a5a6ad; }
+      .result-line b { font-weight: 600; }
+      .muted { color: #66676e; font-size: 12.5px; }
       kbd {
         background: #2c2d34; border: 1px solid #3a3b42; border-radius: 4px;
         padding: 1px 6px; font-size: 11.5px; color: #a5a6ad; font-family: inherit;
@@ -53,21 +84,33 @@
       <div class="logo">Aa<span> Browser</span></div>
       <h1>为 AI Agent 而生的浏览器</h1>
       <div class="sub">人像人一样浏览网页，Agent 像工程师一样驱动它。</div>
+
+      <div class="setup-card" id="setup-card">
+        <div class="setup-head">
+          <span class="setup-title">一键接入你的 AI 客户端</span>
+          <span class="setup-sub">自动把 aa-browser 的 MCP 配置写入所选客户端（写前自动备份，可重复执行）</span>
+        </div>
+        <div id="client-list" class="client-list">正在检测本机客户端…</div>
+        <button id="btn-setup" class="setup-btn">写入所选客户端配置</button>
+        <div id="setup-result" class="setup-result"></div>
+      </div>
+
       <ol>
         <li><b>正常使用</b>：这是一个完整的 Chromium 浏览器，地址栏、标签页、登录态都和普通浏览器一样。</li>
-        <li><b>接入 Agent</b>：在你的 AI 编程助手（ZCode / Claude Code / Cursor 等）的 MCP 配置中添加 <b>aa-browser-mcp</b>。</li>
-        <li><b>开始协作</b>：Agent 将通过结构化页面快照（可访问性树 + 元素 ref）阅读网页、点击、输入、提取数据。</li>
+        <li><b>接入 Agent</b>：点上方按钮，或手动在 AI 客户端的 MCP 配置中添加 <b>aa-browser-mcp</b>。</li>
+        <li><b>开始协作</b>：Agent 将通过结构化页面快照驱动网页，还能抓包分析网络请求（browser_network_* 工具）。</li>
       </ol>
-      <div class="cfg"><span class="c">// 在 Agent 的 mcp 配置中添加：</span>
+      <div class="cfg"><span class="c">// 手动配置（与上方按钮等效，任选其一）：</span>
 {
   <span class="k">"mcpServers"</span>: {
     <span class="k">"aa-browser"</span>: {
       <span class="k">"command"</span>: <span class="k">"node"</span>,
-      <span class="k">"args"</span>: [<span class="k">"&lt;本仓库路径&gt;/cli/mcp.mjs"</span>]
+      <span class="k">"args"</span>: [<span class="k">"&lt;安装目录&gt;/cli/mcp.mjs"</span>]
     }
   }
 }</div>
       <div class="hint">快捷键：<kbd>Ctrl+T</kbd> 新标签页 · <kbd>Ctrl+W</kbd> 关闭 · <kbd>Ctrl+L</kbd> 聚焦地址栏 · <kbd>F5</kbd> 刷新</div>
     </div>
+    <script type="module" src="./src/newtab.ts"></script>
   </body>
 </html>

@@ -16,7 +16,7 @@ import readline from 'node:readline'
 import process from 'node:process'
 import WebSocket from 'ws'
 
-const VERSION = '0.1.0'
+const VERSION = '0.3.0'
 const CONNECT_FILE = path.join(os.homedir(), '.aabrowser', 'connection.json')
 const CALL_TIMEOUT_MS = 60000
 
@@ -175,6 +175,52 @@ const TOOL_DEFS = [
       properties: {
         level: { type: 'string', enum: ['all', 'info', 'warning', 'error'], description: 'Filter level (default all)' },
         limit: { type: 'number', description: 'Max entries (default 50)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      }
+    }
+  },
+  {
+    name: 'browser_network_requests',
+    title: '网络请求列表（抓包）',
+    description:
+      'List captured network requests of the active tab (HTTP-level packet capture): id, method, status, type, size, duration, URL. Capture starts automatically on first use. Use browser_network_detail with a request id to inspect headers and response body.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        urlContains: { type: 'string', description: 'Only requests whose URL contains this (case-insensitive)' },
+        method: { type: 'string', description: 'Filter by HTTP method, e.g. GET/POST' },
+        statusMin: { type: 'number', description: 'Minimum HTTP status (e.g. 400 for errors)' },
+        statusMax: { type: 'number', description: 'Maximum HTTP status' },
+        resourceType: { type: 'string', description: 'Filter by type: Document/Script/XHR/Fetch/Image/Stylesheet/…' },
+        limit: { type: 'number', description: 'Max entries (default 50, newest last)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      }
+    }
+  },
+  {
+    name: 'browser_network_detail',
+    title: '网络请求详情',
+    description:
+      'Inspect one captured network request: full request/response headers, status, size, duration, and (with body:true) the response body text. This is how the agent reads API responses for testing.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        requestId: { type: 'string', description: 'Request id from browser_network_requests, e.g. "1234.5"' },
+        body: { type: 'boolean', description: 'Include the response body (default false)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      },
+      required: ['requestId']
+    }
+  },
+  {
+    name: 'browser_har',
+    title: '导出 HAR',
+    description:
+      'Export all captured network traffic of the active tab as a HAR 1.2 file (headers, timings, sizes; no response bodies) for manual analysis in DevTools/Fiddler. Saved under ~/.aabrowser/har/ by default.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Output file path (default ~/.aabrowser/har/aa-<timestamp>.har)' },
         tabId: { type: 'string', description: 'Tab id (default: active tab)' }
       }
     }

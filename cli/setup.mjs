@@ -1,0 +1,216 @@
+#!/usr/bin/env node
+/**
+ * aa-browser-setup —— 一键接入 CLI（零依赖）。
+ *
+ * 检测本机 AI 客户端并把 aa-browser 的 MCP 配置写入其配置文件：
+ *   node cli/setup.mjs [--yes] [--client zcode,cursor,...] [--list]
+ *
+ * 安全规则：写前备份（<file>.aa-backup-<时间戳>）、幂等、只改 aa-browser 一个键。
+ * 打包版中本文件位于 resources/app.asar.unpacked/cli/，可用系统 node 或
+ * "Aa Browser.exe"（ELECTRON_RUN_AS_NODE=1）运行。
+ */
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import readline from 'node:readline'
+import process from 'node:process'
+
+const HERE = path.dirname(fileURLToPath(import.meta.url))
+// 优先使用构建出的单文件零依赖桥（out/bridge/mcp.cjs），源码运行退回 cli/mcp.mjs
+const BUNDLED = path.resolve(HERE, '..', 'out', 'bridge', 'mcp.cjs')
+const MCP_PATH = fs.existsSync(BUNDLED) ? BUNDLED : path.resolve(HERE, 'mcp.mjs')
+const home = os.homedir()
+const appData = process.env['APPDATA'] || path.join(home, 'AppData', 'Roaming')
+const j = (...p) => path.join(home, ...p)
+const jA = (...p) => path.join(appData, ...p)
+
+const CLIENTS = [
+  { id: 'zcode', name: 'ZCode', detect: j('.zcode'), file: j('.zcode', 'cli', 'config.json'), container: 'mcp.servers' },
+  { id: 'claude', name: 'Claude Code', detect: j('.claude.json'), file: j('.claude.json'), container: 'mcpServers' },
+  { id: 'cursor', name: 'Cursor', detect: j('.cursor'), file: j('.cursor', 'mcp.json'), container: 'mcpServers' },
+  { id: 'windsurf', name: 'Windsurf', detect: j('.codeium', 'windsurf'), file: j('.codeium', 'windsurf', 'mcp_config.json'), container: 'mcpServers' },
+  {
+    id: 'cline',
+    name: 'Cline (VS Code 扩展)',
+    detect: jA('Code', 'User', 'globalStorage', 'saoudrizwan.claude-dev'),
+    file: jA('Code', 'User', 'globalStorage', 'saoudrizwan.claude-dev', 'settings', 'cline_mcp_settings.json'),
+    container: 'mcpServers',
+    jsonc: true
+  },
+  { id: 'vscode', name: 'VS Code (原生 MCP)', detect: jA('Code', 'User'), file: jA('Code', 'User', 'mcp.json'), container: 'servers', vscodeStyle: true, jsonc: true },
+  { id: 'gemini', name: 'Gemini CLI', detect: j('.gemini'), file: j('.gemini', 'settings.json'), container: 'mcpServers' },
+  { id: 'qwen', name: 'Qwen Code', detect: j('.qwen'), file: j('.qwen', 'settings.json'), container: 'mcpServers' }
+]
+
+const log = (...a) => console.log(...a)
+
+/** MCP 条目：本 CLI 无论被 node 还是 electron(RUN_AS_NODE) 执行都成立 */
+function bridgeEntry() {
+  const entry = { command: process.execPath, args: [MCP_PATH] }
+  if (process.versions.electron) entry.env = { ELECTRON_RUN_AS_NODE: '1' }
+  if (process.argv.includes('--vscode-style-entry')) entry.type = 'stdio'
+  return entry
+}
+
+function parseLoose(text) {
+  try {
+    return JSON.parse(text)
+  } catch {
+    try {
+      const stripped = text
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/(^|[^:])\/\/[^\n]*/g, '$1')
+        .replace(/,(\s*[}\]])/g, '$1')
+      return JSON.parse(stripped)
+    } catch {
+      return null
+    }
+  }
+}
+
+function getContainer(obj, container) {
+  let cur = obj
+  for (const k of container.split('.')) {
+    if (!cur[k] || typeof cur[k] !== 'object') cur[k] = {}
+    cur = cur[k]
+  }
+  return cur
+}
+
+function entryFor(def) {
+  const e = bridgeEntry()
+  const entry = { command: e.command, args: e.args }
+  if (e.env) entry.env = e.env
+  if (def.vscodeStyle) entry.type = 'stdio'
+  return entry
+}
+
+function detectOne(def) {
+  const installed = fs.existsSync(def.detect)
+  let configured = false
+  let outdated = false
+  if (installed && fs.existsSync(def.file)) {
+    const parsed = parseLoose(fs.readFileSync(def.file, 'utf-8'))
+    if (parsed) {
+      const existing = getContainer(parsed, def.container)['aa-browser']
+      if (existing) {
+        if (JSON.stringify(existing) === JSON.stringify(entryFor(def))) configured = true
+        else outdated = true
+      }
+    }
+  }
+  return { def, installed, configured, outdated }
+}
+
+function setupOne(def, ts) {
+  const installed = fs.existsSync(def.detect)
+  let parsed = {}
+  if (fs.existsSync(def.file)) {
+    const backup = `${def.file}.aa-backup-${ts}`
+    fs.copyFileSync(def.file, backup)
+    const p = parseLoose(fs.readFileSync(def.file, 'utf-8'))
+    if (!p) {
+      log(`  ⚠️  ${def.name}: 配置文件无法解析（${def.file}），请手动添加`)
+      return
+    }
+    parsed = p
+  }
+  const container = getContainer(parsed, def.container)
+  const entry = entryFor(def)
+  let verb = '已写入'
+  if (container['aa-browser']) {
+    if (JSON.stringify(container['aa-browser']) === JSON.stringify(entry)) {
+      log(`  ℹ️  ${def.name}: 已配置，无需变更（${def.file}）`)
+      return
+    }
+    verb = '已更新'
+  }
+  container['aa-browser'] = entry
+  fs.mkdirSync(path.dirname(def.file), { recursive: true })
+  fs.writeFileSync(def.file, JSON.stringify(parsed, null, 2) + '\n', 'utf-8')
+  log(`  ✅ ${def.name} ${verb}（${def.file}${installed ? '' : '，客户端目录未检测到，已创建新配置'}）`)
+}
+
+function ask(question) {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  return new Promise((resolve) => {
+    rl.question(question, (answer) => {
+      rl.close()
+      resolve(answer.trim().toLowerCase())
+    })
+  })
+}
+
+async function main() {
+  const args = process.argv.slice(2)
+  if (!fs.existsSync(MCP_PATH)) {
+    console.error(`找不到 MCP 桥脚本: ${MCP_PATH}（请确认安装完整）`)
+    process.exit(1)
+  }
+  const yes = args.includes('--yes')
+  const listOnly = args.includes('--list')
+  const clientArgIdx = args.indexOf('--client')
+  const wanted = clientArgIdx !== -1 ? (args[clientArgIdx + 1] || '').split(',').filter(Boolean) : null
+
+  const detected = CLIENTS.map(detectOne)
+  const installed = detected.filter((d) => d.installed)
+
+  if (listOnly) {
+    log('本机 AI 客户端检测结果：')
+    for (const d of detected) {
+      log(
+        `  ${d.installed ? '✓' : '·'} ${d.def.name.padEnd(18)} ` +
+          (d.configured ? '已配置' : d.outdated ? '已配置(待更新)' : d.installed ? '未配置' : '未安装') +
+          `  ${d.def.file}`
+      )
+    }
+    process.exit(0)
+  }
+
+  log(`MCP 桥: ${MCP_PATH}`)
+  log(`运行时: ${process.versions.electron ? 'Aa Browser 内置 Node (ELECTRON_RUN_AS_NODE)' : '系统 Node ' + process.version}`)
+  log('')
+
+  if (!installed.length) {
+    log('未检测到已安装的 AI 客户端。支持：' + CLIENTS.map((c) => c.name).join(' / '))
+    log('（客户端安装后重新运行本命令即可）')
+    process.exit(0)
+  }
+
+  let targets = installed.filter((d) => !wanted || wanted.includes(d.def.id))
+  if (wanted) {
+    const unknown = wanted.filter((w) => !CLIENTS.some((c) => c.id === w))
+    if (unknown.length) log(`⚠️ 忽略未知客户端 id: ${unknown.join(', ')}`)
+  }
+  targets = targets.filter((d) => !d.configured)
+
+  if (!targets.length) {
+    log('所选客户端均已配置完成，无需变更。运行 --list 查看详情。')
+    process.exit(0)
+  }
+
+  log('将写入以下客户端的 MCP 配置：')
+  for (const d of targets) log(`  - ${d.def.name}（${d.def.file}）`)
+  log('（写入前会自动备份原配置文件）')
+
+  if (!yes) {
+    const answer = await ask('\n确认写入？[y/N] ')
+    if (answer !== 'y' && answer !== 'yes') {
+      log('已取消。')
+      process.exit(0)
+    }
+  }
+
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+  log('')
+  for (const d of targets) setupOne(d.def, ts)
+  log('')
+  log('完成！重启你的 AI 客户端后即可使用 aa-browser 工具（确保 Aa Browser 处于运行状态）。')
+}
+
+main().catch((err) => {
+  console.error('setup 失败:', err.message)
+  process.exit(1)
+})

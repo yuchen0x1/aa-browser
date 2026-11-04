@@ -87,6 +87,8 @@ export async function doNavigate(
     tab = tabs.active() ?? tabs.createTab(url)
   }
   const wc = tab.view.webContents
+  // 导航前确保抓包已启用（保证本次导航的请求都被捕获）
+  await tab.net.ensure().catch(() => {})
   // loadURL 在打断进行中的导航时会抛出上一次导航的 ERR_ABORTED，
   // 因此不信任其 Promise，以"加载停止后的最终 URL"为准
   try {

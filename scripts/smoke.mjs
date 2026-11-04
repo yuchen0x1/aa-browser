@@ -11,6 +11,7 @@
  * （若 Aa Browser 已在运行则复用；由本脚本启动的实例会在结束时关闭）
  */
 import { spawn } from 'node:child_process'
+import http from 'node:http'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -232,6 +233,52 @@ async function main() {
     const fullText = mcp.text(fullSnap)
     check('full:true 返回完整树', fullText.includes('页面快照（完整）'), fullText.slice(0, 160))
     check('完整树与增量内容一致', fullText.includes('已搜索: 你好 Aa'))
+
+    console.log('\n[12] 网络抓包')
+    // 本地 HTTP 服务：页面加载时 fetch /api/data → 产生可断言的网络请求
+    const server = http.createServer((req, res) => {
+      if (req.url && req.url.startsWith('/api/data')) {
+        res.setHeader('Content-Type', 'application/json')
+        res.end(JSON.stringify({ ok: true, msg: '网络抓包测试内容' }))
+      } else {
+        res.setHeader('Content-Type', 'text/html; charset=utf-8')
+        res.end(
+          '<html><body><h1>抓包测试页</h1><div id="out"></div><script>' +
+            'fetch("/api/data").then(r=>r.json()).then(d=>{document.getElementById("out").textContent="接口返回: "+d.msg})' +
+            '</script></body></html>'
+        )
+      }
+    })
+    await new Promise((r) => server.listen(0, '127.0.0.1', r))
+    const port = server.address().port
+    try {
+      const nav2 = await mcp.call('browser_navigate', { url: `http://127.0.0.1:${port}/`, snapshot: false })
+      check('导航到抓包测试页', !nav2.isError, mcp.text(nav2))
+      await mcp.call('browser_wait', { text: '接口返回', timeoutMs: 8000 })
+
+      const reqs = await mcp.call('browser_network_requests', { urlContains: '/api/' })
+      const reqText = mcp.text(reqs)
+      check('抓到 /api/data 请求', reqText.includes('/api/data'), reqText.slice(0, 300))
+      check('请求状态 200', reqText.includes(' 200 '), reqText.slice(0, 300))
+      const reqIdMatch = /\[(\d+(?:\.\d+)?)\]/.exec(reqText)
+      check('拿到请求 id', !!reqIdMatch, reqText.slice(0, 200))
+
+      const detail = await mcp.call('browser_network_detail', { requestId: reqIdMatch[1], body: true })
+      const detailText = mcp.text(detail)
+      check('详情含响应头', detailText.toLowerCase().includes('content-type'), detailText.slice(0, 300))
+      check('详情含响应体（Agent 可读 API 响应）', detailText.includes('网络抓包测试内容'), detailText.slice(0, 400))
+
+      const har = await mcp.call('browser_har', {})
+      const harText = mcp.text(har)
+      const harPath = /已导出: (.+)$/m.exec(harText)?.[1]
+      check('HAR 导出成功', !!harPath, harText)
+      if (harPath) {
+        const harJson = JSON.parse(fs.readFileSync(harPath, 'utf-8'))
+        check('HAR 结构有效（log.entries）', Array.isArray(harJson?.log?.entries) && harJson.log.entries.length > 0)
+      }
+    } finally {
+      server.close()
+    }
   } finally {
     mcp.stop()
   }

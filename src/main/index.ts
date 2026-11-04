@@ -6,6 +6,7 @@ import { TabManager } from './tabs'
 import { AgentServer } from './agent-server'
 import { buildTools } from './tools'
 import { normalizeUrl } from './tabs'
+import { detectClients, setupClients } from './clients'
 import type { UiState } from '@shared/types'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
@@ -117,6 +118,9 @@ function handleBeforeInput(wc: Electron.WebContents): void {
     }
     if (ctrl && input.shift && input.key.toLowerCase() === 'i') {
       event.preventDefault()
+      // DevTools 与抓包共用调试通道：打开前先释放抓包
+      const t = tabManager?.tabs.find((x) => x.view.webContents === wc)
+      t?.net.dispose()
       wc.openDevTools({ mode: 'detach' })
       return
     }
@@ -211,7 +215,14 @@ function registerIpc(): void {
   })
   ipcMain.handle('aa:devtools', () => {
     const active = tabManager?.active()
+    active?.net.dispose() // DevTools 与抓包共用调试通道
     active?.view.webContents.openDevTools({ mode: 'detach' })
+  })
+  ipcMain.handle('aa:clients-detect', () => {
+    return detectClients()
+  })
+  ipcMain.handle('aa:clients-setup', (_e, ids: string[]) => {
+    return setupClients(Array.isArray(ids) ? ids : [])
   })
 }
 
@@ -236,6 +247,7 @@ app.whenReady().then(() => {
   registerIpc()
 
   tabManager = new TabManager(newtabUrl(), SEARCH_URL)
+  tabManager.newtabPreload = path.join(__dirname, '../preload/index.js')
   tabManager.onChange = onTabChange
 
   createWindow()

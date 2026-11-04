@@ -1,5 +1,6 @@
 import type { ToolContent } from '@shared/types'
 import { TabManager, normalizeUrl } from './tabs'
+import { clipBody } from './network'
 import {
   ActionError,
   captureSnapshot,
@@ -348,6 +349,118 @@ export function buildTools(
         .map((l) => `[${l.level}] ${l.text.replace(/\s+/g, ' ').slice(0, 500)}`)
         .join('\n')
       return { content: [text(`共 ${r.logs.length} 条：\n${body}`)] }
+    }
+  })
+
+  tools.push({
+    name: 'browser_network_requests',
+    title: '网络请求列表（抓包）',
+    description:
+      'List captured network requests of the active tab (HTTP-level packet capture): id, method, ' +
+      'status, type, size, duration, URL. Capture starts automatically on first use. Use browser_network_detail ' +
+      'with a request id to inspect headers and response body.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        urlContains: { type: 'string', description: 'Only requests whose URL contains this (case-insensitive)' },
+        method: { type: 'string', description: 'Filter by HTTP method, e.g. GET/POST' },
+        statusMin: { type: 'number', description: 'Minimum HTTP status (e.g. 400 for errors)' },
+        statusMax: { type: 'number', description: 'Maximum HTTP status' },
+        resourceType: { type: 'string', description: 'Filter by type: Document/Script/XHR/Fetch/Image/Stylesheet/…' },
+        limit: { type: 'number', description: 'Max entries (default 50, newest last)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      }
+    },
+    handler: async (args) => {
+      const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      await tab.net.ensure()
+      const list = tab.net.requests({
+        urlContains: args['urlContains'] as string | undefined,
+        method: args['method'] as string | undefined,
+        statusMin: args['statusMin'] as number | undefined,
+        statusMax: args['statusMax'] as number | undefined,
+        resourceType: args['resourceType'] as string | undefined
+      })
+      const limit = Math.min(200, Math.max(1, (args['limit'] as number) ?? 50))
+      const shown = list.slice(-limit)
+      if (!shown.length) {
+        return { content: [text('（暂无匹配的网络请求。页面需要先产生网络活动；抓包自首次调用起生效）')] }
+      }
+      const lines = shown.map(
+        (e) =>
+          `[${e.requestId}] ${e.method} ${e.status || '…'} ${e.resourceType} ` +
+          `${(e.size / 1024).toFixed(1)}KB ${e.durationMs != null ? e.durationMs + 'ms' : '…'} ` +
+          `${e.error ? 'ERROR:' + e.error : ''} ${e.url.slice(0, 160)}`
+      )
+      return { content: [text(`共 ${list.length} 条（显示最近 ${shown.length} 条）：\n${lines.join('\n')}`)] }
+    }
+  })
+
+  tools.push({
+    name: 'browser_network_detail',
+    title: '网络请求详情',
+    description:
+      'Inspect one captured network request: full request/response headers, status, size, duration, ' +
+      'and (with body:true) the response body text. This is how the agent reads API responses for testing.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        requestId: { type: 'string', description: 'Request id from browser_network_requests, e.g. "1234.5"' },
+        body: { type: 'boolean', description: 'Include the response body (default false)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      },
+      required: ['requestId']
+    },
+    handler: async (args) => {
+      const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      await tab.net.ensure()
+      const entry = tab.net.find(String(args['requestId'] ?? ''))
+      if (!entry) throw new ActionError(`找不到请求 ${args['requestId']}（用 browser_network_requests 查看当前抓到的请求）`)
+      const parts: string[] = [
+        `${entry.method} ${entry.url}`,
+        `状态: ${entry.status} ${entry.statusText}${entry.error ? '（失败: ' + entry.error + '）' : ''}`,
+        `类型: ${entry.resourceType} | 大小: ${(entry.size / 1024).toFixed(1)}KB | 耗时: ${entry.durationMs ?? '…'}ms`,
+        '',
+        '请求头:',
+        ...Object.entries(entry.requestHeaders).map(([k, v]) => `  ${k}: ${v}`),
+        '',
+        '响应头:',
+        ...Object.entries(entry.responseHeaders).map(([k, v]) => `  ${k}: ${v}`)
+      ]
+      if (args['body'] === true) {
+        const body = await tab.net.getResponseBody(entry.requestId)
+        parts.push('', '响应体:', clipBody(body, entry.mimeType))
+      }
+      return { content: [text(parts.join('\n'))] }
+    }
+  })
+
+  tools.push({
+    name: 'browser_har',
+    title: '导出 HAR',
+    description:
+      'Export all captured network traffic of the active tab as a HAR 1.2 file (headers, timings, sizes; ' +
+      'no response bodies) for manual analysis in DevTools/Fiddler. Saved under ~/.aabrowser/har/ by default.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Output file path (default ~/.aabrowser/har/aa-<timestamp>.har)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      }
+    },
+    handler: async (args) => {
+      const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      await tab.net.ensure()
+      const { app } = await import('electron')
+      const fs = await import('node:fs')
+      const path = await import('node:path')
+      const os = await import('node:os')
+      const file =
+        (args['path'] as string | undefined) ||
+        path.join(os.homedir(), '.aabrowser', 'har', `aa-${Date.now()}.har`)
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      fs.writeFileSync(file, JSON.stringify(tab.net.toHar(app.getVersion()), null, 2), 'utf-8')
+      return { content: [text(`HAR 已导出: ${file}\n共 ${fs.statSync(file).size} 字节`)] }
     }
   })
 

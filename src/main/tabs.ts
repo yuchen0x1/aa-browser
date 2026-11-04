@@ -1,5 +1,6 @@
 import { WebContentsView, WebContents } from 'electron'
 import type { TabInfo } from '@shared/types'
+import { NetworkCapture } from './network'
 
 export interface Tab {
   id: string
@@ -9,6 +10,7 @@ export interface Tab {
   favicon?: string
   loading: boolean
   consoleBuf: { level: string; text: string; ts: number }[]
+  net: NetworkCapture
 }
 
 export function normalizeUrl(input: string, searchUrl: string, newtabUrl: string): string {
@@ -44,6 +46,8 @@ export class TabManager {
   tabs: Tab[] = []
   activeId: string | null = null
   onChange: () => void = () => {}
+  /** 新标签页专用 preload（接入卡片 UI 需要 IPC） */
+  newtabPreload: string | null = null
 
   constructor(
     private newtabUrl: string,
@@ -59,11 +63,13 @@ export class TabManager {
   }
 
   createTab(url?: string, activate = true): Tab {
+    const target = url || this.newtabUrl
     const view = new WebContentsView({
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,
-        spellcheck: false
+        spellcheck: false,
+        preload: target === this.newtabUrl ? this.newtabPreload ?? undefined : undefined
       }
     })
     const tab: Tab = {
@@ -72,11 +78,13 @@ export class TabManager {
       title: '新建标签页',
       url: url || this.newtabUrl,
       loading: false,
-      consoleBuf: []
+      consoleBuf: [],
+      net: new NetworkCapture(view.webContents)
     }
     this.attachEvents(tab)
     this.tabs.push(tab)
     if (activate) this.activeId = tab.id
+    void tab.net.ensure().catch(() => {}) // 抓包随 tab 建立，覆盖首屏导航的请求
     view.webContents.loadURL(tab.url).catch(() => {}) // 被后续导航打断时静默
     this.onChange()
     return tab
@@ -86,6 +94,7 @@ export class TabManager {
     const idx = this.tabs.findIndex((t) => t.id === id)
     if (idx === -1) return
     const [tab] = this.tabs.splice(idx, 1)
+    tab.net.dispose()
     try {
       tab.view.webContents.close()
     } catch {

@@ -1,0 +1,23 @@
+appId: com.aa.browser
+productName: Aa Browser
+copyright: Copyright © 2026 Aa Browser contributors
+directories:
+  output: release
+  buildResources: build
+files:
+  - out/**
+  - cli/**
+  - package.json
+asarUnpack:
+  - cli/**
+  - out/bridge/**
+win:
+  icon: build/icon.png
+  target:
+    - target: nsis
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${productName}-Setup-${version}.${ext}
+  uninstallDisplayName: Aa Browser
+  createDesktopShortcut: true
