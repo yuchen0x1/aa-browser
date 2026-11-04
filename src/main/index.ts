@@ -15,6 +15,12 @@ const VERSION = app.getVersion()
 const CHROME_HEIGHT = 78
 const SEARCH_URL = 'https://www.bing.com/search?q='
 
+// 开发版使用独立 userData：避免与安装版争单实例锁/登录态/connection.json。
+// ⚠️ 必须在 requestSingleInstanceLock() 之前调用（锁按 userData 路径区分）。
+if (!app.isPackaged) {
+  app.setPath('userData', path.join(app.getPath('appData'), 'aa-browser-dev'))
+}
+
 let win: BaseWindow | null = null
 let chromeView: WebContentsView | null = null
 let tabManager: TabManager | null = null

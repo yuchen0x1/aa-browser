@@ -16,7 +16,7 @@ import readline from 'node:readline'
 import process from 'node:process'
 import WebSocket from 'ws'
 
-const VERSION = '0.3.0'
+const VERSION = '0.3.2'
 const CONNECT_FILE = path.join(os.homedir(), '.aabrowser', 'connection.json')
 const CALL_TIMEOUT_MS = 60000
 
@@ -321,6 +321,24 @@ async function getWs() {
   if (ws && ws.readyState === WebSocket.OPEN) return ws
   return connectWs()
 }
+
+/**
+ * 启动即连接（带重试）：桥被 AI 客户端拉起时立刻连上浏览器，
+ * 让桌面端"Agent 已连接"指示灯在会话开始时就点亮；
+ * 浏览器未启动/正在重启时静默重试，浏览器重启（换端口）后也会自动重连。
+ */
+const CONNECT_RETRY_MS = 5000
+function startEagerConnect() {
+  const timer = setInterval(() => {
+    if (ws && ws.readyState === WebSocket.OPEN) return
+    connectWs().catch(() => {
+      /* 浏览器未运行等原因：静默等待下一轮重试 */
+    })
+  }, CONNECT_RETRY_MS)
+  timer.unref?.()
+}
+
+startEagerConnect()
 
 async function callTool(name, args) {
   const socket = await getWs()

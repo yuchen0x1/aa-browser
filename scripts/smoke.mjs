@@ -10,7 +10,7 @@
  * 用法：npm run build && npm run smoke
  * （若 Aa Browser 已在运行则复用；由本脚本启动的实例会在结束时关闭）
  */
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import http from 'node:http'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -57,6 +57,21 @@ function readConnection() {
 
 /** 若 Aa Browser 未运行，用已构建的产物启动它 */
 async function ensureAppRunning() {
+  // 清场：结束可能残留的实例（安装版与开发版），保证测试环境确定
+  // 注意：不用 shell:true——带空格的镜像名会被 shell 拆散导致静默失败
+  for (const img of ['Aa Browser.exe', 'electron.exe']) {
+    try {
+      spawnSync('taskkill', ['/F', '/IM', img], { timeout: 10000 })
+    } catch {
+      /* 无该进程 */
+    }
+  }
+  await sleep(800)
+  try {
+    fs.rmSync(CONNECT_FILE, { force: true }) // 清掉残留的发现文件
+  } catch {
+    /* 忽略 */
+  }
   let info = readConnection()
   if (info) {
     console.log(`发现运行中的 Aa Browser (pid=${info.pid})，直接复用`)
