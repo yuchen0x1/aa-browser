@@ -2,7 +2,10 @@
 
 **为 AI Agent 而生的开源桌面浏览器。**
 
+![License](https://img.shields.io/badge/license-MIT-blue) ![CI](https://github.com/yuchen0x1/aa-browser/actions/workflows/ci.yml/badge.svg) ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey) ![MCP](https://img.shields.io/badge/protocol-MCP-purple)
+
 > 人像人一样浏览网页，Agent 像工程师一样驱动它。
+> **The Agent-Native Browser** — snapshots, actions, and packet capture over MCP.
 
 传统浏览器是为"人眼看像素"设计的；而 AI Agent 需要的是**结构化页面数据**。Aa Browser 是一个完整的 Chromium 浏览器，任何人都可以正常使用它上网；同时，任何支持 MCP（Model Context Protocol）的 AI Agent 都可以连接进来，读取页面的**结构化快照**（可访问性树 + 元素 ref 编号），并执行点击、输入、选择、滚动、提取等操作——不看截图、不猜坐标。
 
@@ -93,7 +96,7 @@ title: Aa Browser - 搜索
 
 ```bash
 node install.mjs --url  <安装包直链或本地路径>     # 下载/安装/启动/接入一条龙
-node install.mjs --repo <owner>/<repo>            # 自动拉 GitHub Releases 最新版
+node install.mjs --repo yuchen0x1/aa-browser            # 自动拉 GitHub Releases 最新版
 node install.mjs --url <...> --clients zcode,cursor   # 只接入指定客户端
 ```
 
@@ -114,7 +117,7 @@ npm run dist       # 产出 release/Aa Browser-Setup-<版本>.exe（NSIS 安装�
 ### 方式二：源码运行（开发者）
 
 ```bash
-git clone <本仓库> aa-browser
+git clone https://github.com/yuchen0x1/aa-browser.git aa-browser
 cd aa-browser
 npm install        # 首次会下载 Electron，慢可设镜像：
                    # export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
@@ -141,7 +144,7 @@ npm run dev
   "mcpServers": {
     "aa-browser": {
       "command": "node",
-      "args": ["<安装目录>/cli/mcp.mjs"]
+      "args": ["C:\Program Files\aa-browser 或 %LOCALAPPDATA%\Programs\Aa Browser/cli/mcp.mjs"]
     }
   }
 }

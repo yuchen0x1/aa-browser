@@ -2,7 +2,7 @@
 
 > **用法**：把下面代码块里的内容**整段复制**，粘贴给你的 AI 客户端（ZCode / Claude Code / Cursor / Cline / Qwen…）发送即可。AI 会自动完成：下载 → 静默安装 → 启动 → 把 MCP 配置写入你本机检测到的 AI 客户端。
 >
-> **发布者注意**：把提示词里的 `<发布地址>` 换成你的实际发布地址（GitHub Releases 直链、网盘直链均可；也可以只给本地文件路径）。
+> **发布者注意**：把提示词里的 `https://github.com/yuchen0x1/aa-browser/releases/latest/download` 换成你的实际发布地址（GitHub Releases 直链、网盘直链均可；也可以只给本地文件路径）。
 
 ## 复制这段给 AI
 
@@ -13,14 +13,14 @@
 
 2. 获取安装器（两种方式任选）：
    a. 下载这两个文件到同一个临时目录：
-      - 安装脚本：<发布地址>/install.mjs
-      - 安装包：<发布地址>/aa-browser-setup-<版本>.exe
+      - 安装脚本：https://github.com/yuchen0x1/aa-browser/releases/latest/download/install.mjs
+      - 安装包：https://github.com/yuchen0x1/aa-browser/releases/latest/download/aa-browser-setup-0.3.1.exe
    b. 或者只下载 install.mjs，之后用 --repo 参数让它自己从 GitHub Releases 取最新安装包。
 
 3. 执行安装（在临时目录运行）：
    node install.mjs --url <安装包文件路径或直链> --clients zcode,claude,cursor
    说明：
-   - 如果只有 install.mjs 没有安装包，改用：node install.mjs --repo <owner>/<repo>
+   - 如果只有 install.mjs 没有安装包，改用：node install.mjs --repo yuchen0x1/aa-browser
    - --clients 是可选的客户端白名单，可选 id：zcode / claude / cursor / windsurf / cline / vscode / gemini / qwen；
      不传 --clients 表示接入所有检测到的客户端。
    - 脚本会自动：静默安装 → 启动 Aa Browser → 等待就绪 → 把 MCP 配置写入所选客户端
@@ -38,17 +38,17 @@
 ```powershell
 # PowerShell（Windows）——把 <URL> 换成发布地址
 irm <URL>/install.mjs -OutFile install.mjs
-node install.mjs --url <URL>/aa-browser-setup-<版本>.exe
+node install.mjs --url <URL>/aa-browser-setup-0.3.1.exe
 ```
 
 ```bash
 # macOS / Linux 用户暂无安装包，走源码：
-git clone <仓库地址> aa-browser && cd aa-browser && npm install && npm run build && node cli/setup.mjs --yes
+git clone https://github.com/yuchen0x1/aa-browser.git aa-browser && cd aa-browser && npm install && npm run build && node cli/setup.mjs --yes
 ```
 
 ## 给发布者：如何让提示词里的链接生效
 
 1. 把仓库推到 GitHub；
-2. `npm run dist` 产出 `release/aa-browser-setup-<版本>.exe`；
+2. `npm run dist` 产出 `release/aa-browser-setup-0.3.1.exe`；
 3. GitHub → Releases → Draft a new release → 上传该 exe（及可选的 install.mjs）→ Publish；
-4. 把提示词里的 `<发布地址>` 替换为仓库 Releases 直链，或让用户用 `--repo <owner>/<repo>` 自动拉取。
+4. 把提示词里的 `https://github.com/yuchen0x1/aa-browser/releases/latest/download` 替换为仓库 Releases 直链，或让用户用 `--repo yuchen0x1/aa-browser` 自动拉取。
