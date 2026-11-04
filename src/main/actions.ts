@@ -17,9 +17,9 @@ import type { Tab } from './tabs'
 
 export class ActionError extends Error {}
 
-/** 从 webContents 上执行注入的快照引擎 */
-export async function captureSnapshot(wc: WebContents): Promise<PageSnapshot> {
-  const source = `(${__aaSnapshot.toString()})()`
+/** 从 webContents 上执行注入的快照引擎（mode=full 强制完整快照，默认增量） */
+export async function captureSnapshot(wc: WebContents, opts?: { mode?: 'full' | 'auto' }): Promise<PageSnapshot> {
+  const source = `(${__aaSnapshot.toString()})(${JSON.stringify(opts ?? {})})`
   const snap = (await wc.executeJavaScript(source, false)) as PageSnapshot
   if (!snap || typeof snap !== 'object') {
     throw new ActionError('快照执行失败：页面未返回有效数据')
@@ -30,15 +30,9 @@ export async function captureSnapshot(wc: WebContents): Promise<PageSnapshot> {
   return snap
 }
 
+/** Agent 可读文本（引擎已在页面内拼好头部与模式标注） */
 export function snapshotText(snap: PageSnapshot): string {
-  const lines = [
-    `页面快照 url: ${snap.url}`,
-    `title: ${snap.title}`,
-    `元素数: ${snap.elements.length}${snap.truncated ? '（内容已截断，可滚动后重新快照）' : ''}`,
-    '',
-    snap.tree || '（页面无可渲染内容）'
-  ]
-  return lines.join('\n')
+  return snap.tree || `页面快照 url: ${snap.url}\ntitle: ${snap.title}\n（页面无可渲染内容）`
 }
 
 export function findElement(snap: PageSnapshot, ref: string): SnapshotElement | null {

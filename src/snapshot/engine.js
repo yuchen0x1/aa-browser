@@ -3,15 +3,25 @@
  * 页面快照引擎 —— 注入到页面主世界运行的核心。
  *
  * ⚠️ 本函数必须完全自包含：不引用任何外部变量、不使用 import。
- * 主进程通过 `Function.prototype.toString()` 取出源码，以 `(<fn>)()` 形式
+ * 主进程通过 `Function.prototype.toString()` 取出源码，以 `(<fn>)(opts)` 形式
  * 通过 webContents.executeJavaScript() 注入页面执行，返回可序列化的快照。
  *
  * 设计对齐 Playwright MCP 的 aria snapshot + ref 规范：
  *   - button "登录" [ref=e5]
  * Agent 通过 ref 调用 browser_click / browser_type 等工具。
  *
- * 同时在本帧（含同源 iframe 递归时挂在顶层 window）上维护
- * window.__aaRefs: { [ref]: Element } 供动作引擎定位。
+ * v2 增量特性（降 token）：
+ *   1. ref 跨快照复用：仍连接的元素直接沿用旧 ref；React 重渲染重建的节点
+ *      通过"内容签名"（tag|role|name|href）匹配旧 ref，只有新元素才分配新 ref。
+ *      → 旧快照里的 ref 持续有效，动作更稳。
+ *   2. 增量 diff：新旧树做前缀/后缀裁剪 + LCS：
+ *      - 完全一致 → 「无变化」一行（≈50 token）
+ *      - 小变化   → 只返回变更区块 ± 上下文
+ *      - 大变化/URL 跳转/强制 full → 完整快照
+ *
+ * 同时在本帧（含同源 iframe 递归时挂在顶层 window）上维护：
+ *   window.__aaRefs      { [ref]: Element }   动作引擎定位用
+ *   window.__aaSnapState { v,url,title,lines,refs,elements,nextSeq }  增量状态
  */
 export function __aaSnapshot() {
   'use strict'
@@ -19,13 +29,69 @@ export function __aaSnapshot() {
   var MAX_TEXT = 300
   var MAX_OPTIONS = 8
   var MAX_DEPTH = 40
+  var DIFF_WINDOW = 260 // 中段差异行数上限，超过直接回退完整快照
+  var PATCH_MAX_CHARS = 8000
+
+  var opts = typeof arguments[0] === 'object' && arguments[0] !== null ? arguments[0] : {}
 
   var truncated = false
   var seq = 0
-  var refs = {} // ref -> Element（仅存在于页面世界）
+  var refs = {} // ref -> Element（动作定位）
+  var refOf = null // Map Element -> ref（活元素复用）
+  var sigPool = {} // sig -> [ref]（失连元素的签名池）
   var elements = [] // 可序列化的元素信息
   var lines = []
   var topDoc = document
+
+  /* ── 恢复上次快照状态（同 URL 且未强制 full 时） ── */
+  var prevState = null
+  try {
+    prevState = window.__aaSnapState || null
+  } catch (e) {}
+  if (
+    prevState &&
+    (prevState.v !== 2 ||
+      prevState.url !== String(location.href) ||
+      opts.mode === 'full' ||
+      !prevState.lines ||
+      !prevState.refs)
+  ) {
+    prevState = null
+  }
+  if (prevState) {
+    try {
+      refOf = new Map()
+    } catch (e) {
+      refOf = null
+    }
+    seq = prevState.nextSeq || 0
+    var oldRefs = prevState.refs
+    var infoByRef = {}
+    var prevEls = prevState.elements || []
+    for (var pe = 0; pe < prevEls.length; pe++) infoByRef[prevEls[pe].ref] = prevEls[pe]
+    for (var r0 in oldRefs) {
+      var el0 = oldRefs[r0]
+      var conn = false
+      try {
+        conn = !!(el0 && el0.isConnected)
+      } catch (e) {}
+      if (conn) {
+        refs[r0] = el0
+        if (refOf) {
+          try {
+            refOf.set(el0, r0)
+          } catch (e) {}
+        }
+      } else {
+        var inf = infoByRef[r0]
+        if (inf) {
+          var sg = [inf.tag, inf.role, inf.name, inf.href || ''].join('|')
+          if (!sigPool[sg]) sigPool[sg] = []
+          sigPool[sg].push(r0)
+        }
+      }
+    }
+  }
 
   function clip(s, n) {
     n = n || MAX_TEXT
@@ -193,13 +259,35 @@ export function __aaSnapshot() {
     }
   }
 
+  /** ref 分配：活元素复用 > 签名匹配失连元素 > 新 ref */
+  function assignRef(el, sig) {
+    var ref = null
+    if (refOf) {
+      try {
+        ref = refOf.get(el) || null
+      } catch (e) {}
+    }
+    if (!ref) {
+      var pool = sigPool[sig]
+      if (pool && pool.length) ref = pool.pop()
+      else {
+        seq++
+        ref = 'e' + seq
+      }
+    }
+    refs[ref] = el
+    if (refOf) {
+      try {
+        refOf.set(el, ref)
+      } catch (e) {}
+    }
+    return ref
+  }
+
   /** 记录一个交互元素并输出树行 */
   function record(el, role, name, depth, ox, oy) {
-    seq++
-    var ref = 'e' + seq
-    refs[ref] = el
     var info = {
-      ref: ref,
+      ref: '',
       role: role,
       name: clip(name),
       tag: el.tagName.toLowerCase()
@@ -225,21 +313,24 @@ export function __aaSnapshot() {
     if (el.disabled) info.disabled = true
     if (role === 'heading') info.level = parseInt(el.tagName.charAt(1), 10) || undefined
     if (role === 'combobox' && el.tagName === 'SELECT') {
-      var opts = []
+      var optsList = []
       try {
         var os = el.options
-        for (var i = 0; i < os.length && i < MAX_OPTIONS; i++) opts.push(os[i].label || os[i].value)
+        for (var i = 0; i < os.length && i < MAX_OPTIONS; i++) optsList.push(os[i].label || os[i].value)
         if (os.length > MAX_OPTIONS) truncated = true
       } catch (e) {}
-      if (opts.length) info.options = opts
+      if (optsList.length) info.options = optsList
     }
+
+    var sig = [info.tag, info.role, info.name, info.href || ''].join('|')
+    info.ref = assignRef(el, sig)
     elements.push(info)
 
     // 树行
     var line = '- ' + role
     if (info.name) line += ' "' + info.name + '"'
     if (role === 'heading' && info.level) line += ' [level=' + info.level + ']'
-    line += ' [ref=' + ref + ']'
+    line += ' [ref=' + info.ref + ']'
     if (info.checked) line += ' [checked]'
     if (info.disabled) line += ' [disabled]'
     if (info.expanded !== undefined) line += ' [expanded]'
@@ -360,7 +451,7 @@ export function __aaSnapshot() {
 
     if (interactive) {
       record(el, role, labelFor(el), depth, ox, oy)
-      // 输入类/按钮类一般是叶子，不再深入其子元素（label 例外，继续找关联控件文本）
+      // 输入类/按钮类一般是叶子，不再深入其子元素
       if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') return
       var kids = el.childNodes
       for (var i2 = 0; i2 < kids.length; i2++) walk(kids[i2], depth + 1, ox, oy)
@@ -392,19 +483,210 @@ export function __aaSnapshot() {
     var root = document.body || document.documentElement
     if (root) walk(root, 0, 0, 0)
   } catch (e) {
-    return { v: 1, error: 'snapshot-failed: ' + (e && e.message) }
+    return { v: 2, mode: 'full', error: 'snapshot-failed: ' + (e && e.message) }
   }
 
+  var url = String(location.href)
+  var title = clip(document.title || '', 150)
+
+  /* ── diff 与三模式输出 ── */
+
+  function fullText() {
+    var head =
+      '页面快照（完整） url: ' + url + '\n' +
+      'title: ' + title + '\n' +
+      '元素数: ' + elements.length + (truncated ? '（内容已截断，可滚动后重新快照）' : '')
+    return head + '\n\n' + (lines.join('\n') || '（页面无可渲染内容）')
+  }
+
+  function unchangedText(n) {
+    return (
+      '页面快照（无变化） url: ' + url + '\n' +
+      'title: ' + title + '\n' +
+      '与上次快照完全一致（共 ' + n + ' 行）；之前的 ref 全部仍然有效，可直接继续操作。'
+    )
+  }
+
+  function normKey(l) {
+    return l.replace(/^[ ]+/, '')
+  }
+
+  /** 对中段 [p..eO] × [p..eN] 做 LCS diff，返回绝对下标的 ops */
+  function diffMiddle(p, eO, eN, oldK, newK) {
+    var n1 = eO - p + 1
+    var n2 = eN - p + 1
+    var w = n2 + 1
+    var len = new Int32Array((n1 + 1) * w)
+    var dir = new Uint8Array((n1 + 1) * w)
+    for (var i = n1 - 1; i >= 0; i--) {
+      for (var j = n2 - 1; j >= 0; j--) {
+        var k = i * w + j
+        if (oldK[p + i] === newK[p + j]) {
+          len[k] = len[(i + 1) * w + j + 1] + 1
+          dir[k] = 0
+        } else if (len[(i + 1) * w + j] >= len[i * w + j + 1]) {
+          len[k] = len[(i + 1) * w + j]
+          dir[k] = 1
+        } else {
+          len[k] = len[i * w + j + 1]
+          dir[k] = 2
+        }
+      }
+    }
+    var ops = []
+    var i2 = 0
+    var j2 = 0
+    while (i2 < n1 && j2 < n2) {
+      var d = dir[i2 * w + j2]
+      if (d === 0) {
+        ops.push({ t: '=', o: p + i2, n: p + j2 })
+        i2++
+        j2++
+      } else if (d === 1) {
+        ops.push({ t: '-', o: p + i2 })
+        i2++
+      } else {
+        ops.push({ t: '+', n: p + j2 })
+        j2++
+      }
+    }
+    while (i2 < n1) {
+      ops.push({ t: '-', o: p + i2 })
+      i2++
+    }
+    while (j2 < n2) {
+      ops.push({ t: '+', n: p + j2 })
+      j2++
+    }
+    return ops
+  }
+
+  function patchBody(ops, oldL, newL) {
+    // 标记需要输出的 op（变更块 ± 2 行上下文）
+    var show = []
+    var gi = 0
+    while (gi < ops.length) {
+      if (ops[gi].t === '=') {
+        gi++
+        continue
+      }
+      var g0 = gi
+      while (gi < ops.length && ops[gi].t !== '=') gi++
+      var s = g0 - 1
+      var cnt = 0
+      while (s >= 0 && cnt < 2) {
+        if (ops[s].t === '=') cnt++
+        s--
+      }
+      var e = gi
+      cnt = 0
+      while (e < ops.length && cnt < 2) {
+        if (ops[e].t === '=') cnt++
+        e++
+      }
+      for (var x = s + 1; x < e; x++) show[x] = true
+    }
+    var out = []
+    for (var q = 0; q < ops.length; q++) {
+      if (!show[q]) continue
+      var op = ops[q]
+      if (op.t === '+') out.push('+ ' + newL[op.n])
+      else if (op.t === '-') out.push('- ' + oldL[op.o])
+      else out.push('  ' + newL[op.n])
+    }
+    return out.join('\n')
+  }
+
+  var mode = 'full'
+  var text = fullText()
+  var newRefs = []
+  var removedRefs = []
+
+  if (prevState) {
+    // 统计新增/失效 ref
+    for (var rk in refs) {
+      if (!(rk in prevState.refs)) newRefs.push(rk)
+    }
+    for (var rk2 in prevState.refs) {
+      if (!(rk2 in refs)) removedRefs.push(rk2)
+    }
+
+    var oldL = prevState.lines
+    var oldK = []
+    var newK = []
+    for (var a = 0; a < oldL.length; a++) oldK.push(normKey(oldL[a]))
+    for (var b = 0; b < lines.length; b++) newK.push(normKey(lines[b]))
+
+    var p = 0
+    while (p < oldL.length && p < lines.length && oldK[p] === newK[p]) p++
+    var eO = oldL.length - 1
+    var eN = lines.length - 1
+    while (eO >= p && eN >= p && oldK[eO] === newK[eN]) {
+      eO--
+      eN--
+    }
+    var midO = eO - p + 1
+    var midN = eN - p + 1
+
+    if (midO <= 0 && midN <= 0) {
+      mode = 'unchanged'
+      text = unchangedText(lines.length)
+    } else if (midO + midN > DIFF_WINDOW || midO * midN > 20000) {
+      mode = 'full'
+      text = fullText()
+    } else {
+      var ops = diffMiddle(p, eO, eN, oldK, newK)
+      var added = 0
+      var removed = 0
+      for (var q0 = 0; q0 < ops.length; q0++) {
+        if (ops[q0].t === '+') added++
+        else if (ops[q0].t === '-') removed++
+      }
+      if (added + removed > 120 || added + removed > Math.max(40, lines.length * 0.4)) {
+        mode = 'full'
+        text = fullText()
+      } else {
+        var body = patchBody(ops, oldL, lines)
+        if (body.length > PATCH_MAX_CHARS) {
+          mode = 'full'
+          text = fullText()
+        } else {
+          mode = 'patch'
+          text =
+            '页面快照（增量） url: ' + url + '\n' +
+            'title: ' + title + '\n' +
+            '变化: +' + added + ' / -' + removed + '（共 ' + lines.length + ' 行，其余未变，仍以上次快照为准）\n\n' +
+            body + '\n\n' +
+            '新增 ref: ' + (newRefs.slice(0, 15).join(' ') || '无') + '\n' +
+            '失效 ref: ' + (removedRefs.slice(0, 15).join(' ') || '无')
+        }
+      }
+    }
+  }
+
+  /* ── 持久化状态并返回 ── */
   try {
     window.__aaRefs = refs
+    window.__aaSnapState = {
+      v: 2,
+      url: url,
+      title: title,
+      lines: lines,
+      refs: refs,
+      elements: elements,
+      nextSeq: seq
+    }
   } catch (e) {}
 
   return {
-    v: 1,
-    url: String(location.href),
-    title: clip(document.title || '', 150),
-    tree: lines.join('\n'),
+    v: 2,
+    mode: mode,
+    url: url,
+    title: title,
+    tree: text,
     elements: elements,
+    newRefs: newRefs,
+    removedRefs: removedRefs,
     truncated: truncated,
     capturedAt: Date.now()
   }

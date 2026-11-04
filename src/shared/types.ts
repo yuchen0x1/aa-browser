@@ -39,11 +39,15 @@ export interface SnapshotElement {
 /** 页面结构化快照（注入引擎的返回值，全部可 JSON 序列化） */
 export interface PageSnapshot {
   v: number
+  /** full=完整树 / unchanged=与上次一致 / patch=仅变更区块 */
+  mode: 'full' | 'unchanged' | 'patch'
   url: string
   title: string
-  /** YAML 风格线性树，交互元素带 [ref=eN] */
+  /** Agent 可读文本：完整树或增量块（引擎已拼好头部） */
   tree: string
   elements: SnapshotElement[]
+  newRefs?: string[]
+  removedRefs?: string[]
   truncated: boolean
   capturedAt: number
 }

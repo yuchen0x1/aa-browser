@@ -10,6 +10,7 @@
 
 - 🖥️ **真浏览器**：基于 Electron（Chromium），标签页 / 地址栏 / 前进后退 / 登录态持久化，一应俱全
 - 🧠 **结构化快照**：页面被转换成 YAML 风格的可访问性树，每个可交互元素带 `ref` 编号（`- button "登录" [ref=e5]`），格式对齐 Playwright MCP 生态，Agent 零学习成本
+- 💸 **增量快照省 token**：页面没变 → 一行回复；小变化 → 只返回变更区块；ref 跨快照稳定复用（React 重渲染也能靠内容签名接上）；跳转/大变化自动回退完整快照。一次多步任务可省 60%+ 上下文
 - 🤖 **MCP 原生接入**：标准 stdio MCP 桥，ZCode / Claude Code / Cursor 等任何 MCP 客户端均可驱动
 - 🔒 **本地安全**：WebSocket 仅监听 127.0.0.1，随机端口 + 一次性 token，拒绝非本机连接
 - 🎯 **真实输入路径**：点击走受信任的输入事件（`isTrusted=true`），输入走 `insertText` 管线并对 React 受控组件兜底，被遮挡元素自动降级为合成事件
@@ -39,6 +40,24 @@ Agent 随后：
 ```jsonc
 { "tool": "browser_type",   "arguments": { "ref": "e15", "text": "Aa Browser", "submit": true } }
 ```
+
+点击/输入后自动返回的是**增量快照**——只有变化的区块：
+
+```text
+页面快照（增量） url: https://www.bing.com/search?q=Aa+Browser
+title: Aa Browser - 搜索
+变化: +6 / -1（共 214 行，其余未变，仍以上次快照为准）
+
+  - search
++ - link "agent-browser.dev" [ref=e37]
++ - text "Browser automation for AI agents …"
+- - text "（旧的空白提示）"
+
+新增 ref: e37 e38
+失效 ref: e12
+```
+
+页面未变化时只回一行（≈50 token）；跳转到新页面或变化过大时自动回退完整快照。`browser_snapshot { full: true }` 可强制完整树。
 
 ## 架构
 
@@ -109,9 +128,9 @@ npm run dev
 
 | 工具 | 说明 |
 | --- | --- |
-| `browser_navigate` | 导航到 URL（非 URL 文本自动转搜索词） |
-| `browser_snapshot` | 结构化页面快照（可访问性树 + ref） |
-| `browser_click` | 按 ref 点击（点击后自动返回新快照） |
+| `browser_navigate` | 导航到 URL（非 URL 文本自动转搜索词；结果内嵌完整快照，`snapshot: false` 可跳过） |
+| `browser_snapshot` | 结构化页面快照（增量模式省 token；`full: true` 强制完整树） |
+| `browser_click` | 按 ref 点击（自动返回增量快照） |
 | `browser_type` | 按 ref 输入文本（支持 `submit` 回车提交、`clear` 清空） |
 | `browser_select_option` | 按 ref 选择下拉项（按 value 或可见文本匹配） |
 | `browser_scroll` | 滚动页面（先主文档，后最大滚动区域） |
@@ -154,7 +173,7 @@ node scripts/live-test.mjs   # 实战示例：MCP 驱动必应搜索全流程
 
 - [ ] 操作确认弹窗：Agent 点击/提交前可选人工确认
 - [ ] 站点白名单 / 会话隔离分区
-- [ ] 快照增量更新与缓存（进一步降 token）
+- [x] ~~快照增量更新与缓存（进一步降 token）~~（v0.2.0 已完成）
 - [ ] 下载管理、书签、多窗口
 - [ ] npm 发布 `aa-browser-mcp`，支持 `npx` 一行接入
 - [ ] macOS / Linux 打包分发

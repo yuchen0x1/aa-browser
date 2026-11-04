@@ -52,12 +52,14 @@ export function buildTools(
     description:
       'Navigate the browser to a URL in the active tab (or a new tab). ' +
       'Plain text that is not a URL is treated as a search query. ' +
-      'Returns the page snapshot after loading, so you can act immediately.',
+      'Returns a full page snapshot after loading, so you can act immediately ' +
+      '(pass snapshot:false to skip it if you only need browser_extract / browser_wait).',
     inputSchema: {
       type: 'object',
       properties: {
         url: { type: 'string', description: 'URL or search query' },
         newTab: { type: 'boolean', description: 'Open in a new tab instead of the active one (default false)' },
+        snapshot: { type: 'boolean', description: 'Include a full snapshot in the result (default true)' },
         tabId: { type: 'string', description: 'Operate on a specific tab id (from browser_tabs list)' }
       },
       required: ['url']
@@ -67,7 +69,19 @@ export function buildTools(
       if (!url) throw new ActionError('url 不能为空')
       const target = normalizeUrl(url, searchUrl, newtabUrl)
       const r = await doNavigate(tabs, target, { newTab: !!args['newTab'], tabId: args['tabId'] as string | undefined })
-      return { content: [text(`已导航: ${r.url}\ntitle: ${r.title}`)] }
+      let body = `已导航: ${r.url}\ntitle: ${r.title}`
+      if (args['snapshot'] !== false) {
+        const tab = tabs.get(r.tabId)
+        if (tab) {
+          try {
+            const snap = await captureSnapshot(tab.view.webContents)
+            body += '\n\n' + snapshotText(snap)
+          } catch {
+            body += '\n\n（快照获取失败：页面可能仍在跳转，请单独调用 browser_snapshot）'
+          }
+        }
+      }
+      return { content: [text(body)] }
     }
   })
 
@@ -77,16 +91,20 @@ export function buildTools(
     description:
       'Capture a structured accessibility snapshot of the active tab as a YAML-style tree. ' +
       'Interactive elements carry [ref=eN] ids; pass a ref to browser_click / browser_type / ' +
-      'browser_select_option to act on them. Re-snapshot whenever the page changes.',
+      'browser_select_option to act on them. Snapshots are incremental: if the page is unchanged ' +
+      'you get a one-line "no change" reply, and after small changes only the changed region is ' +
+      'returned (refs stay stable across snapshots). Pass full:true to force a complete tree ' +
+      '(automatic after navigation or large changes).',
     inputSchema: {
       type: 'object',
       properties: {
+        full: { type: 'boolean', description: 'Force a full snapshot instead of incremental (default false)' },
         tabId: { type: 'string', description: 'Tab id (default: active tab)' }
       }
     },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
-      const snap = await captureSnapshot(tab.view.webContents)
+      const snap = await captureSnapshot(tab.view.webContents, args['full'] === true ? { mode: 'full' } : undefined)
       return { content: [text(snapshotText(snap))] }
     }
   })
@@ -101,7 +119,7 @@ export function buildTools(
       type: 'object',
       properties: {
         ref: { type: 'string', description: 'Element ref from browser_snapshot, e.g. "e12"' },
-        snapshot: { type: 'boolean', description: 'Return a fresh snapshot after the action (default true)' },
+        snapshot: { type: 'boolean', description: 'Return an incremental snapshot after the action (default true)' },
         tabId: { type: 'string', description: 'Tab id (default: active tab)' }
       },
       required: ['ref']
@@ -127,7 +145,7 @@ export function buildTools(
         text: { type: 'string', description: 'Text to type' },
         submit: { type: 'boolean', description: 'Press Enter after typing (default false)' },
         clear: { type: 'boolean', description: 'Clear the field before typing (default false)' },
-        snapshot: { type: 'boolean', description: 'Return a fresh snapshot after the action (default true)' },
+        snapshot: { type: 'boolean', description: 'Return an incremental snapshot after the action (default true)' },
         tabId: { type: 'string', description: 'Tab id (default: active tab)' }
       },
       required: ['ref', 'text']
@@ -154,7 +172,7 @@ export function buildTools(
         ref: { type: 'string', description: 'Element ref of the combobox' },
         value: { type: 'string', description: 'Option value to select' },
         label: { type: 'string', description: 'Option visible label to select' },
-        snapshot: { type: 'boolean', description: 'Return a fresh snapshot after the action (default true)' },
+        snapshot: { type: 'boolean', description: 'Return an incremental snapshot after the action (default true)' },
         tabId: { type: 'string', description: 'Tab id (default: active tab)' }
       },
       required: ['ref']
@@ -182,7 +200,7 @@ export function buildTools(
       properties: {
         direction: { type: 'string', enum: ['up', 'down', 'left', 'right'], description: 'Scroll direction' },
         amount: { type: 'number', description: 'Pixels to scroll (default 700, max 3000)' },
-        snapshot: { type: 'boolean', description: 'Return a fresh snapshot after the action (default true)' },
+        snapshot: { type: 'boolean', description: 'Return an incremental snapshot after the action (default true)' },
         tabId: { type: 'string', description: 'Tab id (default: active tab)' }
       },
       required: ['direction']

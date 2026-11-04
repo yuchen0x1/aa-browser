@@ -33,21 +33,23 @@ const textOf = (r) => (r?.content ?? []).filter((c) => c.type === 'text').map((c
 
 await request('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'live-test', version: '0' } })
 
-console.log('── 导航到 bing.com ──')
+console.log('── 导航到 bing.com（内嵌完整快照） ──')
 const nav = await call('browser_navigate', { url: 'https://www.bing.com' })
-console.log(textOf(nav).slice(0, 300))
+const navText = textOf(nav)
+console.log(navText.slice(0, 300))
 
-console.log('\n── 快照（截取前 2500 字） ──')
-const snap = await call('browser_snapshot', {})
-const snapText = textOf(snap)
-console.log(snapText.slice(0, 2500))
-const inputLine = snapText.split('\n').find((l) => /- (textbox|searchbox|combobox)/.test(l))
+console.log('\n── 立即再快照一次（增量生效演示） ──')
+console.log(textOf(await call('browser_snapshot', {})))
+
+// refs 来自导航内嵌快照（真实 Agent 流程：导航即可行动）
+const navSnap = navText.slice(navText.indexOf('页面快照（'))
+const inputLine = navSnap.split('\n').find((l) => /- (textbox|searchbox|combobox)/.test(l))
 const m = inputLine ? /\[ref=(e\d+)\]/.exec(inputLine) : null
 const searchRef = m ? m[1] : null
 console.log('\n搜索框 ref:', searchRef, '←', inputLine?.trim().slice(0, 80))
 
 if (searchRef) {
-  console.log('\n── 输入并提交搜索 ──')
+  console.log('\n── 输入并提交搜索（动作后返回增量快照） ──')
   const typed = await call('browser_type', { ref: searchRef, text: 'Aa Browser AI agent browser', submit: true })
   console.log(textOf(typed).split('\n').slice(0, 4).join('\n'))
   console.log('\n── 等待结果 ──')

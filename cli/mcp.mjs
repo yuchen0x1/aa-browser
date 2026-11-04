@@ -29,12 +29,13 @@ const TOOL_DEFS = [
     name: 'browser_navigate',
     title: '导航',
     description:
-      'Navigate the browser to a URL in the active tab (or a new tab). Plain text that is not a URL is treated as a search query. Returns nothing special; call browser_snapshot afterwards.',
+      'Navigate the browser to a URL in the active tab (or a new tab). Plain text that is not a URL is treated as a search query. Returns a full page snapshot after loading, so you can act immediately (pass snapshot:false to skip it if you only need browser_extract / browser_wait).',
     inputSchema: {
       type: 'object',
       properties: {
         url: { type: 'string', description: 'URL or search query' },
         newTab: { type: 'boolean', description: 'Open in a new tab instead of the active one (default false)' },
+        snapshot: { type: 'boolean', description: 'Include a full snapshot in the result (default true)' },
         tabId: { type: 'string', description: 'Operate on a specific tab id (from browser_tabs list)' }
       },
       required: ['url']
@@ -44,22 +45,25 @@ const TOOL_DEFS = [
     name: 'browser_snapshot',
     title: '页面快照',
     description:
-      'Capture a structured accessibility snapshot of the active tab as a YAML-style tree. Interactive elements carry [ref=eN] ids; pass a ref to browser_click / browser_type / browser_select_option to act on them. Re-snapshot whenever the page changes.',
+      'Capture a structured accessibility snapshot of the active tab as a YAML-style tree. Interactive elements carry [ref=eN] ids; pass a ref to browser_click / browser_type / browser_select_option to act on them. Snapshots are incremental: unchanged page returns a one-line reply, small changes return only the changed region, and refs stay stable across snapshots. Pass full:true to force a complete tree (automatic after navigation or large changes).',
     inputSchema: {
       type: 'object',
-      properties: { tabId: { type: 'string', description: 'Tab id (default: active tab)' } }
+      properties: {
+        full: { type: 'boolean', description: 'Force a full snapshot instead of incremental (default false)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      }
     }
   },
   {
     name: 'browser_click',
     title: '点击',
     description:
-      'Click an element by its snapshot ref (e.g. "e12"). A fresh snapshot is returned afterwards so you can see the result and continue.',
+      'Click an element by its snapshot ref (e.g. "e12"). An incremental snapshot is returned afterwards so you can see the result and continue.',
     inputSchema: {
       type: 'object',
       properties: {
         ref: { type: 'string', description: 'Element ref from browser_snapshot, e.g. "e12"' },
-        snapshot: { type: 'boolean', description: 'Return a fresh snapshot after the action (default true)' },
+        snapshot: { type: 'boolean', description: 'Return an incremental snapshot after the action (default true)' },
         tabId: { type: 'string', description: 'Tab id (default: active tab)' }
       },
       required: ['ref']
@@ -77,7 +81,7 @@ const TOOL_DEFS = [
         text: { type: 'string', description: 'Text to type' },
         submit: { type: 'boolean', description: 'Press Enter after typing (default false)' },
         clear: { type: 'boolean', description: 'Clear the field before typing (default false)' },
-        snapshot: { type: 'boolean', description: 'Return a fresh snapshot after the action (default true)' },
+        snapshot: { type: 'boolean', description: 'Return an incremental snapshot after the action (default true)' },
         tabId: { type: 'string', description: 'Tab id (default: active tab)' }
       },
       required: ['ref', 'text']
@@ -93,7 +97,7 @@ const TOOL_DEFS = [
         ref: { type: 'string', description: 'Element ref of the combobox' },
         value: { type: 'string', description: 'Option value to select' },
         label: { type: 'string', description: 'Option visible label to select' },
-        snapshot: { type: 'boolean', description: 'Return a fresh snapshot after the action (default true)' },
+        snapshot: { type: 'boolean', description: 'Return an incremental snapshot after the action (default true)' },
         tabId: { type: 'string', description: 'Tab id (default: active tab)' }
       },
       required: ['ref']
@@ -108,7 +112,7 @@ const TOOL_DEFS = [
       properties: {
         direction: { type: 'string', enum: ['up', 'down', 'left', 'right'], description: 'Scroll direction' },
         amount: { type: 'number', description: 'Pixels to scroll (default 700, max 3000)' },
-        snapshot: { type: 'boolean', description: 'Return a fresh snapshot after the action (default true)' },
+        snapshot: { type: 'boolean', description: 'Return an incremental snapshot after the action (default true)' },
         tabId: { type: 'string', description: 'Tab id (default: active tab)' }
       },
       required: ['direction']
