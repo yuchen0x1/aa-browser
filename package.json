@@ -1,0 +1,39 @@
+{
+  "name": "aa-browser",
+  "productName": "Aa Browser",
+  "version": "0.1.0",
+  "description": "AI-native browser — browse like a human, drive like an agent (为 Agent 而生的浏览器)",
+  "license": "MIT",
+  "main": "out/main/index.js",
+  "bin": {
+    "aa-browser-mcp": "cli/mcp.mjs"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "start": "electron-vite preview",
+    "typecheck": "tsc --noEmit",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "browser",
+    "mcp",
+    "electron",
+    "browser-automation"
+  ],
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@types/ws": "^8.18.2",
+    "electron": "^45.2.2",
+    "electron-vite": "^6.0.0",
+    "typescript": "^7.0.2"
+  },
+  "dependencies": {
+    "ws": "^8.22.1"
+  }
+}

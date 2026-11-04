@@ -1,0 +1,239 @@
+/* Aa Browser 外壳 UI —— 深色主题 */
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  overflow: hidden;
+  background: #1b1c21;
+  font-family: 'Segoe UI', 'Microsoft YaHei', system-ui, sans-serif;
+  color: #d7d8db;
+  font-size: 13px;
+  user-select: none;
+}
+
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* ── 标签栏 ─────────────────────────── */
+#tabstrip {
+  height: 38px;
+  display: flex;
+  align-items: flex-end;
+  padding: 4px 8px 0 8px;
+  gap: 2px;
+  background: #1b1c21;
+  -webkit-app-region: drag;
+  flex: none;
+}
+
+#tabs {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  overflow-x: auto;
+  flex: 1;
+  scrollbar-width: none;
+}
+#tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  min-width: 90px;
+  max-width: 190px;
+  padding: 0 8px 0 10px;
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+  color: #9a9ba3;
+  background: transparent;
+  -webkit-app-region: no-drag;
+  flex: none;
+}
+.tab:hover {
+  background: #26272d;
+}
+.tab.active {
+  background: #2c2d34;
+  color: #e9eaee;
+}
+.tab .favicon {
+  width: 15px;
+  height: 15px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.tab .favicon img {
+  width: 15px;
+  height: 15px;
+  border-radius: 3px;
+}
+.tab .favicon .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #4f8cff;
+  animation: pulse 1s ease-in-out infinite;
+}
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.4;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.tab .title {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12.5px;
+}
+.tab .close {
+  width: 18px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  opacity: 0.6;
+}
+.tab .close:hover {
+  background: #3a3b42;
+  opacity: 1;
+}
+
+#btn-newtab {
+  width: 26px;
+  height: 26px;
+  margin-bottom: 3px;
+  border: none;
+  background: transparent;
+  color: #9a9ba3;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-app-region: no-drag;
+  flex: none;
+}
+#btn-newtab:hover {
+  background: #26272d;
+  color: #e9eaee;
+}
+
+.win-spacer {
+  width: 148px;
+  flex: none;
+}
+
+/* ── 工具栏 ─────────────────────────── */
+#toolbar {
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 10px;
+  background: #2c2d34;
+  -webkit-app-region: drag;
+  flex: none;
+}
+
+.navbtn {
+  width: 30px;
+  height: 30px;
+  border: none;
+  background: transparent;
+  color: #b9bac1;
+  border-radius: 7px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-app-region: no-drag;
+  flex: none;
+}
+.navbtn:hover {
+  background: #3a3b42;
+  color: #e9eaee;
+}
+.navbtn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+.navbtn:disabled:hover {
+  background: transparent;
+}
+
+#omnibox-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 30px;
+  padding: 0 12px;
+  background: #1d1e23;
+  border-radius: 15px;
+  border: 1px solid #34353c;
+  -webkit-app-region: no-drag;
+  margin: 0 4px;
+}
+#omnibox-wrap:focus-within {
+  border-color: #4f8cff;
+}
+#site-icon {
+  color: #7c7d85;
+  display: flex;
+  flex: none;
+}
+#omnibox {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #e9eaee;
+  font-size: 13px;
+  height: 100%;
+}
+#omnibox::placeholder {
+  color: #66676e;
+}
+
+#agent-pill {
+  height: 26px;
+  padding: 0 12px;
+  border-radius: 13px;
+  background: #232429;
+  color: #85868e;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  -webkit-app-region: no-drag;
+  flex: none;
+}
+#agent-pill.connected {
+  background: rgba(76, 175, 80, 0.14);
+  color: #66bb6a;
+}
