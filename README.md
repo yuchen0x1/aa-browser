@@ -167,28 +167,21 @@ npm run dev
 | `browser_extract` | 提取整页或指定元素的纯文本 |
 | `browser_wait` | 等待指定文本出现（轮询） |
 | `browser_press_key` | 按键：Enter / Escape / 方向键 / 单字符等 |
-| `browser_screenshot` | PNG 截图（图像 + 保存路径） |
+| `browser_screenshot` | PNG 截图（支持 `ref` 元素级截图：滚动到位并按包围盒裁剪） |
+| `browser_hover` | 按 ref 悬停（真实 mouseMove，触发悬停菜单/提示） |
+| `browser_navigate_back` / `browser_navigate_forward` | 历史后退 / 前进（返回增量快照） |
+| `browser_resize` | 调整视口尺寸（响应式测试） |
+| `browser_get_selector` | 导出元素的 CSS 选择器（DOM 回验，可复用于脚本/测试） |
+| `browser_find` | 页面内查找文本（原生 Ctrl+F：高亮全部匹配并定位第一处） |
+| `browser_cookies` | Cookie 读 / 写 / 清（登录态测试关键能力） |
+| `browser_storage` | localStorage / sessionStorage 读写与清空 |
+| `browser_downloads` | 下载捕获列表（静默保存到 ~/.aabrowser/downloads/，无弹窗） |
+| `browser_pdf` | 页面渲染为 PDF 并保存 |
+| `browser_upload_file` | 向 `<input type=file>` 上传本机文件（触发 change 事件） |
 | `browser_console` | 读取页面控制台日志 |
 | `browser_network_requests` | **抓包**：列出捕获的 HTTP 请求（方法/状态/类型/大小/耗时/URL，支持过滤） |
 | `browser_network_detail` | **抓包**：单个请求的完整请求/响应头 + 响应体（`body: true`） |
 | `browser_har` | **抓包**：导出 HAR 1.2 文件（可导入 DevTools/Fiddler 人工分析） |
-| `browser_tabs` | 列表 / 新建 / 切换 / 关闭标签页 |
-
-## MCP 工具
-
-| 工具 | 说明 |
-| --- | --- |
-| `browser_navigate` | 导航到 URL（非 URL 文本自动转搜索词；结果内嵌完整快照，`snapshot: false` 可跳过） |
-| `browser_snapshot` | 结构化页面快照（增量模式省 token；`full: true` 强制完整树） |
-| `browser_click` | 按 ref 点击（自动返回增量快照） |
-| `browser_type` | 按 ref 输入文本（支持 `submit` 回车提交、`clear` 清空） |
-| `browser_select_option` | 按 ref 选择下拉项（按 value 或可见文本匹配） |
-| `browser_scroll` | 滚动页面（先主文档，后最大滚动区域） |
-| `browser_extract` | 提取整页或指定元素的纯文本 |
-| `browser_wait` | 等待指定文本出现（轮询） |
-| `browser_press_key` | 按键：Enter / Escape / 方向键 / 单字符等 |
-| `browser_screenshot` | PNG 截图（图像 + 保存路径） |
-| `browser_console` | 读取页面控制台日志 |
 | `browser_tabs` | 列表 / 新建 / 切换 / 关闭标签页 |
 
 ## 安全说明
@@ -236,3 +229,12 @@ node scripts/live-test.mjs   # 实战示例：MCP 驱动必应搜索全流程
 ## License
 
 [MIT](./LICENSE)
+
+## 致谢
+
+Aa Browser 站在巨人的肩膀上，设计中对齐 / 借鉴了这些优秀开源项目的能力与格式：
+
+- [Playwright MCP](https://github.com/microsoft/playwright-mcp) — 可访问性快照 + ref 交互范式（我们对齐其格式），hover/历史导航/视口调整/元素截图等工具设计
+- [browser-use](https://github.com/browser-use/browser-use) — Agent 驱动浏览器的理念与动作后回读状态的实践
+- [BrowserTools MCP](https://github.com/AgentDeskAI/browser-tools-mcp) — Cookie/本地存储/选择器导出等"浏览器状态透明化"工具集
+- [Chrome DevTools MCP](https://github.com/ChromeDevTools/mcp) — CDP 能力面（网络抓包域）的参照

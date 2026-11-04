@@ -232,3 +232,109 @@ export const readValueScript = (ref: string): string => {
   } catch (e) { return { ok: false, reason: 'read-failed' } }
 })()`
 }
+
+/** 获取元素完整包围盒（顶层视口坐标，先滚动到视野内）——元素级截图用 */
+export const rectScript = (ref: string): string => {
+  REF_GUARD(ref)
+  return `(() => {
+  const el = (window.__aaRefs || {})['${ref}']
+  if (!el) return { ok: false, reason: 'no-ref' }
+  if (!el.isConnected) return { ok: false, reason: 'detached' }
+  try { el.scrollIntoView({ block: 'center', inline: 'nearest' }) } catch (e) {}
+  let ox = 0, oy = 0
+  let doc = el.ownerDocument
+  while (doc && doc !== document) {
+    const fel = doc.defaultView && doc.defaultView.frameElement
+    if (!fel) return { ok: false, reason: 'cross-origin' }
+    try { const fr = fel.getBoundingClientRect(); ox += fr.x; oy += fr.y; doc = fel.ownerDocument } catch (e) { return { ok: false, reason: 'cross-origin' } }
+  }
+  const r = el.getBoundingClientRect()
+  return { ok: true, x: Math.round(ox + r.x), y: Math.round(oy + r.y), width: Math.round(r.width), height: Math.round(r.height) }
+})()`
+}
+
+/** 生成元素 CSS 选择器并回验（BrowserTools 风格） */
+export const selectorScript = (ref: string): string => {
+  REF_GUARD(ref)
+  return `(() => {
+  const el = (window.__aaRefs || {})['${ref}']
+  if (!el) return { ok: false, reason: 'no-ref' }
+  function esc(s) { try { return window.CSS && CSS.escape ? CSS.escape(s) : s.replace(/([^\w-])/g, '\\$1') } catch (e) { return s } }
+  function build(el) {
+    if (el.id) { const s = '#' + esc(el.id); try { if (document.querySelector(s) === el) return s } catch (e) {} }
+    const parts = []
+    let cur = el, depth = 0
+    while (cur && cur.nodeType === 1 && depth < 6) {
+      if (cur.id) { parts.unshift('#' + esc(cur.id)); break }
+      let sel = cur.tagName.toLowerCase()
+      try {
+        const cls = Array.from(cur.classList || []).slice(0, 2).map(esc)
+        if (cls.length) sel += '.' + cls.join('.')
+        const parent = cur.parentElement
+        if (parent) {
+          const same = Array.from(parent.children).filter(c => c.tagName === cur.tagName)
+          if (same.length > 1) sel += ':nth-of-type(' + (same.indexOf(cur) + 1) + ')'
+        }
+      } catch (e) {}
+      parts.unshift(sel)
+      cur = cur.parentElement
+      depth++
+    }
+    return parts.join(' > ')
+  }
+  const selector = build(el)
+  let verified = false
+  try { verified = document.querySelector(selector) === el } catch (e) {}
+  let text = ''
+  try { text = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80) } catch (e) {}
+  return { ok: true, selector, verified, tag: el.tagName.toLowerCase(), text }
+})()`
+}
+
+/** localStorage / sessionStorage 读写 */
+export const storageScript = (action: string, kind: string, key?: string, value?: string): string => {
+  const kLit = JSON.stringify(key ?? null)
+  const vLit = JSON.stringify(value ?? null)
+  return `(() => {
+  const store = ${JSON.stringify(kind)} === 'session' ? sessionStorage : localStorage
+  const action = ${JSON.stringify(action)}
+  try {
+    if (action === 'get') {
+      const key = ${kLit}
+      if (key != null) return { ok: true, key, value: store.getItem(key) }
+      const keys = Object.keys(store)
+      const values = {}
+      keys.slice(0, 50).forEach(k => { values[k] = (store.getItem(k) || '').slice(0, 500) })
+      return { ok: true, count: keys.length, values, truncated: keys.length > 50 }
+    }
+    if (action === 'set') { store.setItem(${kLit}, ${vLit}); return { ok: true, key: ${kLit} } }
+    if (action === 'remove') { store.removeItem(${kLit}); return { ok: true } }
+    if (action === 'clear') { store.clear(); return { ok: true } }
+    return { ok: false, reason: 'bad-action' }
+  } catch (e) { return { ok: false, reason: String(e && e.message || e) } }
+})()`
+}
+
+/** 文件上传：注入 File 对象到 <input type=file>（主进程先读文件转 base64） */
+export const uploadScript = (ref: string, files: { name: string; type: string; data: string }[]): string => {
+  REF_GUARD(ref)
+  const lit = JSON.stringify(files)
+  return `(() => {
+  const el = (window.__aaRefs || {})['${ref}']
+  if (!el) return { ok: false, reason: 'no-ref' }
+  if (el.tagName !== 'INPUT' || (el.type || '').toLowerCase() !== 'file') {
+    return { ok: false, reason: 'not-file-input', tag: el.tagName.toLowerCase(), type: (el.type || '').toLowerCase() }
+  }
+  try {
+    const dt = new DataTransfer()
+    for (const f of ${lit}) {
+      const bytes = Uint8Array.from(atob(f.data), c => c.charCodeAt(0))
+      dt.items.add(new File([bytes], f.name, { type: f.type || 'application/octet-stream' }))
+    }
+    el.files = dt.files
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+    el.dispatchEvent(new Event('change', { bubbles: true }))
+    return { ok: true, count: el.files.length, names: Array.from(el.files).map(f => f.name) }
+  } catch (e) { return { ok: false, reason: String(e && e.message || e) } }
+})()`
+}

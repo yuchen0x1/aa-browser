@@ -16,7 +16,7 @@ import readline from 'node:readline'
 import process from 'node:process'
 import WebSocket from 'ws'
 
-const VERSION = '0.3.2'
+const VERSION = '0.4.0'
 const CONNECT_FILE = path.join(os.homedir(), '.aabrowser', 'connection.json')
 const CALL_TIMEOUT_MS = 60000
 
@@ -160,10 +160,169 @@ const TOOL_DEFS = [
   {
     name: 'browser_screenshot',
     title: '截图',
-    description: 'Take a PNG screenshot of the active tab. Returns the image inline (for vision-capable models) and saves it under ~/.aabrowser/screenshots/.',
+    description:
+      'Take a PNG screenshot of the active tab, or of a specific element (pass ref — the view is scrolled to it and the image is cropped to its bounding box). Returns the image inline (for vision-capable models) and saves it under ~/.aabrowser/screenshots/.',
     inputSchema: {
       type: 'object',
-      properties: { tabId: { type: 'string', description: 'Tab id (default: active tab)' } }
+      properties: {
+        ref: { type: 'string', description: 'Element ref: screenshot only this element (default: whole viewport)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      }
+    }
+  },
+  {
+    name: 'browser_hover',
+    title: '悬停',
+    description:
+      'Hover the mouse over an element by ref (triggers hover menus, tooltips, dropdown reveals). Uses the real input path so hover-dependent UI behaves as for a human.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string', description: 'Element ref from browser_snapshot' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      },
+      required: ['ref']
+    }
+  },
+  {
+    name: 'browser_navigate_back',
+    title: '后退',
+    description: 'Go back one page in the active tab history. Returns a fresh incremental snapshot.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        snapshot: { type: 'boolean', description: 'Return a snapshot after navigation (default true)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      }
+    }
+  },
+  {
+    name: 'browser_navigate_forward',
+    title: '前进',
+    description: 'Go forward one page in the active tab history. Returns a fresh incremental snapshot.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        snapshot: { type: 'boolean', description: 'Return a snapshot after navigation (default true)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      }
+    }
+  },
+  {
+    name: 'browser_resize',
+    title: '调整视口',
+    description:
+      'Resize the browser window content area (200–5000). Useful for responsive-design checks; then take browser_snapshot or browser_screenshot to see the adapted layout.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        width: { type: 'number', description: 'Content width in px (200–5000)' },
+        height: { type: 'number', description: 'Content height in px (200–5000)' }
+      },
+      required: ['width', 'height']
+    }
+  },
+  {
+    name: 'browser_get_selector',
+    title: '导出选择器',
+    description:
+      'Generate a CSS selector for a snapshot ref element (verified against the DOM). Use it to reuse the element in scripts, tests, or querySelector-based follow-up work.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string', description: 'Element ref from browser_snapshot' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      },
+      required: ['ref']
+    }
+  },
+  {
+    name: 'browser_find',
+    title: '页面查找',
+    description:
+      'Find text on the page (native Ctrl+F behavior): highlights every match, scrolls to the first one and reports the match count. Keep the highlight for the user; call with browser_scroll to move on.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        text: { type: 'string', description: 'Text to find' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      },
+      required: ['text']
+    }
+  },
+  {
+    name: 'browser_cookies',
+    title: 'Cookie 管理',
+    description:
+      'Get / set / clear cookies of the browser session (covers all sites the session has visited). Essential for login-state testing. set requires url + name + value.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['get', 'set', 'clear'], description: 'Operation' },
+        url: { type: 'string', description: '(get/set) Cookie belongs to this URL' },
+        name: { type: 'string', description: '(get: filter by name; set: cookie name; clear: only clear this name)' },
+        value: { type: 'string', description: '(set) Cookie value' },
+        domain: { type: 'string', description: '(set/clear filter) Cookie domain' },
+        secure: { type: 'boolean', description: '(set) Secure flag (default: true for https URLs)' },
+        httpOnly: { type: 'boolean', description: '(set) HttpOnly flag' },
+        expiresSeconds: { type: 'number', description: '(set) Expires in N seconds from now (omit = session cookie)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      },
+      required: ['action']
+    }
+  },
+  {
+    name: 'browser_storage',
+    title: '页面存储',
+    description: 'Read / write / remove / clear localStorage or sessionStorage of the active page origin.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['get', 'set', 'remove', 'clear'], description: 'Operation (get without key = list all)' },
+        kind: { type: 'string', enum: ['local', 'session'], description: 'localStorage (default) or sessionStorage' },
+        key: { type: 'string', description: 'Storage key (get without key = list all entries)' },
+        value: { type: 'string', description: '(set) Value to store' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      },
+      required: ['action']
+    }
+  },
+  {
+    name: 'browser_downloads',
+    title: '下载列表',
+    description:
+      'List files captured by the browser (downloads are saved silently under ~/.aabrowser/downloads/, no save dialog). Shows filename, source URL, size and progress/state.',
+    inputSchema: {
+      type: 'object',
+      properties: { limit: { type: 'number', description: 'Max entries (default 20, newest last)' } }
+    }
+  },
+  {
+    name: 'browser_pdf',
+    title: '存为 PDF',
+    description: 'Render the active page to a PDF (A4, print background on) and save it. Returns the file path.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Output file path (default ~/.aabrowser/downloads/aa-page-<ts>.pdf)' },
+        landscape: { type: 'boolean', description: 'Landscape orientation (default false)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      }
+    }
+  },
+  {
+    name: 'browser_upload_file',
+    title: '上传文件',
+    description:
+      'Upload local file(s) into a <input type=file> element by ref. Accepts absolute local paths; total size capped at 20MB. Fire-and-forget is enough — the change event fires for the page.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string', description: 'Element ref of the file input' },
+        paths: { type: 'array', items: { type: 'string' }, description: 'Absolute local file path(s)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      },
+      required: ['ref', 'paths']
     }
   },
   {

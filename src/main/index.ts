@@ -7,6 +7,8 @@ import { AgentServer } from './agent-server'
 import { buildTools } from './tools'
 import { normalizeUrl } from './tabs'
 import { detectClients, setupClients } from './clients'
+import { getDownloadTracker } from './downloads'
+import { session } from 'electron'
 import type { UiState } from '@shared/types'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
@@ -261,8 +263,28 @@ app.whenReady().then(() => {
   // 首个标签页：新标签页
   tabManager.createTab()
 
+  // 下载追踪：静默捕获所有下载（自动保存到 ~/.aabrowser/downloads/）
+  getDownloadTracker().attach(session.defaultSession)
+
   // Agent 接入服务
-  const tools = buildTools(tabManager, newtabUrl(), SEARCH_URL)
+  const tools = buildTools(
+    tabManager,
+    newtabUrl(),
+    SEARCH_URL,
+    {
+      resize: (w, h) =>
+        new Promise((resolve, reject) => {
+          if (!win) {
+            reject(new Error('窗口未就绪'))
+            return
+          }
+          win.setContentSize(w, h)
+          const { width, height } = win.getContentBounds()
+          resolve({ width, height })
+        })
+    },
+    getDownloadTracker()
+  )
   agentServer = new AgentServer(
     tools,
     (n) => {

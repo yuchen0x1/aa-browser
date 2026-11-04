@@ -11,7 +11,11 @@ import {
   scrollScript,
   extractScript,
   containsTextScript,
-  readValueScript
+  readValueScript,
+  rectScript,
+  selectorScript,
+  storageScript,
+  uploadScript
 } from '@snapshot/scripts'
 import type { Tab } from './tabs'
 
@@ -387,4 +391,310 @@ export function doConsoleLogs(
 /** 确保所有 webContents 的引用有效（未使用则无需导入警告） */
 export function allWebContents(): WebContents[] {
   return webContents.getAllWebContents()
+}
+
+/* ────────── v0.4.0 新增动作 ────────── */
+
+/** 悬停：真实 mouseMove 路径（触发菜单/提示展开） */
+export async function doHover(tab: Tab, ref: string): Promise<{ hovered: string }> {
+  const wc = tab.view.webContents
+  const loc = (await wc.executeJavaScript(locateScript(ref), false)) as {
+    ok: boolean
+    reason?: string
+    x?: number
+    y?: number
+    hitOk?: boolean
+    tag?: string
+  }
+  if (!loc || !loc.ok) {
+    const reason = loc?.reason ?? 'unknown'
+    throw new ActionError(
+      reason === 'no-ref'
+        ? `找不到元素 ${ref}：页面可能已变化，请先重新调用 browser_snapshot`
+        : `无法定位元素 ${ref}（${reason}）`
+    )
+  }
+  const x = Math.max(0, loc.x ?? 0)
+  const y = Math.max(0, loc.y ?? 0)
+  wc.sendInputEvent({ type: 'mouseMove', x, y })
+  await delay(150)
+  return { hovered: `${loc.tag} @(${x},${y})` }
+}
+
+/** 历史后退/前进（含快照）。bfcache 恢复可能没有 loading 事件：等待 URL 真正切换后再快照 */
+export async function doNavigateHistory(
+  tab: Tab,
+  dir: 'back' | 'forward',
+  wantSnapshot: boolean,
+  go: (t: Tab) => void,
+  canGo: (t: Tab) => boolean
+): Promise<{ moved: boolean; snapshot?: PageSnapshot }> {
+  if (!canGo(tab)) throw new ActionError(`没有可${dir === 'back' ? '后退' : '前进'}的历史记录`)
+  const wc = tab.view.webContents
+  const urlBefore = wc.getURL()
+  go(tab)
+  await settle(wc)
+  // 等 URL 稳定（最多 3s）：back/forward 的页面恢复可能异步完成
+  const deadline = Date.now() + 3000
+  while (Date.now() < deadline) {
+    const urlNow = wc.getURL()
+    if (urlNow && urlNow !== urlBefore) break
+    if (!wc.isLoading() && urlNow && urlNow !== urlBefore) break
+    await delay(150)
+  }
+  await delay(400)
+  const snapshot = wantSnapshot ? await captureSnapshot(wc) : undefined
+  return { moved: true, snapshot }
+}
+
+/** 页面内文本查找：高亮并跳到第一处（返回匹配数） */
+export async function doFind(
+  tab: Tab,
+  text: string,
+  timeoutMs = 4000
+): Promise<{ matches: number; activeOrdinal: number | null }> {
+  const wc = tab.view.webContents
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      wc.removeListener('found-in-page', onFound)
+      reject(new ActionError('查找超时（页面未响应 findInPage）'))
+    }, timeoutMs)
+    const onFound = (_e: unknown, result: { matches: number; activeMatchOrdinal: number }): void => {
+      clearTimeout(timer)
+      wc.removeListener('found-in-page', onFound)
+      resolve({ matches: result.matches, activeOrdinal: result.activeMatchOrdinal })
+    }
+    wc.on('found-in-page', onFound)
+    try {
+      wc.findInPage(text, { findNext: false })
+    } catch (err) {
+      clearTimeout(timer)
+      wc.removeListener('found-in-page', onFound)
+      reject(new ActionError(`查找失败：${(err as Error).message}`))
+    }
+  })
+}
+
+/** 视口（窗口内容区）调整 */
+export async function doResize(
+  tab: Tab,
+  resizeWindow: (w: number, h: number) => Promise<{ width: number; height: number }>,
+  width: number,
+  height: number
+): Promise<{ width: number; height: number }> {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width < 200 || height < 200 || width > 5000 || height > 5000) {
+    throw new ActionError('尺寸需在 200–5000 之间')
+  }
+  await delay(50)
+  const r = await resizeWindow(Math.round(width), Math.round(height))
+  await delay(250)
+  void tab // 布局会同步调整活动页视图
+  return r
+}
+
+/** 元素级截图：定位 → 整页截图 → 按 bbox 裁剪 */
+export async function doElementScreenshot(tab: Tab, ref: string): Promise<ToolContent> {
+  const wc = tab.view.webContents
+  const rect = (await wc.executeJavaScript(rectScript(ref), false)) as {
+    ok: boolean
+    reason?: string
+    x?: number
+    y?: number
+    width?: number
+    height?: number
+  }
+  if (!rect || !rect.ok) {
+    throw new ActionError(
+      rect?.reason === 'no-ref'
+        ? `找不到元素 ${ref}：页面可能已变化，请先重新调用 browser_snapshot`
+        : `无法定位元素 ${ref}（${rect?.reason ?? 'unknown'}）`
+    )
+  }
+  const image = await wc.capturePage()
+  if (image.isEmpty()) throw new ActionError('截图失败：页面合成器未就绪，请稍后重试')
+  const vp = (await wc.executeJavaScript('({ w: window.innerWidth, h: window.innerHeight })', false)) as {
+    w: number
+    h: number
+  }
+  const sx = image.getSize().width / Math.max(1, vp.w)
+  const sy = image.getSize().height / Math.max(1, vp.h)
+  const cropX = Math.max(0, Math.round((rect.x ?? 0) * sx))
+  const cropY = Math.max(0, Math.round((rect.y ?? 0) * sy))
+  const cropW = Math.max(1, Math.min(Math.round((rect.width ?? 1) * sx), image.getSize().width - cropX))
+  const cropH = Math.max(1, Math.min(Math.round((rect.height ?? 1) * sy), image.getSize().height - cropY))
+  const cropped = image.crop({ x: cropX, y: cropY, width: cropW, height: cropH })
+  return { type: 'image', data: cropped.toPNG().toString('base64'), mimeType: 'image/png' }
+}
+
+/** Cookie 读/写/清（会话级，覆盖所有标签的站点） */
+export async function doCookies(
+  tab: Tab,
+  opts: {
+    action: 'get' | 'set' | 'clear'
+    url?: string
+    name?: string
+    value?: string
+    domain?: string
+    path?: string
+    secure?: boolean
+    httpOnly?: boolean
+    expiresSeconds?: number
+  }
+): Promise<{ content: string }> {
+  const session = tab.view.webContents.session
+  try {
+    if (opts.action === 'get') {
+      const filter = opts.url ? { url: opts.url } : {}
+      const cookies = await session.cookies.get(filter as never)
+      const list = cookies
+        .filter((c) => !opts.name || c.name === opts.name)
+        .map(
+          (c) =>
+            `${c.name}=${c.value.length > 60 ? c.value.slice(0, 60) + '…' : c.value}` +
+            `  (domain=${c.domain ?? ''}${c.httpOnly ? ' httpOnly' : ''}${c.secure ? ' secure' : ''})`
+        )
+      return { content: list.length ? `共 ${list.length} 条：\n${list.join('\n')}` : '（无匹配 Cookie）' }
+    }
+    if (opts.action === 'set') {
+      if (!opts.url || !opts.name || opts.value === undefined) {
+        throw new ActionError('set 需要 url、name、value')
+      }
+      const details: Record<string, unknown> = {
+        url: opts.url,
+        name: opts.name,
+        value: opts.value,
+        secure: opts.secure ?? opts.url.startsWith('https'),
+        httpOnly: opts.httpOnly ?? false
+      }
+      if (opts.domain) details['domain'] = opts.domain
+      if (opts.path) details['path'] = opts.path
+      if (opts.expiresSeconds) details['expirationDate'] = Math.floor(Date.now() / 1000) + opts.expiresSeconds
+      await session.cookies.set(details as never)
+      return { content: `已写入 Cookie ${opts.name}（${opts.url}）` }
+    }
+    // clear
+    const cookies = await session.cookies.get({})
+    let n = 0
+    for (const c of cookies) {
+      if (opts.name && c.name !== opts.name) continue
+      const domain = c.domain ?? ''
+      if (opts.domain && !domain.includes(opts.domain)) continue
+      const scheme = c.secure ? 'https' : 'http'
+      await session.cookies.remove(`${scheme}://${domain.replace(/^\./, '')}${c.path ?? '/'}`, c.name)
+      n++
+    }
+    return { content: `已清除 ${n} 条${opts.name ? ` ${opts.name}` : ''} Cookie` }
+  } catch (err) {
+    throw new ActionError(`Cookie 操作失败：${(err as Error).message}`)
+  }
+}
+
+/** localStorage / sessionStorage 读写 */
+export async function doStorage(
+  tab: Tab,
+  opts: { action: 'get' | 'set' | 'remove' | 'clear'; kind: 'local' | 'session'; key?: string; value?: string }
+): Promise<{ content: string }> {
+  const wc = tab.view.webContents
+  const result = (await wc.executeJavaScript(storageScript(opts.action, opts.kind, opts.key, opts.value), false)) as {
+    ok: boolean
+    reason?: string
+    key?: string
+    value?: string | null
+    count?: number
+    values?: Record<string, string>
+    truncated?: boolean
+  }
+  if (!result?.ok) throw new ActionError(`存储操作失败（${result?.reason ?? 'unknown'}）`)
+  if (opts.action === 'get') {
+    if (opts.key != null) return { content: `${opts.key} = ${result.value ?? '（空）'}` }
+    const entries = Object.entries(result.values ?? {})
+    return {
+      content: entries.length
+        ? `共 ${result.count} 项（显示 ${entries.length}${result.truncated ? '，已截断' : ''}）：\n` +
+          entries.map(([k, v]) => `  ${k} = ${v}`).join('\n')
+        : `（${opts.kind === 'session' ? 'sessionStorage' : 'localStorage'} 为空）`
+    }
+  }
+  return { content: `已${opts.action === 'set' ? '写入' : opts.action === 'remove' ? '移除' : '清空'} ${opts.kind === 'session' ? 'sessionStorage' : 'localStorage'}` }
+}
+
+/** 文件上传（input[type=file]），paths 为本机绝对路径 */
+export async function doUploadFile(tab: Tab, ref: string, paths: string[]): Promise<{ content: string }> {
+  const fs = await import('node:fs')
+  const pathMod = await import('node:path')
+  const files: { name: string; type: string; data: string }[] = []
+  let total = 0
+  for (const p of paths) {
+    const stat = fs.statSync(p)
+    if (!stat.isFile()) throw new ActionError(`不是文件: ${p}`)
+    total += stat.size
+    if (total > 20 * 1024 * 1024) throw new ActionError('上传文件总大小超过 20MB 限制')
+    const ext = pathMod.extname(p).toLowerCase()
+    const mime =
+      ext === '.png'
+        ? 'image/png'
+        : ext === '.jpg' || ext === '.jpeg'
+          ? 'image/jpeg'
+          : ext === '.gif'
+            ? 'image/gif'
+            : ext === '.pdf'
+              ? 'application/pdf'
+              : ext === '.json'
+                ? 'application/json'
+                : ext === '.txt'
+                  ? 'text/plain'
+                  : 'application/octet-stream'
+    files.push({ name: pathMod.basename(p), type: mime, data: fs.readFileSync(p).toString('base64') })
+  }
+  const wc = tab.view.webContents
+  const result = (await wc.executeJavaScript(uploadScript(ref, files), false)) as {
+    ok: boolean
+    reason?: string
+    tag?: string
+    type?: string
+    count?: number
+    names?: string[]
+  }
+  if (!result?.ok) {
+    if (result?.reason === 'no-ref') throw new ActionError(`找不到元素 ${ref}：请先重新调用 browser_snapshot`)
+    if (result?.reason === 'not-file-input') {
+      throw new ActionError(`元素 ${ref} 不是文件上传控件（是 ${result.tag}[type=${result.type}]）`)
+    }
+    throw new ActionError(`上传失败（${result?.reason ?? 'unknown'}）`)
+  }
+  await settle(wc)
+  return { content: `已上传 ${result.count} 个文件: ${(result.names ?? []).join('、')}` }
+}
+
+/** 页面存 PDF */
+export async function doPdf(tab: Tab, filePath?: string, landscape = false): Promise<{ savedPath: string }> {
+  const wc = tab.view.webContents
+  const pdf = await wc.printToPDF({ printBackground: true, landscape, pageSize: 'A4' } as never)
+  const osMod = await import('node:os')
+  const pathMod = await import('node:path')
+  const fsMod = await import('node:fs')
+  const file = filePath || pathMod.join(osMod.homedir(), '.aabrowser', 'downloads', `aa-page-${Date.now()}.pdf`)
+  fsMod.mkdirSync(pathMod.dirname(file), { recursive: true })
+  fsMod.writeFileSync(file, pdf)
+  return { savedPath: file }
+}
+
+/** 元素 CSS 选择器导出（BrowserTools 风格，含回验） */
+export async function doGetSelector(tab: Tab, ref: string): Promise<{ selector: string; verified: boolean; text: string }> {
+  const wc = tab.view.webContents
+  const result = (await wc.executeJavaScript(selectorScript(ref), false)) as {
+    ok: boolean
+    reason?: string
+    selector?: string
+    verified?: boolean
+    text?: string
+  }
+  if (!result?.ok) {
+    throw new ActionError(
+      result?.reason === 'no-ref'
+        ? `找不到元素 ${ref}：请先重新调用 browser_snapshot`
+        : `选择器生成失败（${result?.reason ?? 'unknown'}）`
+    )
+  }
+  return { selector: result.selector ?? '', verified: !!result.verified, text: result.text ?? '' }
 }

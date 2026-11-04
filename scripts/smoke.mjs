@@ -250,16 +250,24 @@ async function main() {
     check('完整树与增量内容一致', fullText.includes('已搜索: 你好 Aa'))
 
     console.log('\n[12] 网络抓包')
-    // 本地 HTTP 服务：页面加载时 fetch /api/data → 产生可断言的网络请求
+    // 本地 HTTP 服务：页面加载时 fetch /api/data → 产生可断言的网络请求；附带下载与文件上传
     const server = http.createServer((req, res) => {
       if (req.url && req.url.startsWith('/api/data')) {
         res.setHeader('Content-Type', 'application/json')
         res.end(JSON.stringify({ ok: true, msg: '网络抓包测试内容' }))
+      } else if (req.url && req.url.startsWith('/download')) {
+        res.setHeader('Content-Type', 'application/octet-stream')
+        res.setHeader('Content-Disposition', 'attachment; filename="aa-smoke-download.txt"')
+        res.end('Aa Browser download smoke test payload')
       } else {
         res.setHeader('Content-Type', 'text/html; charset=utf-8')
         res.end(
-          '<html><body><h1>抓包测试页</h1><div id="out"></div><script>' +
-            'fetch("/api/data").then(r=>r.json()).then(d=>{document.getElementById("out").textContent="接口返回: "+d.msg})' +
+          '<html><body><h1>抓包测试页</h1><div id="out"></div>' +
+            '<a id="dl" href="/download">下载测试文件</a>' +
+            '<input id="up" type="file" /><div id="upout">（未上传）</div>' +
+            '<script>' +
+            'fetch("/api/data").then(r=>r.json()).then(d=>{document.getElementById("out").textContent="接口返回: "+d.msg});' +
+            'document.getElementById("up").addEventListener("change",e=>{document.getElementById("upout").textContent="已选择文件: "+e.target.files[0].name});' +
             '</script></body></html>'
         )
       }
@@ -291,6 +299,73 @@ async function main() {
         const harJson = JSON.parse(fs.readFileSync(harPath, 'utf-8'))
         check('HAR 结构有效（log.entries）', Array.isArray(harJson?.log?.entries) && harJson.log.entries.length > 0)
       }
+
+      console.log('\n[13] 交互补全（hover / back / forward / resize）')
+      // 用 full:true 确保拿到带 ref 的树（页面未变时增量快照不带 ref）
+      const httpSnap = mcp.text(await mcp.call('browser_snapshot', { full: true }))
+      const hoverRef = findRef(httpSnap, /- link "下载测试文件"/)
+      const hover = await mcp.call('browser_hover', { ref: hoverRef, snapshot: false })
+      check('悬停成功（真实 mouseMove）', !hover.isError, mcp.text(hover))
+
+      const back = await mcp.call('browser_navigate_back', { snapshot: false })
+      check('历史后退', !back.isError && mcp.text(back).includes('已后退'), mcp.text(back))
+      const backUrl = mcp.text(await mcp.call('browser_tabs', { action: 'list' }))
+      check('后退落在测试页（file://）', backUrl.includes('test-page.html'), backUrl.slice(0, 200))
+      const fwd = await mcp.call('browser_navigate_forward', { snapshot: false })
+      check('历史前进', !fwd.isError && mcp.text(fwd).includes('已前进'), mcp.text(fwd))
+      await mcp.call('browser_wait', { text: '接口返回', timeoutMs: 8000 })
+
+      const resized = await mcp.call('browser_resize', { width: 1100, height: 760 })
+      check('视口调整成功', !resized.isError && /1100×7\d\d/.test(mcp.text(resized)), mcp.text(resized))
+
+      console.log('\n[14] 观察增强（选择器 / 查找 / 元素截图）')
+      // 导航（back/forward）后按契约重新快照，刷新 ref
+      const snap3 = mcp.text(await mcp.call('browser_snapshot', { full: true }))
+      const dlLinkRef = findRef(snap3, /- link "下载测试文件"/)
+      const selector = await mcp.call('browser_get_selector', { ref: dlLinkRef })
+      const selText = mcp.text(selector)
+      check('选择器生成成功', !selector.isError && /selector: .+/.test(selText), selText)
+      check('选择器 DOM 回验通过', selText.includes('✅ 已回验'), selText)
+
+      const found = await mcp.call('browser_find', { text: '接口返回' })
+      const foundText = mcp.text(found)
+      check('页面查找返回匹配数', !found.isError && /共 \d+ 处匹配/.test(foundText), foundText)
+
+      const elShot = await mcp.call('browser_screenshot', { ref: dlLinkRef })
+      check('元素级截图返回图像', (elShot?.content ?? []).some((c) => c.type === 'image'), mcp.text(elShot))
+
+      console.log('\n[15] 状态与数据（cookies / storage / 上传 / 下载 / PDF）')
+      const cookieBase = `http://127.0.0.1:${port}`
+      await mcp.call('browser_cookies', { action: 'set', url: cookieBase, name: 'aa_smoke', value: 'cookie-ok-123' })
+      const got = mcp.text(await mcp.call('browser_cookies', { action: 'get', url: cookieBase, name: 'aa_smoke' }))
+      check('Cookie 写入并读回', got.includes('aa_smoke=cookie-ok-123'), got)
+      await mcp.call('browser_cookies', { action: 'clear', url: cookieBase, name: 'aa_smoke' })
+      const gotAfterClear = mcp.text(await mcp.call('browser_cookies', { action: 'get', url: cookieBase, name: 'aa_smoke' }))
+      check('Cookie 清除生效', gotAfterClear.includes('无匹配'), gotAfterClear)
+
+      await mcp.call('browser_storage', { action: 'set', kind: 'local', key: 'aa_smoke_key', value: 'storage-ok' })
+      const stored = mcp.text(await mcp.call('browser_storage', { action: 'get', kind: 'local', key: 'aa_smoke_key' }))
+      check('localStorage 写读回环', stored.includes('storage-ok'), stored)
+
+      const tmpFile = path.join(os.tmpdir(), `aa-smoke-upload-${Date.now()}.txt`)
+      fs.writeFileSync(tmpFile, 'upload payload')
+      const upSnap = mcp.text(await mcp.call('browser_snapshot', { full: true }))
+      const fileRef = findRef(upSnap, /- button \[ref=/)
+      const uploaded = await mcp.call('browser_upload_file', { ref: fileRef, paths: [tmpFile] })
+      const upText = mcp.text(uploaded)
+      check('文件上传成功并触发 change', !uploaded.isError && upText.includes('已上传 1 个文件'), upText)
+      const upOut = mcp.text(await mcp.call('browser_extract', {}))
+      check('页面收到文件名', upOut.includes('已选择文件'), upOut.slice(0, 300))
+
+      const dlClick = await mcp.call('browser_click', { ref: dlLinkRef, snapshot: false })
+      check('点击下载链接', !dlClick.isError, mcp.text(dlClick))
+      await sleep(1500)
+      const downloads = mcp.text(await mcp.call('browser_downloads', {}))
+      check('下载被捕获并静默保存', downloads.includes('aa-smoke-download.txt') && downloads.includes('completed'), downloads.slice(0, 400))
+
+      const pdf = await mcp.call('browser_pdf', {})
+      const pdfPath = /PDF 已保存: (.+)$/m.exec(mcp.text(pdf))?.[1]
+      check('PDF 导出成功', !!pdfPath && fs.existsSync(pdfPath), mcp.text(pdf))
     } finally {
       server.close()
     }
