@@ -42,5 +42,9 @@
   },
   "dependencies": {
     "ws": "^8.22.1"
+  },
+  "overrides": {
+    "minimatch@^9": "^11.0.4",
+    "minimatch@^10": "^11.0.4"
   }
 }
