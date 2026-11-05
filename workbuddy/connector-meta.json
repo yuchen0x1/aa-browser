@@ -1,0 +1,11 @@
+{
+  "name": "Aa Browser",
+  "name_zh": "Aa Browser 浏览器",
+  "name_en": "Aa Browser",
+  "description": "Control the locally installed Aa Browser through its browser_* MCP tools.",
+  "description_zh": "通过 browser_* MCP 工具控制本机安装并运行的 Aa Browser。",
+  "description_en": "Control the locally installed Aa Browser through its browser_* MCP tools.",
+  "source": "aa-browser",
+  "examples_zh": ["列出 Aa Browser 当前标签页", "在 Aa Browser 中打开本地测试页并检查页面快照"],
+  "examples_en": ["List tabs in Aa Browser", "Open a local test page in Aa Browser and inspect its snapshot"]
+}

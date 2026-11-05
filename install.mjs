@@ -25,7 +25,7 @@ import process from 'node:process'
 
 const HOME = os.homedir()
 const CONNECT_FILE = path.join(HOME, '.aabrowser', 'connection.json')
-const CLIENT_IDS = ['zcode', 'claude', 'cursor', 'windsurf', 'cline', 'vscode', 'gemini', 'qwen']
+const CLIENT_IDS = ['zcode', 'claude', 'cursor', 'windsurf', 'cline', 'vscode', 'gemini', 'qwen', 'workbuddy']
 
 const args = process.argv.slice(2)
 const argOf = (name) => {
@@ -54,7 +54,7 @@ if (HELP || (!URL_ARG && !REPO && !FROM)) {
   log('  node install.mjs --url  <安装包直链或本地路径>')
   log('  node install.mjs --repo <owner>/<repo>      # 从 GitHub Releases 取最新版')
   log('  node install.mjs --from <本地安装包/目录>')
-  log('选项: --clients zcode,cursor  |  --dir <安装目录>  |  --no-launch')
+  log('选项: --clients zcode,cursor,workbuddy  |  --dir <安装目录>  |  --no-launch')
   process.exit(HELP ? 0 : 1)
 }
 

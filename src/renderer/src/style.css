@@ -222,6 +222,8 @@ body {
 
 #agent-pill {
   height: 26px;
+  border: 0;
+  cursor: default;
   padding: 0 12px;
   border-radius: 13px;
   background: #232429;
@@ -237,3 +239,39 @@ body {
   background: rgba(76, 175, 80, 0.14);
   color: #66bb6a;
 }
+#agent-pill.waiting {
+  background: rgba(255, 193, 7, 0.12);
+  color: #e6bf55;
+}
+.agent-stop {
+  height: 26px;
+  border: 1px solid #594040;
+  border-radius: 13px;
+  padding: 0 10px;
+  background: #302426;
+  color: #e7a0a0;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.agent-stop:hover { background: #4a292c; }
+.agent-stop.active { color: #f3c96b; border-color: #76603a; }
+.approval-panel {
+  position: absolute;
+  z-index: 50;
+  right: 12px;
+  top: 82px;
+  width: min(430px, calc(100vw - 24px));
+  padding: 14px;
+  background: #292a31;
+  border: 1px solid #575963;
+  border-radius: 10px;
+  box-shadow: 0 10px 32px #0009;
+  color: #e6e6e9;
+}
+.approval-title { font-weight: 700; margin-bottom: 8px; }
+.approval-meta { color: #b6b7be; line-height: 1.6; margin-bottom: 10px; }
+.approval-help { color: #e6bf55; margin-bottom: 12px; }
+.approval-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.approval-actions button { padding: 7px 12px; border: 0; border-radius: 6px; cursor: pointer; }
+.approval-allow { background: #4f8cff; color: white; }
+.approval-deny { background: #41424a; color: #eee; }

@@ -59,9 +59,9 @@ async function init(): Promise<void> {
   listEl.innerHTML = installed
     .map((c) => {
       const badge = c.configured
-        ? '<span class="pill ok">已配置</span>'
+        ? '<span class="pill ok">已配置 · 等待客户端连接</span>'
         : c.outdated
-          ? '<span class="pill warn">待更新</span>'
+          ? '<span class="pill warn">已配置 · 路径待修复</span>'
           : '<span class="pill">未配置</span>'
       const checked = c.configured ? 'disabled' : 'checked'
       return `<label class="client-item">

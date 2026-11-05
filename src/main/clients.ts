@@ -116,6 +116,14 @@ export const CLIENT_DEFS: ClientDef[] = [
     detectPath: () => joinHome('.qwen'),
     file: () => joinHome('.qwen', 'settings.json'),
     container: 'mcpServers'
+  },
+  {
+    id: 'workbuddy',
+    name: 'WorkBuddy',
+    detectPath: () => joinHome('.workbuddy'),
+    file: () => joinHome('.workbuddy', 'mcp.json'),
+    container: 'mcpServers',
+    vscodeStyle: true
   }
 ]
 
@@ -132,15 +140,21 @@ export function mcpBridgePath(): string {
 /** MCP 条目：优先系统 node；没有则用本应用本体（ELECTRON_RUN_AS_NODE）作为运行时 */
 export function bridgeEntry(): { command: string; args: string[]; env?: Record<string, string> } {
   const mcp = mcpBridgePath()
+  const env: Record<string, string> = {
+    AA_BROWSER_CONNECTION_FILE: app.isPackaged
+      ? path.join(home(), '.aabrowser', 'connection.json')
+      : path.join(app.getPath('userData'), 'connection.json')
+  }
   try {
     const r = spawnSync('node', ['--version'], { encoding: 'utf-8', shell: true, timeout: 5000 })
     if (r.status === 0 && /^v\d/.test((r.stdout || '').trim())) {
-      return { command: 'node', args: [mcp] }
+      return { command: 'node', args: [mcp], env }
     }
   } catch {
     /* 无系统 node */
   }
-  return { command: process.execPath, args: [mcp], env: { ELECTRON_RUN_AS_NODE: '1' } }
+  env['ELECTRON_RUN_AS_NODE'] = '1'
+  return { command: process.execPath, args: [mcp], env }
 }
 
 /** 宽松 JSON 解析：容忍 JSONC 注释与尾逗号 */
@@ -173,6 +187,18 @@ function getContainer(obj: Record<string, unknown>, container: string): Record<s
 
 /** 组装将要写入的 MCP 条目 */
 export function entryFor(def: ClientDef): Record<string, unknown> {
+  if (def.id === 'workbuddy') {
+    return {
+      type: 'stdio',
+      command: process.execPath,
+      args: [mcpBridgePath()],
+      env: {
+        ELECTRON_RUN_AS_NODE: '1',
+        AA_BROWSER_CONNECTION_FILE: joinHome('.aabrowser', 'connection.json')
+      },
+      timeout: 60000
+    }
+  }
   const e = bridgeEntry()
   const entry: Record<string, unknown> = { command: e.command, args: e.args }
   if (e.env) entry['env'] = e.env
@@ -201,7 +227,12 @@ export function detectClients(): ClientDetectResult[] {
         }
       }
     }
-    return { id: def.id, name: def.name, file, installed, configured, outdated }
+    const entry = fs.existsSync(file) ? parseLoose(fs.readFileSync(file, 'utf-8')) : null
+    const current = entry ? (entry as Record<string, any>) : null
+    const existingEntry = current ? getContainer(current, def.container)['aa-browser'] as Record<string, any> | undefined : undefined
+    const bridgeArgs = existingEntry?.args
+    const bridgeMissing = Array.isArray(bridgeArgs) && typeof bridgeArgs[0] === 'string' && !fs.existsSync(bridgeArgs[0])
+    return { id: def.id, name: def.name, file, installed, configured, outdated: outdated || bridgeMissing }
   })
 }
 

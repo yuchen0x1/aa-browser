@@ -17,7 +17,7 @@ import process from 'node:process'
 import WebSocket from 'ws'
 
 const VERSION = '0.4.0'
-const CONNECT_FILE = path.join(os.homedir(), '.aabrowser', 'connection.json')
+const CONNECT_FILE = process.env['AA_BROWSER_CONNECTION_FILE'] || path.join(os.homedir(), '.aabrowser', 'connection.json')
 const CALL_TIMEOUT_MS = 60000
 
 const log = (...a) => console.error('[aa-browser-mcp]', ...a)
@@ -404,7 +404,8 @@ const TOOL_DEFS = [
 
 let ws = null
 let nextCallId = 1
-const pending = new Map() // id -> { resolve, reject, timer }
+const pending = new Map() // id -> { resolve, reject, timer, mcpId }
+const mcpToBridge = new Map()
 
 function readConnection() {
   try {
@@ -445,6 +446,7 @@ function connectWs() {
     socket.on('open', () => {
       clearTimeout(timer)
       ws = socket
+      log('connected to browser bridge', info.pid, info.port)
       socket.on('message', (raw) => {
         let msg
         try { msg = JSON.parse(raw.toString()) } catch { return }
@@ -452,6 +454,7 @@ function connectWs() {
           const p = pending.get(msg.id)
           clearTimeout(p.timer)
           pending.delete(msg.id)
+          log('received browser tool response', msg.id, !!msg.ok)
           if (msg.ok) p.resolve(msg.result)
           else p.reject(new Error(msg.error || '工具执行失败'))
         }
@@ -504,17 +507,24 @@ async function callTool(name, args) {
   const id = nextCallId++
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
+      const p = pending.get(id)
       pending.delete(id)
+      if (p?.mcpId !== undefined) mcpToBridge.delete(p.mcpId)
+      try { socket.send(JSON.stringify({ id, cancel: true })) } catch {}
       reject(new Error(`工具 ${name} 执行超时（${CALL_TIMEOUT_MS / 1000}s）`))
     }, CALL_TIMEOUT_MS)
-    pending.set(id, { resolve, reject, timer })
-    socket.send(JSON.stringify({ id, tool: name, args: args ?? {} }))
+    pending.set(id, { resolve, reject, timer, mcpId: args?.__mcpId })
+    if (args?.__mcpId !== undefined) mcpToBridge.set(args.__mcpId, id)
+    const cleanArgs = { ...(args ?? {}) }
+    delete cleanArgs.__mcpId
+    socket.send(JSON.stringify({ id, tool: name, args: cleanArgs }))
   })
 }
 
 /* ──────────────────── MCP stdio 协议 ──────────────────── */
 
 function send(msg) {
+  log('stdio response', msg.id, msg.error ? 'error' : 'result')
   process.stdout.write(JSON.stringify(msg) + '\n')
 }
 
@@ -550,10 +560,25 @@ rl.on('line', (line) => {
   }
   if (msg.jsonrpc !== '2.0') return
   const { id, method, params } = msg
+  if (method === 'notifications/cancelled') {
+    const requestId = params?.requestId
+    const bridgeId = mcpToBridge.get(requestId)
+    if (bridgeId !== undefined) {
+      const p = pending.get(bridgeId)
+      if (p) {
+        clearTimeout(p.timer)
+        pending.delete(bridgeId)
+        p.reject(new Error('MCP 请求已取消。'))
+      }
+      try { ws?.send(JSON.stringify({ id: bridgeId, cancel: true })) } catch {}
+      mcpToBridge.delete(requestId)
+    }
+    return
+  }
 
   // 通知（无 id）
   if (id === undefined || id === null) {
-    if (method === 'notifications/initialized' || method === 'notifications/cancelled') return
+    if (method === 'notifications/initialized') return
     if (method === 'notifications/roots/list') return
     return
   }
@@ -588,9 +613,16 @@ rl.on('line', (line) => {
         rpcError(id, -32602, `未知工具: ${name}`)
         break
       }
-      callTool(name, args)
-        .then((result) => rpcResult(id, toolResultForMcp(result)))
+      callTool(name, { ...args, __mcpId: id })
+        .then((result) => {
+          if (mcpToBridge.has(id)) {
+            mcpToBridge.delete(id)
+            rpcResult(id, toolResultForMcp(result))
+          }
+        })
         .catch((err) => {
+          if (!mcpToBridge.has(id)) return
+          mcpToBridge.delete(id)
           // 工具级错误按 MCP 规范放在结果里（isError: true）
           rpcResult(id, {
             content: [{ type: 'text', text: String(err?.message ?? err) }],

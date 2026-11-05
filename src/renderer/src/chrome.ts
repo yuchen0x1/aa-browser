@@ -12,13 +12,16 @@ declare global {
       reload: () => Promise<void>
       submit: (value: string) => Promise<void>
       devtools: () => Promise<void>
+      decideApproval: (id: string, allowed: boolean) => Promise<boolean>
+      interruptAgent: () => Promise<boolean>
+      resumeAgent: () => Promise<boolean>
       onState: (cb: (state: UiState) => void) => void
       onFocusOmnibox: (cb: () => void) => void
     }
   }
 }
 
-let state: UiState = { tabs: [], activeId: null, agentCount: 0 }
+let state: UiState = { tabs: [], activeId: null, agentCount: 0, bridgeState: 'waiting', connectionMessage: '等待 MCP 桥启动并连接', pendingApprovals: [], agentInterrupted: false }
 
 const tabsEl = document.getElementById('tabs') as HTMLDivElement
 const omnibox = document.getElementById('omnibox') as HTMLInputElement
@@ -26,6 +29,8 @@ const agentPill = document.getElementById('agent-pill') as HTMLDivElement
 const btnBack = document.getElementById('btn-back') as HTMLButtonElement
 const btnForward = document.getElementById('btn-forward') as HTMLButtonElement
 const btnReload = document.getElementById('btn-reload') as HTMLButtonElement
+const agentStop = document.getElementById('agent-stop') as HTMLButtonElement
+const approvalPanel = document.getElementById('approval-panel') as HTMLDivElement
 
 function activeTab(): TabInfo | null {
   return state.tabs.find((t) => t.active) ?? null
@@ -110,12 +115,48 @@ function renderToolbar(): void {
     btnBack.disabled = true
     btnForward.disabled = true
   }
-  if (state.agentCount > 0) {
-    agentPill.textContent = `● Agent 已连接 ×${state.agentCount}`
-    agentPill.classList.add('connected')
+  agentPill.title = state.connectionMessage
+  agentPill.classList.toggle('connected', state.bridgeState === 'connected')
+  agentPill.classList.toggle('waiting', state.bridgeState === 'waiting')
+  if (state.bridgeState === 'connected') {
+    agentPill.textContent = `● 浏览器已连接 ×${state.agentCount}`
+  } else if (state.bridgeState === 'waiting') {
+    agentPill.textContent = '◌ 等待 AI 桥接'
   } else {
-    agentPill.textContent = '○ Agent 未连接'
-    agentPill.classList.remove('connected')
+    agentPill.textContent = '○ AI 桥未连接'
+  }
+  agentStop.textContent = state.agentInterrupted ? '恢复' : '中断'
+  agentStop.classList.toggle('active', state.agentInterrupted)
+  agentStop.title = state.agentInterrupted ? '恢复 Agent 浏览器操作' : '中断 Agent 的后续浏览器操作'
+  renderApprovals()
+}
+
+function renderApprovals(): void {
+  const pending = state.pendingApprovals ?? []
+  approvalPanel.hidden = pending.length === 0
+  approvalPanel.textContent = ''
+  for (const item of pending) {
+    const title = document.createElement('div')
+    title.className = 'approval-title'
+    title.textContent = '需要你亲自填写敏感信息'
+    const meta = document.createElement('div')
+    meta.className = 'approval-meta'
+    meta.textContent = `网站：${item.site} · 标签：${item.tabTitle} · 字段：${item.fieldLabel}`
+    const help = document.createElement('div')
+    help.className = 'approval-help'
+    help.textContent = '请直接在网页输入框中填写内容；敏感内容不会由 Agent 写入或回传。填写完成后再点“允许继续”。'
+    const actions = document.createElement('div')
+    actions.className = 'approval-actions'
+    const deny = document.createElement('button')
+    deny.className = 'approval-deny'
+    deny.textContent = '拒绝'
+    deny.addEventListener('click', () => void window.aa.decideApproval(item.id, false))
+    const allow = document.createElement('button')
+    allow.className = 'approval-allow'
+    allow.textContent = '允许继续'
+    allow.addEventListener('click', () => void window.aa.decideApproval(item.id, true))
+    actions.append(deny, allow)
+    approvalPanel.append(title, meta, help, actions)
   }
 }
 
@@ -130,6 +171,7 @@ function applyState(next: UiState): void {
 btnBack.addEventListener('click', () => void window.aa.back())
 btnForward.addEventListener('click', () => void window.aa.forward())
 btnReload.addEventListener('click', () => void window.aa.reload())
+agentStop.addEventListener('click', () => void (state.agentInterrupted ? window.aa.resumeAgent() : window.aa.interruptAgent()))
 document.getElementById('btn-newtab')?.addEventListener('click', () => void window.aa.tabNew())
 
 omnibox.addEventListener('keydown', (e) => {

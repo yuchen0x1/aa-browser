@@ -13,10 +13,22 @@ export interface TabInfo {
 }
 
 /** 渲染进程（chrome UI）收到的完整状态 */
+export interface PendingApprovalInfo {
+  id: string
+  site: string
+  tabTitle: string
+  fieldLabel: string
+  createdAt: number
+}
+
 export interface UiState {
   tabs: TabInfo[]
   activeId: string | null
   agentCount: number
+  bridgeState: 'connected' | 'waiting' | 'disconnected'
+  connectionMessage: string
+  pendingApprovals: PendingApprovalInfo[]
+  agentInterrupted: boolean
 }
 
 /** 快照里的单个元素（供 Agent 理解与动作引擎定位） */
@@ -57,6 +69,7 @@ export interface WsRequest {
   id: number
   tool: string
   args?: Record<string, unknown>
+  cancel?: boolean
 }
 export interface WsResponse {
   id: number
@@ -72,6 +85,7 @@ export interface ConnectionInfo {
   pid: number
   version: string
   startedAt: number
+  instanceId?: string
 }
 
 /** MCP 工具返回的内容块 */

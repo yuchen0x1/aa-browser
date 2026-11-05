@@ -29,7 +29,7 @@ export class DownloadTracker {
     if (this.attached) return
     this.attached = true
     session.on('will-download', (_event, item: DownloadItem) => {
-      const dir = path.join(os.homedir(), '.aabrowser', 'downloads')
+      const dir = process.env['AA_BROWSER_DOWNLOAD_DIR'] || path.join(os.homedir(), '.aabrowser', 'downloads')
       try {
         fs.mkdirSync(dir, { recursive: true })
       } catch {
