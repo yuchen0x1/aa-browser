@@ -8,6 +8,7 @@ import { buildTools } from './tools'
 import { normalizeUrl } from './tabs'
 import { detectClients, setupClients } from './clients'
 import { getDownloadTracker } from './downloads'
+import { ApprovalManager } from './approvals'
 import { session } from 'electron'
 import type { UiState } from '@shared/types'
 
@@ -20,7 +21,9 @@ const SEARCH_URL = 'https://www.bing.com/search?q='
 // 开发版使用独立 userData：避免与安装版争单实例锁/登录态/connection.json。
 // ⚠️ 必须在 requestSingleInstanceLock() 之前调用（锁按 userData 路径区分）。
 if (!app.isPackaged) {
-  app.setPath('userData', path.join(app.getPath('appData'), 'aa-browser-dev'))
+  const userData = process.env['AA_BROWSER_USER_DATA_DIR'] || path.join(app.getPath('appData'), 'aa-browser-dev')
+  app.setPath('userData', userData)
+  process.env['AA_BROWSER_CONNECTION_FILE'] ||= path.join(userData, 'connection.json')
 }
 
 let win: BaseWindow | null = null
@@ -28,6 +31,9 @@ let chromeView: WebContentsView | null = null
 let tabManager: TabManager | null = null
 let agentServer: AgentServer | null = null
 let agentCount = 0
+let bridgeState: UiState['bridgeState'] = 'waiting'
+let connectionMessage = '等待 MCP 桥启动并连接'
+const approvals = new ApprovalManager()
 
 /** 新标签页地址：dev 走 vite dev server，产物走打包出的 renderer 文件 */
 function newtabUrl(): string {
@@ -57,10 +63,11 @@ function rendererAssets(): { preload: string; index: string } {
 function layout(): void {
   if (!win || !chromeView) return
   const { width, height } = win.getContentBounds()
-  chromeView.setBounds({ x: 0, y: 0, width, height: CHROME_HEIGHT })
+  const panelHeight = approvals?.list().length ? 132 : 0
+  chromeView.setBounds({ x: 0, y: 0, width, height: CHROME_HEIGHT + panelHeight })
   const active = tabManager?.active()
   if (active) {
-    active.view.setBounds({ x: 0, y: CHROME_HEIGHT, width, height: Math.max(0, height - CHROME_HEIGHT) })
+    active.view.setBounds({ x: 0, y: CHROME_HEIGHT + panelHeight, width, height: Math.max(0, height - CHROME_HEIGHT - panelHeight) })
   }
 }
 
@@ -80,7 +87,11 @@ function pushState(): void {
   const state: UiState = {
     tabs: tabManager?.infos() ?? [],
     activeId: tabManager?.activeId ?? null,
-    agentCount
+    agentCount,
+    bridgeState,
+    connectionMessage,
+    pendingApprovals: approvals.list(),
+    agentInterrupted: approvals.isInterrupted()
   }
   chromeView.webContents.send('aa:state', state)
 }
@@ -182,7 +193,11 @@ function registerIpc(): void {
     return {
       tabs: tabManager?.infos() ?? [],
       activeId: tabManager?.activeId ?? null,
-      agentCount
+      agentCount,
+      bridgeState,
+      connectionMessage,
+      pendingApprovals: approvals.list(),
+      agentInterrupted: approvals.isInterrupted()
     } satisfies UiState
   })
   ipcMain.handle('aa:tab-new', (_e, url?: string) => {
@@ -226,6 +241,21 @@ function registerIpc(): void {
     active?.net.dispose() // DevTools 与抓包共用调试通道
     active?.view.webContents.openDevTools({ mode: 'detach' })
   })
+  ipcMain.handle('aa:approval-decide', (event, id: string, allowed: boolean) => {
+    if (event.sender !== chromeView?.webContents || !approvals.decide(String(id), allowed === true)) return false
+    return true
+  })
+  ipcMain.handle('aa:agent-interrupt', (event) => {
+    if (event.sender !== chromeView?.webContents) return false
+    approvals.interrupt()
+    return true
+  })
+  ipcMain.handle('aa:agent-resume', (event) => {
+    if (event.sender !== chromeView?.webContents) return false
+    approvals.resume()
+    return true
+  })
+  approvals.onChange = pushState
   ipcMain.handle('aa:clients-detect', () => {
     return detectClients()
   })
@@ -283,22 +313,35 @@ app.whenReady().then(() => {
           resolve({ width, height })
         })
     },
-    getDownloadTracker()
+    getDownloadTracker(),
+    approvals
   )
   agentServer = new AgentServer(
     tools,
     (n) => {
       agentCount = n
+      bridgeState = n > 0 ? 'connected' : 'waiting'
+      connectionMessage = n > 0 ? `${n} 个 MCP 桥已通过本机 token 验证` : '等待 MCP 桥启动并连接'
       pushState()
     },
-    VERSION
+    VERSION,
+    approvals
   )
   void agentServer.start().then(() => {
-    console.log(`[aa-browser] agent server ready: ~/.aabrowser/connection.json`)
+    bridgeState = 'waiting'
+    const discoveryFile = process.env['AA_BROWSER_CONNECTION_FILE'] || path.join(app.getPath('home'), '.aabrowser', 'connection.json')
+    connectionMessage = `本地服务已启动，发现文件：${discoveryFile}；等待 MCP 客户端完成认证握手`
+    pushState()
+    console.log(`[aa-browser] agent server ready: ${discoveryFile}`)
+  }).catch((err: unknown) => {
+    bridgeState = 'disconnected'
+    connectionMessage = `本地 Agent 服务启动失败：${err instanceof Error ? err.message : String(err)}`
+    pushState()
   })
 })
 
 app.on('before-quit', () => {
+  approvals.cancelAll()
   agentServer?.stop()
 })
 

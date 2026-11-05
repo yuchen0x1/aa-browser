@@ -75,6 +75,23 @@ export const syntheticClickScript = (ref: string): string => {
 })()`
 }
 
+/** Inspect an input target without reading or returning its current value. */
+export const inspectInputScript = (ref: string): string => {
+  REF_GUARD(ref)
+  return `(() => {
+  const el = (window.__aaRefs || {})['${ref}']
+  if (!el || !el.isConnected) return { ok: false, reason: 'no-ref' }
+  const type = String(el.type || '').toLowerCase()
+  const label = String(el.labels && Array.from(el.labels).map(x => x.innerText || x.textContent).join(' ') || '')
+    const autocomplete = String(el.autocomplete || '').toLowerCase()
+    const meta = [label, el.name, el.id, autocomplete, el.placeholder, el.getAttribute('aria-label'), el.getAttribute('data-testid')].join(' ').toLowerCase()
+    const secretPattern = /(token|secret|api.?key|access.?key|private.?key|password|passwd|credential|验证码|密钥|令牌|密码|otp|one.?time.?code|security.?code|auth.?code|card.?number|cc.?number|cvv|cvc|expiry|expiration)/i
+    const sensitive = type === 'password' || /^(current-password|new-password|one-time-code|cc-csc|cc-number|cc-exp|cc-exp-month|cc-exp-year)$/.test(autocomplete) || secretPattern.test(meta)
+  const fingerprint = [el.tagName, type, el.name || '', el.id || '', autocomplete, el.getAttribute('aria-label') || '', label].join('|')
+  return { ok: true, sensitive, fingerprint, label: (label || el.getAttribute('aria-label') || el.name || el.id || type || el.tagName).slice(0, 120), type }
+})()`
+}
+
 /** 聚焦元素（输入前调用） */
 export const focusScript = (ref: string): string => {
   REF_GUARD(ref)
@@ -198,17 +215,36 @@ export const extractScript = (ref?: string): string => {
   const refPart = ref ? `'${REF_GUARD(ref)}'` : 'null'
   return `(() => {
   const ref = ${refPart}
+  const isSensitive = el => {
+    const type = String(el.type || '').toLowerCase()
+    const autocomplete = String(el.autocomplete || '').toLowerCase()
+    const labels = el.labels ? Array.from(el.labels).map(x => x.innerText || x.textContent || '').join(' ') : ''
+    const meta = [labels, el.name, el.id, autocomplete, el.placeholder, el.getAttribute && el.getAttribute('aria-label'), el.getAttribute && el.getAttribute('data-testid')].join(' ').toLowerCase()
+    return type === 'password' || /^(current-password|new-password|one-time-code|cc-csc|cc-number|cc-exp|cc-exp-month|cc-exp-year)$/.test(autocomplete) || /(token|secret|api.?key|access.?key|private.?key|password|passwd|credential|验证码|密钥|令牌|密码|otp|one.?time.?code|security.?code|auth.?code|card.?number|cc.?number|cvv|cvc|expiry|expiration)/i.test(meta)
+  }
+  const safeText = root => {
+    const clone = root.cloneNode(true)
+    const originals = [root, ...root.querySelectorAll('*')]
+    const copies = [clone, ...clone.querySelectorAll('*')]
+    for (let i = 0; i < originals.length; i++) {
+      const el = originals[i]
+      const copy = copies[i]
+      if (isSensitive(el) && copy) {
+        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') copy.value = '••••••'
+        else copy.textContent = '••••••'
+      }
+    }
+    return clone.innerText || clone.textContent || ''
+  }
   if (ref) {
     const el = (window.__aaRefs || {})[ref]
     if (!el) return { ok: false, reason: 'no-ref' }
     if (!el.isConnected) return { ok: false, reason: 'detached' }
     let t = ''
-    try {
-      t = (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') ? (el.value || '') : (el.innerText || el.textContent || '')
-    } catch (e) {}
+    try { t = isSensitive(el) ? (el.value || el.textContent ? '••••••' : '') : ((el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') ? (el.value || '') : (el.innerText || el.textContent || '')) } catch (e) {}
     return { ok: true, text: t }
   }
-  const t = document.body ? document.body.innerText : (document.documentElement.innerText || '')
+  const t = document.body ? safeText(document.body) : (document.documentElement.innerText || '')
   return { ok: true, text: t, url: String(location.href), title: document.title || '' }
 })()`
 }

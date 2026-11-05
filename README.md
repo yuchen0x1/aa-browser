@@ -88,19 +88,25 @@ title: Aa Browser - 搜索
 
 ## 快速开始
 
-### ⚡ 复制粘贴给 AI，全自动安装接入（推荐给 AI 客户端用户）
+### ⚡ WorkBuddy：一条消息安装并接入
 
-把 [PROMPT.md](./PROMPT.md) 里的提示词**整段复制给你的 AI 客户端**（ZCode / Claude Code / Cursor…），AI 会自动完成下载 → 安装 → 启动 → 写入你本机的 MCP 配置。
+把 [PROMPT.md](./PROMPT.md) 中的 WorkBuddy 提示词整段发给 WorkBuddy。它会尝试下载并运行安装器，准备 `~/.workbuddy/mcp.json` 和本地 Connector 文件；这不保证 WorkBuddy 自动加载。需要时须通过 WorkBuddy 5.9.3 支持的“专家·技能·连接器”流程导入/启用，然后由当前会话实际调用 `browser_tabs` 验证。若产品不支持本地 Connector 导入或工具未出现，报告具体阻塞；不得以安装或配置文件生成声称已接通。
 
-不用 AI 的话，等价的手动命令（先拿到 install.mjs 与安装包）：
+手动 PowerShell 等效命令：
 
-```bash
-node install.mjs --url  <安装包直链或本地路径>     # 下载/安装/启动/接入一条龙
-node install.mjs --repo yuchen0x1/aa-browser            # 自动拉 GitHub Releases 最新版
-node install.mjs --url <...> --clients zcode,cursor   # 只接入指定客户端
+```powershell
+Invoke-WebRequest https://raw.githubusercontent.com/yuchen0x1/aa-browser/main/install.mjs -OutFile install.mjs
+node .\\install.mjs --repo yuchen0x1/aa-browser --clients workbuddy
 ```
 
-> 需要先把安装包发布到可公开下载的位置（GitHub Releases / 网盘直链），步骤见 [PROMPT.md](./PROMPT.md) 末尾"给发布者"。
+### 其他 MCP 客户端
+
+```bash
+node install.mjs --repo yuchen0x1/aa-browser                 # 自动拉 GitHub Releases 最新版
+node install.mjs --repo yuchen0x1/aa-browser --clients zcode,cursor
+```
+
+WorkBuddy 路径尝试写入用户级 `~/.workbuddy/mcp.json` 并生成本地 Connector 包。配置写入、Connector 导入/启用、bridge 鉴权、工具调用成功是不同状态，必须分别确认；不能推断 WorkBuddy 会自动发现该 JSON，也不要改写 WorkBuddy 数据库、缓存或内部运行时文件。
 
 ### 其他方式
 
@@ -135,9 +141,11 @@ npm run dev
 
 **方式 A · 一键接入（推荐）**：Aa Browser 新标签页 → 「一键接入你的 AI 客户端」卡片 → 勾选 → 写入。
 命令行等效：`node cli/setup.mjs --yes`（`--list` 查看，`--client zcode,cursor` 指定目标）。
-支持：**ZCode / Claude Code / Cursor / Windsurf / Cline / VS Code / Gemini CLI / Qwen Code**。写入前自动备份原配置为 `<file>.aa-backup-<时间戳>`，幂等可重复执行。
+支持传统配置式 MCP 客户端：**ZCode / Claude Code / Cursor / Windsurf / Cline / VS Code / Gemini CLI / Qwen Code**。写入前自动备份原配置为 `<file>.aa-backup-<时间戳>`，幂等可重复执行。
 
-**方式 B · 手动配置**：在 MCP 客户端配置中添加：
+**WorkBuddy**：CLI 会单独生成 `~/.workbuddy/mcp.json` 的 stdio 配置（覆盖前备份并只更新 `mcpServers.aa-browser`）。安装后必须在 WorkBuddy 会话中确认 `browser_tabs` 实际出现并成功调用；若 WorkBuddy 要求 MCP UI 授权或重连，完成后再验证。WorkBuddy 不是由“配置写入成功”自动判定连接成功。
+
+**方式 B · 通用手动 MCP 配置**：在 MCP 客户端配置中添加：
 
 ```jsonc
 {
@@ -189,7 +197,7 @@ npm run dev
 - Agent 服务只监听 `127.0.0.1`，连接需携带启动时生成的随机 token
 - token 与端口写在用户目录 `~/.aabrowser/connection.json`（仅当前用户可读）
 - 一键接入写入其他客户端配置前**自动备份**、只改 `aa-browser` 一个键、幂等可重复
-- **注意**：Agent 能看到你登录的页面内容与网络流量。请勿让不可信的 Agent 访问网银、工作邮箱等高敏站点；后续版本将加入"操作确认弹窗"与站点白名单（见 Roadmap）
+- **注意**：Agent 能看到页面内容与网络流量，包括可能含秘密的 Cookie、Storage、请求头和响应体。敏感输入审批是基于页面字段特征的保护，不是通用 DLP；不要让不可信 Agent 访问高敏站点。
 
 ## 项目结构
 

@@ -8,9 +8,9 @@
  *   3. 在本地测试页上执行：导航 → 快照 → 输入 → 点击 → 断言 → 下拉选择 → 提取 → 截图
  *
  * 用法：npm run build && npm run smoke
- * （若 Aa Browser 已在运行则复用；由本脚本启动的实例会在结束时关闭）
+ * （使用独立临时 profile/发现文件，由本脚本启动的实例会在结束时关闭）
  */
-import { spawn, spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import http from 'node:http'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -21,8 +21,16 @@ import readline from 'node:readline'
 
 const require = createRequire(import.meta.url)
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const CONNECT_FILE = path.join(os.homedir(), '.aabrowser', 'connection.json')
+const SMOKE_DIR = path.join(os.tmpdir(), `aa-browser-smoke-${process.pid}`)
+const SMOKE_CONNECT_FILE = path.join(SMOKE_DIR, 'connection.json')
+const SMOKE_DOWNLOAD_DIR = path.join(SMOKE_DIR, 'downloads')
+const SMOKE_SCREENSHOT_DIR = path.join(SMOKE_DIR, 'screenshots')
+process.env['AA_BROWSER_DOWNLOAD_DIR'] = SMOKE_DOWNLOAD_DIR
 const TEST_PAGE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'test-page.html')
+let appChild = null
+let mcpClient = null
+let testServer = null
+let testTmpFiles = []
 
 let failures = 0
 function check(name, cond, detail = '') {
@@ -55,46 +63,48 @@ function readConnection() {
   }
 }
 
-/** 若 Aa Browser 未运行，用已构建的产物启动它 */
+/** 每次都启动隔离实例，避免测试触碰日常浏览器 profile、发现文件和数据。 */
 async function ensureAppRunning() {
-  // 清场：结束可能残留的实例（安装版与开发版），保证测试环境确定
-  // 注意：不用 shell:true——带空格的镜像名会被 shell 拆散导致静默失败
-  for (const img of ['Aa Browser.exe', 'electron.exe']) {
-    try {
-      spawnSync('taskkill', ['/F', '/IM', img], { timeout: 10000 })
-    } catch {
-      /* 无该进程 */
-    }
-  }
-  await sleep(800)
-  try {
-    fs.rmSync(CONNECT_FILE, { force: true }) // 清掉残留的发现文件
-  } catch {
-    /* 忽略 */
-  }
-  let info = readConnection()
-  if (info) {
-    console.log(`发现运行中的 Aa Browser (pid=${info.pid})，直接复用`)
-    return { info, spawned: false }
-  }
-  console.log('未发现运行中的 Aa Browser，正在启动…')
+  let info = null
+  console.log('正在启动隔离的测试实例…')
   const electronPath = require('electron')
-  const child = spawn(electronPath, ['.'], { cwd: ROOT, detached: true, stdio: 'ignore' })
-  child.unref()
+  fs.mkdirSync(SMOKE_DIR, { recursive: false })
+  const child = spawn(electronPath, ['.'], {
+    cwd: ROOT,
+    env: {
+      ...process.env,
+      AA_BROWSER_CONNECTION_FILE: SMOKE_CONNECT_FILE,
+      AA_BROWSER_USER_DATA_DIR: path.join(SMOKE_DIR, 'profile'),
+      AA_BROWSER_DOWNLOAD_DIR: SMOKE_DOWNLOAD_DIR,
+      AA_BROWSER_SCREENSHOT_DIR: SMOKE_SCREENSHOT_DIR
+    },
+    stdio: 'inherit'
+  })
+  child.on('error', (err) => console.error('[smoke] Electron launch failed:', err.message))
+  child.on('exit', (code) => console.error(`[smoke] isolated Electron exited: ${code}`))
+  appChild = child
   const deadline = Date.now() + 25000
   while (Date.now() < deadline) {
     await sleep(500)
-    info = readConnection()
-    if (info) return { info, spawned: true }
+    try {
+      info = JSON.parse(fs.readFileSync(SMOKE_CONNECT_FILE, 'utf-8'))
+      if (info?.port && info?.token && isPidAlive(info.pid)) return { info, spawned: true, child }
+    } catch {
+      /* test instance is still starting */
+    }
   }
-  throw new Error('启动 Aa Browser 超时（25s）。请先 npm run build。')
+  child.kill()
+  throw new Error('启动隔离的 Aa Browser 测试实例超时（25s）。请先 npm run build。')
 }
 
 /* ── 最小 MCP stdio 客户端 ── */
 class McpClient {
   constructor() {
-    this.child = spawn(process.execPath, [path.join(ROOT, 'cli', 'mcp.mjs')], { stdio: ['pipe', 'pipe', 'pipe'] })
-    this.child.stderr.on('data', () => {}) // 丢弃桥的日志
+    this.child = spawn(process.execPath, [path.join(ROOT, 'cli', 'mcp.mjs')], {
+      env: { ...process.env, AA_BROWSER_CONNECTION_FILE: SMOKE_CONNECT_FILE, AA_BROWSER_DOWNLOAD_DIR: SMOKE_DOWNLOAD_DIR, AA_BROWSER_SCREENSHOT_DIR: SMOKE_SCREENSHOT_DIR },
+      stdio: ['pipe', 'pipe', 'pipe']
+    })
+    this.child.stderr.on('data', (chunk) => process.stderr.write(chunk))
     this.nextId = 1
     this.buffer = ''
     this.pending = new Map()
@@ -170,11 +180,12 @@ function findRef(snapshotText, pattern) {
 }
 
 async function main() {
-  const { info, spawned } = await ensureAppRunning()
-  let appProc = null
+  const { info, spawned, child } = await ensureAppRunning()
+  let appProc = child
   console.log(`Aa Browser ready: ws://127.0.0.1:${info.port}`)
 
   const mcp = new McpClient()
+  mcpClient = mcp
   try {
     console.log('\n[1] MCP 握手')
     const init = await mcp.initialize()
@@ -272,6 +283,7 @@ async function main() {
         )
       }
     })
+    testServer = server
     await new Promise((r) => server.listen(0, '127.0.0.1', r))
     const port = server.address().port
     try {
@@ -347,8 +359,9 @@ async function main() {
       const stored = mcp.text(await mcp.call('browser_storage', { action: 'get', kind: 'local', key: 'aa_smoke_key' }))
       check('localStorage 写读回环', stored.includes('storage-ok'), stored)
 
-      const tmpFile = path.join(os.tmpdir(), `aa-smoke-upload-${Date.now()}.txt`)
+      const tmpFile = path.join(SMOKE_DIR, `aa-smoke-upload-${Date.now()}.txt`)
       fs.writeFileSync(tmpFile, 'upload payload')
+      testTmpFiles.push(tmpFile)
       const upSnap = mcp.text(await mcp.call('browser_snapshot', { full: true }))
       const fileRef = findRef(upSnap, /- button \[ref=/)
       const uploaded = await mcp.call('browser_upload_file', { ref: fileRef, paths: [tmpFile] })
@@ -371,15 +384,17 @@ async function main() {
     }
   } finally {
     mcp.stop()
+    mcpClient = null
+    if (testServer) { testServer.close(); testServer = null }
   }
 
-  // 只关闭由本脚本启动的浏览器实例
+  // 只关闭由本脚本启动的隔离实例，并清理专属临时目录。
   if (spawned) {
-    try {
-      process.kill(info.pid)
-      await sleep(800)
-    } catch {}
+    try { process.kill(info.pid) } catch {}
+    await sleep(800)
+    try { fs.rmSync(SMOKE_DIR, { recursive: true, force: true }) } catch {}
   }
+  try { fs.rmSync(path.join(os.homedir(), '.aabrowser', 'downloads', `aa-smoke-${process.pid}`), { recursive: true, force: true }) } catch {}
 
   if (failures > 0) {
     console.error(`\n🚨 冒烟测试失败：${failures} 项未通过`)
@@ -389,7 +404,14 @@ async function main() {
   process.exit(0)
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   console.error('🚨 冒烟测试异常:', err.message)
+  try { mcpClient?.stop() } catch {}
+  try { testServer?.close() } catch {}
+  for (const file of testTmpFiles) { try { fs.rmSync(file, { force: true }) } catch {} }
+  if (appChild) {
+    try { appChild.kill() } catch {}
+  }
+  try { fs.rmSync(SMOKE_DIR, { recursive: true, force: true }) } catch {}
   process.exit(1)
 })

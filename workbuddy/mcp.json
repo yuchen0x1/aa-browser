@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "aa-browser": {
+      "type": "stdio",
+      "command": "${AA_BROWSER_EXECUTABLE}",
+      "args": ["${AA_BROWSER_BRIDGE}"],
+      "env": {
+        "ELECTRON_RUN_AS_NODE": "1",
+        "AA_BROWSER_CONNECTION_FILE": "${AA_BROWSER_CONNECTION_FILE}"
+      },
+      "timeout": 60000
+    }
+  }
+}

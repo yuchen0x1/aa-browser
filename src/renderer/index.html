@@ -32,8 +32,10 @@
           </span>
           <input id="omnibox" spellcheck="false" autocomplete="off" placeholder="搜索或输入网址 (Ctrl+L)" />
         </div>
-        <div id="agent-pill" title="AI Agent 连接状态">○ 未连接</div>
+        <button id="agent-pill" title="AI Agent 连接状态">○ 未连接</button>
+        <button id="agent-stop" class="agent-stop" title="中断 Agent 的后续浏览器操作">中断</button>
       </div>
+      <div id="approval-panel" class="approval-panel" hidden></div>
     </div>
     <script type="module" src="./src/chrome.ts"></script>
   </body>

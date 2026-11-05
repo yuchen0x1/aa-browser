@@ -17,6 +17,7 @@
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit",
     "smoke": "node scripts/smoke.mjs",
+    "validate:workbuddy": "node scripts/validate-workbuddy.mjs",
     "icon": "electron scripts/make-icon.js",
     "dist": "electron-vite build && electron-builder --win"
   },

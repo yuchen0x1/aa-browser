@@ -12,8 +12,10 @@ import {
   doStorage,
   doUploadFile,
   doPdf,
-  doGetSelector
+  doGetSelector,
+  inspectTypeTarget
 } from './actions'
+import type { ApprovalManager } from './approvals'
 import {
   ActionError,
   captureSnapshot,
@@ -58,7 +60,8 @@ export function buildTools(
   newtabUrl: string,
   searchUrl: string,
   windowCtl: { resize: (w: number, h: number) => Promise<{ width: number; height: number }> },
-  downloads: DownloadTracker
+  downloads: DownloadTracker,
+  approvals?: ApprovalManager
 ): McpToolDef[] {
   const tools: McpToolDef[] = []
 
@@ -81,6 +84,7 @@ export function buildTools(
       required: ['url']
     },
     handler: async (args) => {
+      approvals?.assertRunning()
       const url = String(args['url'] ?? '')
       if (!url) throw new ActionError('url 不能为空')
       const target = normalizeUrl(url, searchUrl, newtabUrl)
@@ -141,6 +145,7 @@ export function buildTools(
       required: ['ref']
     },
     handler: async (args) => {
+      approvals?.assertRunning()
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const want = args['snapshot'] !== false
       const r = await doClick(tab, String(args['ref']), want)
@@ -167,9 +172,30 @@ export function buildTools(
       required: ['ref', 'text']
     },
     handler: async (args) => {
+      approvals?.assertRunning()
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      if (tabs.activeId !== tab.id) throw new ActionError('敏感输入审批仅支持当前活动标签；请切换到目标标签后重试。')
+      const ref = String(args['ref'])
+      const target = await inspectTypeTarget(tab, ref)
+      if (!target.ok) throw new ActionError(`找不到输入目标 ${ref}；请刷新页面快照后重试。`)
+      if (target.sensitive) {
+        // Never write or retain an agent-supplied secret. Let the user type directly into the focused page field.
+        const wc = tab.view.webContents
+        const originalUrl = wc.getURL()
+        const originalFrame = await wc.executeJavaScript(`(() => { const e=(window.__aaRefs||{})[${JSON.stringify(ref)}]; if(!e||!e.isConnected) return null; const r=e.getBoundingClientRect(); e.focus(); return {fingerprint:[e.tagName,e.type||'',e.name||'',e.id||'',e.autocomplete||'',e.getAttribute('aria-label')||'',e.labels?Array.from(e.labels).map(x=>x.innerText||x.textContent||'').join(' '):''].join('|'), rect:[Math.round(r.x),Math.round(r.y),Math.round(r.width),Math.round(r.height)]} })()`, false) as { fingerprint?: string; rect?: number[] } | null
+        if (!originalFrame) throw new ActionError('敏感输入目标已失效；请刷新快照后重试。')
+        const url = new URL(originalUrl)
+        const signal = args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
+        const allowed = approvals ? await approvals.request({ site: url.host || url.protocol, tabTitle: tab.title, fieldLabel: target.label || '敏感输入框' }, signal) : false
+        if (!allowed) throw new ActionError('敏感输入已取消或超时；Agent 提供的文本未写入。')
+        if (wc.isDestroyed() || wc.getURL() !== originalUrl || tabs.activeId !== tab.id) throw new ActionError('页面或活动标签在等待确认期间已变化；请重新获取快照后再继续。')
+        const rechecked = await inspectTypeTarget(tab, ref)
+        if (!rechecked.ok || !rechecked.sensitive || rechecked.fingerprint !== originalFrame.fingerprint) throw new ActionError('敏感输入目标已变化；请重新获取快照后再继续。')
+        if (args['submit']) throw new ActionError('敏感字段已填写，但 Agent 不会自动提交；请由你在网页中亲自确认提交。')
+        return { content: [text('已允许继续。敏感字段内容由你在网页中输入；Agent 提供的文本未写入、读取或回传。请继续后续步骤。')] }
+      }
       const want = args['snapshot'] !== false
-      const r = await doType(tab, String(args['ref']), String(args['text'] ?? ''), {
+      const r = await doType(tab, ref, String(args['text'] ?? ''), {
         submit: !!args['submit'],
         clear: !!args['clear'],
         wantSnapshot: want
@@ -194,6 +220,7 @@ export function buildTools(
       required: ['ref']
     },
     handler: async (args) => {
+      approvals?.assertRunning()
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const want = args['snapshot'] !== false
       const r = await doSelectOption(tab, String(args['ref']), {
@@ -324,7 +351,7 @@ export function buildTools(
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const image = args['ref'] ? await doElementScreenshot(tab, String(args['ref'])) : await doScreenshot(tab)
       const { app } = await import('electron')
-      const dir = `${app.getPath('home')}/.aabrowser/screenshots`
+        const dir = process.env['AA_BROWSER_SCREENSHOT_DIR'] || `${app.getPath('home')}/.aabrowser/screenshots`
       try {
         const fs = await import('node:fs')
         const path = await import('node:path')
@@ -760,6 +787,7 @@ export function buildTools(
       required: ['action']
     },
     handler: async (args) => {
+      approvals?.assertRunning()
       const action = String(args['action'] ?? 'list')
       if (action === 'list') {
         const lines = tabs.infos().map(
@@ -792,5 +820,16 @@ export function buildTools(
     }
   })
 
-  return tools
+  // Interrupt is a central admission gate: no MCP operation starts while paused.
+  // Individual handlers retain their own checks around multi-step actions.
+  return tools.map((tool) => ({
+    ...tool,
+    handler: async (args: Record<string, unknown>) => {
+      approvals?.assertRunning()
+      const result = await tool.handler(args)
+      approvals?.assertRunning()
+      if (args['__aaSignal'] instanceof AbortSignal && args['__aaSignal'].aborted) throw new ActionError('工具调用已取消。')
+      return result
+    }
+  }))
 }

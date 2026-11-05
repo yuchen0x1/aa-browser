@@ -3,6 +3,7 @@ import type { PageSnapshot, SnapshotElement, ToolContent } from '@shared/types'
 import { __aaSnapshot } from '@snapshot/engine'
 import {
   locateScript,
+  inspectInputScript,
   syntheticClickScript,
   focusScript,
   clearScript,
@@ -159,6 +160,10 @@ export async function doClick(
   await settle(wc)
   const snapshot = wantSnapshot ? await captureSnapshot(wc) : undefined
   return { clicked, snapshot }
+}
+
+export async function inspectTypeTarget(tab: Tab, ref: string): Promise<{ ok: boolean; sensitive?: boolean; label?: string; type?: string; fingerprint?: string }> {
+  return await tab.view.webContents.executeJavaScript(inspectInputScript(ref), false) as { ok: boolean; sensitive?: boolean; label?: string; type?: string; fingerprint?: string }
 }
 
 export async function doType(
@@ -510,18 +515,33 @@ export async function doElementScreenshot(tab: Tab, ref: string): Promise<ToolCo
         : `无法定位元素 ${ref}（${rect?.reason ?? 'unknown'}）`
     )
   }
-  const image = await wc.capturePage()
-  if (image.isEmpty()) throw new ActionError('截图失败：页面合成器未就绪，请稍后重试')
+  try {
+    wc.focus()
+  } catch {
+    /* 忽略 */
+  }
+  let image: Electron.NativeImage | null = null
+  for (let i = 0; i < 3; i++) {
+    try {
+      image = await wc.capturePage()
+      if (!image.isEmpty()) break
+    } catch {
+      image = null
+    }
+    await delay(300)
+  }
+  if (!image || image.isEmpty()) throw new ActionError('截图失败：页面合成器未就绪，请稍后重试')
   const vp = (await wc.executeJavaScript('({ w: window.innerWidth, h: window.innerHeight })', false)) as {
     w: number
     h: number
   }
-  const sx = image.getSize().width / Math.max(1, vp.w)
-  const sy = image.getSize().height / Math.max(1, vp.h)
-  const cropX = Math.max(0, Math.round((rect.x ?? 0) * sx))
-  const cropY = Math.max(0, Math.round((rect.y ?? 0) * sy))
-  const cropW = Math.max(1, Math.min(Math.round((rect.width ?? 1) * sx), image.getSize().width - cropX))
-  const cropH = Math.max(1, Math.min(Math.round((rect.height ?? 1) * sy), image.getSize().height - cropY))
+  const size = image.getSize()
+  const sx = size.width / Math.max(1, vp.w)
+  const sy = size.height / Math.max(1, vp.h)
+  const cropX = Math.min(size.width - 1, Math.max(0, Math.round((rect.x ?? 0) * sx)))
+  const cropY = Math.min(size.height - 1, Math.max(0, Math.round((rect.y ?? 0) * sy)))
+  const cropW = Math.max(1, Math.min(Math.round((rect.width ?? 1) * sx), size.width - cropX))
+  const cropH = Math.max(1, Math.min(Math.round((rect.height ?? 1) * sy), size.height - cropY))
   const cropped = image.crop({ x: cropX, y: cropY, width: cropW, height: cropH })
   return { type: 'image', data: cropped.toPNG().toString('base64'), mimeType: 'image/png' }
 }
@@ -673,7 +693,7 @@ export async function doPdf(tab: Tab, filePath?: string, landscape = false): Pro
   const osMod = await import('node:os')
   const pathMod = await import('node:path')
   const fsMod = await import('node:fs')
-  const file = filePath || pathMod.join(osMod.homedir(), '.aabrowser', 'downloads', `aa-page-${Date.now()}.pdf`)
+  const file = filePath || pathMod.join(process.env['AA_BROWSER_DOWNLOAD_DIR'] || pathMod.join(osMod.homedir(), '.aabrowser', 'downloads'), `aa-page-${Date.now()}.pdf`)
   fsMod.mkdirSync(pathMod.dirname(file), { recursive: true })
   fsMod.writeFileSync(file, pdf)
   return { savedPath: file }

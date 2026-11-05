@@ -235,11 +235,16 @@ export function __aaSnapshot() {
 
   function valueText(el) {
     try {
-      if (el.tagName === 'INPUT' && (el.type || '').toLowerCase() === 'password') {
-        return el.value ? '••••••' : ''
+      if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable) {
+        var type = String(el.type || '').toLowerCase()
+        var autocomplete = String(el.autocomplete || '').toLowerCase()
+        var labels = el.labels ? Array.from(el.labels).map(function (x) { return x.innerText || x.textContent || '' }).join(' ') : ''
+        var meta = [labels, el.name, el.id, autocomplete, el.placeholder, el.getAttribute && el.getAttribute('aria-label'), el.getAttribute && el.getAttribute('data-testid')].join(' ').toLowerCase()
+        var sensitive = type === 'password' || /^(current-password|new-password|one-time-code|cc-csc|cc-number|cc-exp|cc-exp-month|cc-exp-year)$/.test(autocomplete) || /(token|secret|api.?key|access.?key|private.?key|password|passwd|credential|验证码|密钥|令牌|密码|otp|one.?time.?code|security.?code|auth.?code|card.?number|cc.?number|cvv|cvc|expiry|expiration)/i.test(meta)
+        if (sensitive) return el.value || el.textContent ? '••••••' : ''
+        if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') return el.value || ''
+        return el.textContent || ''
       }
-      if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') return el.value || ''
-      if (el.isContentEditable) return el.textContent || ''
     } catch (e) {}
     return ''
   }

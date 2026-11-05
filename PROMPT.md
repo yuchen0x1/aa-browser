@@ -1,54 +1,37 @@
 # Aa Browser · 一键安装提示词
 
-> **用法**：把下面代码块里的内容**整段复制**，粘贴给你的 AI 客户端（ZCode / Claude Code / Cursor / Cline / Qwen…）发送即可。AI 会自动完成：下载 → 静默安装 → 启动 → 把 MCP 配置写入你本机检测到的 AI 客户端。
->
-> **发布者注意**：把提示词里的 `https://github.com/yuchen0x1/aa-browser/releases/latest/download` 换成你的实际发布地址（GitHub Releases 直链、网盘直链均可；也可以只给本地文件路径）。
+> 将下方代码块整段发给 WorkBuddy。目标是一条消息触发下载、安装、启动和 WorkBuddy MCP 配置，并由 WorkBuddy 实际验证工具；若 WorkBuddy 当前版本阻止配置或工具未加载，必须报告阻塞点，不得把安装成功说成连接成功。
 
-## 复制这段给 AI
+## 发给 WorkBuddy
 
 ```text
-请帮我在这台电脑上安装并接入 Aa Browser（一款 AI 原生浏览器，装好后你就能用浏览器工具替我上网、点击、填表、抓接口）。请严格执行以下步骤，任何一步失败就停下来告诉我原因，不要跳过或猜测：
+请在这台 Windows 电脑上为我安装并接入 Aa Browser，并由你自己验证接入结果。请按顺序执行，不能用 WorkBuddy 内置 browser 工具代替 Aa Browser 工具，也不能仅凭配置文件存在就宣称成功。
 
-1. 环境检查：Windows 64 位；Node.js ≥ 20（没有就用 winget install OpenJS.NodeJS.LTS 安装）。
-
-2. 获取安装器（两种方式任选）：
-   a. 下载这两个文件到同一个临时目录：
-      - 安装脚本：https://github.com/yuchen0x1/aa-browser/releases/latest/download/install.mjs
-      - 安装包：https://github.com/yuchen0x1/aa-browser/releases/latest/download/aa-browser-setup-0.3.1.exe
-   b. 或者只下载 install.mjs，之后用 --repo 参数让它自己从 GitHub Releases 取最新安装包。
-
-3. 执行安装（在临时目录运行）：
-   node install.mjs --url <安装包文件路径或直链> --clients zcode,claude,cursor
-   说明：
-   - 如果只有 install.mjs 没有安装包，改用：node install.mjs --repo yuchen0x1/aa-browser
-   - --clients 是可选的客户端白名单，可选 id：zcode / claude / cursor / windsurf / cline / vscode / gemini / qwen；
-     不传 --clients 表示接入所有检测到的客户端。
-   - 脚本会自动：静默安装 → 启动 Aa Browser → 等待就绪 → 把 MCP 配置写入所选客户端
-     （原配置文件会自动备份为 *.aa-backup-*，重复执行是安全的）。
-
-4. 验证：确认 ~/.aabrowser/connection.json 已生成且脚本输出显示"已写入/已配置"；安装器最后会打印 🎉。
-
-5. 向我汇报：安装位置、接入了哪些客户端、以及如何卸载（系统"设置 → 应用"里卸载 Aa Browser）。
-
-注意：MCP 配置写入后需要重启对应 AI 客户端才会加载 aa-browser 工具。配置写入操作只改 aa-browser 一个键，绝不碰其他内容。
+1. 检查当前系统为 Windows x64，并检查 Node.js 20 或更高版本；如缺少 Node.js，先说明需要安装并征求我确认，不要静默安装系统级依赖。
+2. 从官方仓库 https://github.com/yuchen0x1/aa-browser 获取 `install.mjs`，在独立临时目录保存后检查脚本来源和内容，不要从非官方地址下载或执行脚本。
+3. 运行：`node install.mjs --repo yuchen0x1/aa-browser --clients workbuddy`
+   该命令从 GitHub 最新已发布 Release 下载并安装 Aa Browser，尝试启动浏览器，并准备 WorkBuddy 用户级 MCP 配置 `~/.workbuddy/mcp.json` 及本地 Connector 文件。它不代表 WorkBuddy 已加载该配置。若命令失败，停止并报告真实错误，不要改写 WorkBuddy 数据库、插件缓存或其他内部文件。
+4. 若 WorkBuddy 未自动加载工具，只能依据你确认过的 WorkBuddy 5.9.3 官方支持路径，在“专家·技能·连接器”中导入/启用生成的本地 Connector；不要假定 mcp.json 自动热加载，也不要编造刷新/重连操作。若当前版本不支持本地导入，报告此阻塞并停止。
+5. 在当前会话中确认工具清单确实出现 Aa Browser 的 `browser_tabs`、`browser_navigate`、`browser_snapshot`。调用 `browser_tabs`；只有工具调用成功并返回 Aa Browser 标签信息，才能报告连接通过。若工具不存在，明确报告“安装完成但 WorkBuddy 未加载 Aa Browser MCP 工具”，附上配置路径和下一步人工操作。
+6. 连接通过后才进行本地验证：从本次获取/克隆的 Aa Browser 仓库根目录定位 `scripts/test-page.html`，转为正确的 `file:///` URL 后用 `browser_navigate` 打开，再调用 `browser_snapshot`；在普通搜索框输入 `Aa Browser 测试` 并点击搜索按钮，确认结果文字。若本次安装流程没有提供仓库源码和测试页，明确报告无法执行此项，不要猜本机路径。不要访问其他网站，不要触碰真实账号，不要输入或提交密码、token、API key 或其他秘密。
+7. 汇报安装目录、配置备份文件、是否生成/更新 WorkBuddy MCP 配置、browser_tabs 的实际结果、测试页各步骤结果，以及任何需要我手工完成的 WorkBuddy UI 步骤。
 ```
 
-## 等效的手动一条命令（不用 AI，自己粘贴到终端）
+## 手动终端等效命令（仅在用户明确要求时）
 
 ```powershell
-# PowerShell（Windows）——把 <URL> 换成发布地址
-irm <URL>/install.mjs -OutFile install.mjs
-node install.mjs --url <URL>/aa-browser-setup-0.3.1.exe
+$tmp = Join-Path $env:TEMP 'aa-browser-bootstrap'
+New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+Invoke-WebRequest https://raw.githubusercontent.com/yuchen0x1/aa-browser/main/install.mjs -OutFile (Join-Path $tmp 'install.mjs')
+node (Join-Path $tmp 'install.mjs') --repo yuchen0x1/aa-browser --clients workbuddy
 ```
 
-```bash
-# macOS / Linux 用户暂无安装包，走源码：
-git clone https://github.com/yuchen0x1/aa-browser.git aa-browser && cd aa-browser && npm install && npm run build && node cli/setup.mjs --yes
-```
+## WorkBuddy 配置和限制
 
-## 给发布者：如何让提示词里的链接生效
+安装器为 WorkBuddy 配置 `~/.workbuddy/mcp.json` 中的 `mcpServers.aa-browser`，并在覆盖现有配置前生成 `*.aa-backup-*`。配置写入不等于工具已加载；最终验收必须由 WorkBuddy 实际调用 `browser_tabs`。若 WorkBuddy 的安全策略或版本要求在 UI 中确认 MCP，请由 WorkBuddy 指引用户完成确认后再继续。不要编辑 WorkBuddy 数据库、插件缓存或运行时配置。
 
-1. 把仓库推到 GitHub；
-2. `npm run dist` 产出 `release/aa-browser-setup-0.3.1.exe`；
-3. GitHub → Releases → Draft a new release → 上传该 exe（及可选的 install.mjs）→ Publish；
-4. 把提示词里的 `https://github.com/yuchen0x1/aa-browser/releases/latest/download` 替换为仓库 Releases 直链，或让用户用 `--repo yuchen0x1/aa-browser` 自动拉取。
+其他支持 MCP 的客户端仍可使用：`node install.mjs --repo yuchen0x1/aa-browser`。不传 `--clients` 会接入安装器识别到的所有客户端。
+
+## 发布者
+
+`npm run dist` 按 `package.json` 版本生成 Windows 安装包；`--repo yuchen0x1/aa-browser` 只会获取最新已发布 GitHub Release，不会获取仓库未提交/未发布的 WorkBuddy 改动。使用本提示词前，必须确认最新 Release 已包含 WorkBuddy Connector 支持；否则远程安装器尚不具备这些改动。

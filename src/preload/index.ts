@@ -11,6 +11,9 @@ contextBridge.exposeInMainWorld('aa', {
   reload: (): Promise<void> => ipcRenderer.invoke('aa:reload'),
   submit: (value: string): Promise<void> => ipcRenderer.invoke('aa:omnibox-submit', value),
   devtools: (): Promise<void> => ipcRenderer.invoke('aa:devtools'),
+  decideApproval: (id: string, allowed: boolean): Promise<boolean> => ipcRenderer.invoke('aa:approval-decide', id, allowed),
+  interruptAgent: (): Promise<boolean> => ipcRenderer.invoke('aa:agent-interrupt'),
+  resumeAgent: (): Promise<boolean> => ipcRenderer.invoke('aa:agent-resume'),
   onState: (cb: (state: unknown) => void): void => {
     ipcRenderer.on('aa:state', (_e, state) => cb(state))
   },

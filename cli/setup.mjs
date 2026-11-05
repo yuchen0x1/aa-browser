@@ -41,7 +41,15 @@ const CLIENTS = [
   },
   { id: 'vscode', name: 'VS Code (原生 MCP)', detect: jA('Code', 'User'), file: jA('Code', 'User', 'mcp.json'), container: 'servers', vscodeStyle: true, jsonc: true },
   { id: 'gemini', name: 'Gemini CLI', detect: j('.gemini'), file: j('.gemini', 'settings.json'), container: 'mcpServers' },
-  { id: 'qwen', name: 'Qwen Code', detect: j('.qwen'), file: j('.qwen', 'settings.json'), container: 'mcpServers' }
+  { id: 'qwen', name: 'Qwen Code', detect: j('.qwen'), file: j('.qwen', 'settings.json'), container: 'mcpServers' },
+  {
+    id: 'workbuddy',
+    name: 'WorkBuddy (生成本地 MCP 配置；需在应用中导入/启用)',
+    detect: j('.workbuddy'),
+    file: j('.workbuddy', 'mcp.json'),
+    container: 'mcpServers',
+    stdioType: true
+  }
 ]
 
 const log = (...a) => console.log(...a)
@@ -80,10 +88,23 @@ function getContainer(obj, container) {
 }
 
 function entryFor(def) {
+  if (def.id === 'workbuddy') {
+    const installDir = path.resolve(HERE, '..', '..', '..')
+    return {
+      type: 'stdio',
+      command: path.join(installDir, 'Aa Browser.exe'),
+      args: [path.join(installDir, 'resources', 'app.asar.unpacked', 'out', 'bridge', 'mcp.cjs')],
+      env: {
+        ELECTRON_RUN_AS_NODE: '1',
+        AA_BROWSER_CONNECTION_FILE: j('.aabrowser', 'connection.json')
+      },
+      timeout: 60000
+    }
+  }
   const e = bridgeEntry()
   const entry = { command: e.command, args: e.args }
   if (e.env) entry.env = e.env
-  if (def.vscodeStyle) entry.type = 'stdio'
+  if (def.vscodeStyle || def.stdioType) entry.type = 'stdio'
   return entry
 }
 
@@ -91,7 +112,7 @@ function detectOne(def) {
   const installed = fs.existsSync(def.detect)
   let configured = false
   let outdated = false
-  if (installed && fs.existsSync(def.file)) {
+  if ((installed || def.id === 'workbuddy') && fs.existsSync(def.file)) {
     const parsed = parseLoose(fs.readFileSync(def.file, 'utf-8'))
     if (parsed) {
       const existing = getContainer(parsed, def.container)['aa-browser']
@@ -101,7 +122,7 @@ function detectOne(def) {
       }
     }
   }
-  return { def, installed, configured, outdated }
+  return { def, installed: installed || def.id === 'workbuddy', configured, outdated }
 }
 
 function setupOne(def, ts) {
@@ -205,9 +226,26 @@ async function main() {
 
   const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
   log('')
-  for (const d of targets) setupOne(d.def, ts)
+  for (const d of targets) {
+    if (d.def.id !== 'workbuddy') {
+      setupOne(d.def, ts)
+      continue
+    }
+    const installDir = path.resolve(HERE, '..', '..', '..')
+    const workbuddyScript = path.join(HERE, 'workbuddy.mjs')
+    const runtime = process.execPath
+    const env = process.versions.electron ? { ...process.env, ELECTRON_RUN_AS_NODE: '1' } : process.env
+    const result = spawnSync(runtime, [workbuddyScript, installDir], { encoding: 'utf8', env, timeout: 30000 })
+    if (result.stdout) process.stdout.write(result.stdout)
+    if (result.stderr) process.stderr.write(result.stderr)
+    if (result.status !== 0) {
+      log(`  ❌ WorkBuddy 配置生成失败（${result.error?.message ?? `exit ${result.status}`}）`)
+      continue
+    }
+    log('  ✅ WorkBuddy MCP 配置与本地 Connector 包已准备')
+  }
   log('')
-  log('完成！重启你的 AI 客户端后即可使用 aa-browser 工具（确保 Aa Browser 处于运行状态）。')
+  log('完成配置写入。请确认目标客户端实际加载了 MCP 工具；配置文件存在不等于连接成功。')
 }
 
 main().catch((err) => {

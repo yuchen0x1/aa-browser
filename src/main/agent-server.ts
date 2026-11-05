@@ -6,9 +6,14 @@ import crypto from 'node:crypto'
 import { WebSocketServer, WebSocket } from 'ws'
 import type { ConnectionInfo, WsRequest } from '@shared/types'
 import type { McpToolDef } from './tools'
+import type { ApprovalManager } from './approvals'
 
 const CONNECT_DIR = path.join(os.homedir(), '.aabrowser')
-const CONNECT_FILE = path.join(CONNECT_DIR, 'connection.json')
+const DEFAULT_CONNECT_FILE = path.join(CONNECT_DIR, 'connection.json')
+
+function connectionFile(): string {
+  return process.env['AA_BROWSER_CONNECTION_FILE'] || DEFAULT_CONNECT_FILE
+}
 
 /** 本地 Agent 接入服务：WS + token 鉴权 + connection.json 发现文件 */
 export class AgentServer {
@@ -17,11 +22,15 @@ export class AgentServer {
   private clients = new Set<WebSocket>()
   private port = 0
   private token = ''
+  private instanceId = crypto.randomUUID()
+  private ownConnectionFile = ''
+  private active = new Map<WebSocket, Map<number, AbortController>>()
 
   constructor(
     private tools: McpToolDef[],
     private onStatusChange: (count: number) => void,
-    private version: string
+    private version: string,
+    private approvals?: ApprovalManager
   ) {
     this.wss = new WebSocketServer({ server: this.server })
     this.wss.on('connection', (ws, req) => this.onConnection(ws, req))
@@ -37,15 +46,17 @@ export class AgentServer {
         resolve()
       })
     })
+    this.ownConnectionFile = connectionFile()
     const info: ConnectionInfo = {
       port: this.port,
       token: this.token,
       pid: process.pid,
       version: this.version,
-      startedAt: Date.now()
+      startedAt: Date.now(),
+      instanceId: this.instanceId
     }
-    fs.mkdirSync(CONNECT_DIR, { recursive: true })
-    fs.writeFileSync(CONNECT_FILE, JSON.stringify(info, null, 2), 'utf-8')
+    fs.mkdirSync(path.dirname(this.ownConnectionFile), { recursive: true })
+    fs.writeFileSync(this.ownConnectionFile, JSON.stringify(info, null, 2), 'utf-8')
   }
 
   private onConnection(ws: WebSocket, req: http.IncomingMessage): void {
@@ -67,10 +78,16 @@ export class AgentServer {
       void this.handleMessage(ws, raw.toString())
     })
     ws.on('close', () => {
+      const calls = this.active.get(ws)
+      for (const controller of calls?.values() ?? []) controller.abort()
+      this.active.delete(ws)
       this.clients.delete(ws)
       this.onStatusChange(this.clients.size)
     })
     ws.on('error', () => {
+      const calls = this.active.get(ws)
+      for (const controller of calls?.values() ?? []) controller.abort()
+      this.active.delete(ws)
       this.clients.delete(ws)
       this.onStatusChange(this.clients.size)
     })
@@ -83,19 +100,40 @@ export class AgentServer {
     } catch {
       return
     }
-    if (typeof req?.id !== 'number' || typeof req?.tool !== 'string') return
+    if (typeof req?.id !== 'number') return
+    if (req.cancel === true) {
+      this.active.get(ws)?.get(req.id)?.abort()
+      return
+    }
+    if (this.approvals?.isInterrupted()) {
+      this.reply(ws, { id: req.id, ok: false, error: 'Agent 已被用户中断；请在浏览器工具栏点击“恢复”后重试。' })
+      return
+    }
+    if (typeof req.tool !== 'string') return
 
     const tool = this.tools.find((t) => t.name === req.tool)
     if (!tool) {
       this.reply(ws, { id: req.id, ok: false, error: `未知工具: ${req.tool}` })
       return
     }
+    const controller = new AbortController()
+    let calls = this.active.get(ws)
+    if (!calls) { calls = new Map(); this.active.set(ws, calls) }
+    calls.set(req.id, controller)
+    console.log(`[aa-browser] tool request: ${req.tool} (${req.id})`)
     try {
-      const result = await tool.handler(req.args ?? {})
+      const result = await tool.handler({ ...(req.args ?? {}), __aaSignal: controller.signal })
+      if (controller.signal.aborted || this.approvals?.isInterrupted()) {
+        throw new Error('工具调用已被用户中断或取消。')
+      }
+      console.log(`[aa-browser] tool complete: ${req.tool} (${req.id})`)
       this.reply(ws, { id: req.id, ok: true, result })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       this.reply(ws, { id: req.id, ok: false, error: msg })
+    } finally {
+      calls.delete(req.id)
+      if (!calls.size) this.active.delete(ws)
     }
   }
 
@@ -108,9 +146,11 @@ export class AgentServer {
   /** 清理发现文件（应用退出时调用） */
   stop(): void {
     try {
-      fs.rmSync(CONNECT_FILE, { force: true })
+      const file = this.ownConnectionFile || connectionFile()
+      const current = JSON.parse(fs.readFileSync(file, 'utf-8')) as Partial<ConnectionInfo>
+      if (current.instanceId === this.instanceId && current.pid === process.pid) fs.rmSync(file, { force: true })
     } catch {
-      /* 忽略 */
+      /* missing, stale, or owned by another instance */
     }
     try {
       this.wss.close()
