@@ -22,6 +22,7 @@ import {
   snapshotText,
   doNavigate,
   doClick,
+  doDrag,
   doType,
   doSelectOption,
   doScroll,
@@ -61,7 +62,8 @@ export function buildTools(
   searchUrl: string,
   windowCtl: { resize: (w: number, h: number) => Promise<{ width: number; height: number }> },
   downloads: DownloadTracker,
-  approvals?: ApprovalManager
+  approvals?: ApprovalManager,
+  onAction?: (item: import('@shared/types').ActionLogItem) => void
 ): McpToolDef[] {
   const tools: McpToolDef[] = []
 
@@ -133,12 +135,14 @@ export function buildTools(
     name: 'browser_click',
     title: '点击',
     description:
-      'Click an element by its snapshot ref (e.g. "e12"). A fresh snapshot is returned afterwards ' +
-      'so you can see the result and continue.',
+      'Click an element by its snapshot ref (e.g. "e12"). Supports left click, right click (context menu), ' +
+      'double click. A fresh snapshot is returned afterwards so you can see the result and continue.',
     inputSchema: {
       type: 'object',
       properties: {
         ref: { type: 'string', description: 'Element ref from browser_snapshot, e.g. "e12"' },
+        button: { type: 'string', enum: ['left', 'right', 'middle'], description: 'Mouse button (default "left")' },
+        doubleClick: { type: 'boolean', description: 'Perform double click (default false)' },
         snapshot: { type: 'boolean', description: 'Return an incremental snapshot after the action (default true)' },
         tabId: { type: 'string', description: 'Tab id (default: active tab)' }
       },
@@ -148,8 +152,42 @@ export function buildTools(
       approvals?.assertRunning()
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const want = args['snapshot'] !== false
-      const r = await doClick(tab, String(args['ref']), want)
+      const button = (args['button'] as 'left' | 'right' | 'middle') || 'left'
+      const clickCount = args['doubleClick'] ? 2 : 1
+      const r = await doClick(tab, String(args['ref']), want, { button, clickCount })
       return { content: [text(withSnap(`已点击: ${r.clicked}`, r.snapshot, want))] }
+    }
+  })
+
+  tools.push({
+    name: 'browser_drag',
+    title: '拖拽',
+    description:
+      'Drag an element by ref to another element (toRef) or by a relative pixel offset (dx, dy). ' +
+      'Useful for sliders, drag-and-drop sortable lists, and canvas boards.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string', description: 'Source element ref to drag from' },
+        toRef: { type: 'string', description: 'Target element ref to drop onto' },
+        dx: { type: 'number', description: 'Relative horizontal offset in pixels (e.g. 150)' },
+        dy: { type: 'number', description: 'Relative vertical offset in pixels (e.g. -50)' },
+        snapshot: { type: 'boolean', description: 'Return an incremental snapshot after the action (default true)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      },
+      required: ['ref']
+    },
+    handler: async (args) => {
+      approvals?.assertRunning()
+      const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      const want = args['snapshot'] !== false
+      const r = await doDrag(tab, String(args['ref']), {
+        toRef: args['toRef'] as string | undefined,
+        dx: args['dx'] as number | undefined,
+        dy: args['dy'] as number | undefined,
+        wantSnapshot: want
+      })
+      return { content: [text(withSnap(`已拖拽: ${r.dragged}`, r.snapshot, want))] }
     }
   })
 
@@ -826,10 +864,36 @@ export function buildTools(
     ...tool,
     handler: async (args: Record<string, unknown>) => {
       approvals?.assertRunning()
-      const result = await tool.handler(args)
-      approvals?.assertRunning()
-      if (args['__aaSignal'] instanceof AbortSignal && args['__aaSignal'].aborted) throw new ActionError('工具调用已取消。')
-      return result
+      const startTime = Date.now()
+      try {
+        const result = await tool.handler(args)
+        approvals?.assertRunning()
+        if (args['__aaSignal'] instanceof AbortSignal && args['__aaSignal'].aborted) throw new ActionError('工具调用已取消。')
+        let summary = ''
+        const first = result.content?.[0]
+        if (first?.type === 'text' && first.text) {
+          summary = first.text.split('\n')[0].slice(0, 100)
+        } else if (first?.type === 'image') {
+          summary = '已捕获截图'
+        }
+        onAction?.({
+          id: Math.random().toString(36).slice(2, 9),
+          tool: tool.name,
+          summary: summary || `${tool.title || tool.name} 成功 (${Date.now() - startTime}ms)`,
+          ts: Date.now(),
+          isError: !!result.isError
+        })
+        return result
+      } catch (err) {
+        onAction?.({
+          id: Math.random().toString(36).slice(2, 9),
+          tool: tool.name,
+          summary: `错误: ${err instanceof Error ? err.message : String(err)}`,
+          ts: Date.now(),
+          isError: true
+        })
+        throw err
+      }
     }
   }))
 }

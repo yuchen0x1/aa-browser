@@ -16,7 +16,8 @@ import {
   rectScript,
   selectorScript,
   storageScript,
-  uploadScript
+  uploadScript,
+  laserCursorScript
 } from '@snapshot/scripts'
 import type { Tab } from './tabs'
 
@@ -51,10 +52,11 @@ async function settle(wc: WebContents): Promise<void> {
   try {
     if (wc.isLoading()) {
       await new Promise<void>((resolve) => {
+        // SPA 导航或长轮询下避免死等 8 秒：缩减至 3500ms
         const timer = setTimeout(() => {
           wc.removeListener('did-stop-loading', onDone)
           resolve()
-        }, 8000)
+        }, 3500)
         const onDone = (): void => {
           clearTimeout(timer)
           wc.removeListener('did-stop-loading', onDone)
@@ -66,7 +68,7 @@ async function settle(wc: WebContents): Promise<void> {
   } catch {
     /* 忽略 */
   }
-  await delay(350)
+  await delay(250)
 }
 
 /** 找到 tab 对应的 webContents（可指定 tabId，默认活动标签） */
@@ -120,7 +122,8 @@ export async function doNavigate(
 export async function doClick(
   tab: Tab,
   ref: string,
-  wantSnapshot: boolean
+  wantSnapshot: boolean,
+  opts?: { button?: 'left' | 'right' | 'middle'; clickCount?: number }
 ): Promise<{ clicked: string; snapshot?: PageSnapshot }> {
   const wc = tab.view.webContents
   const loc = (await wc.executeJavaScript(locateScript(ref), false)) as {
@@ -145,21 +148,91 @@ export async function doClick(
 
   const x = Math.max(0, loc.x ?? 0)
   const y = Math.max(0, loc.y ?? 0)
-  let clicked = `${loc.tag}${loc.type ? `[type=${loc.type}]` : ''}`
+  const button = opts?.button ?? 'left'
+  const clickCount = Math.max(1, Math.min(3, opts?.clickCount ?? 1))
+  const actName = clickCount === 2 ? '双击' : button === 'right' ? '右键' : '点击'
+  let clicked = `${loc.tag}${loc.type ? `[type=${loc.type}]` : ''} (${actName})`
+
+  // 视觉激光波纹投影（让用户直观看到 AI 点击位置）
+  void wc.executeJavaScript(laserCursorScript(x, y, 'click'), false).catch(() => {})
 
   if (loc.hitOk) {
     // 优先走真实输入事件（isTrusted=true，兼容防爬站点）
     wc.sendInputEvent({ type: 'mouseMove', x, y })
-    wc.sendInputEvent({ type: 'mouseDown', x, y, button: 'left', clickCount: 1 })
-    wc.sendInputEvent({ type: 'mouseUp', x, y, button: 'left', clickCount: 1 })
+    wc.sendInputEvent({ type: 'mouseDown', x, y, button, clickCount })
+    wc.sendInputEvent({ type: 'mouseUp', x, y, button, clickCount })
   } else {
     // 元素被遮挡 → 页面内合成事件兜底
-    await wc.executeJavaScript(syntheticClickScript(ref), false)
+    await wc.executeJavaScript(syntheticClickScript(ref, button), false)
   }
 
   await settle(wc)
   const snapshot = wantSnapshot ? await captureSnapshot(wc) : undefined
   return { clicked, snapshot }
+}
+
+/** 拖拽操作（支持从元素拖拽至目标元素，或指定相对偏移像素 dx, dy，适用于滑块/看板） */
+export async function doDrag(
+  tab: Tab,
+  ref: string,
+  opts: { toRef?: string; dx?: number; dy?: number; wantSnapshot?: boolean }
+): Promise<{ dragged: string; snapshot?: PageSnapshot }> {
+  const wc = tab.view.webContents
+  const loc1 = (await wc.executeJavaScript(locateScript(ref), false)) as {
+    ok: boolean
+    reason?: string
+    x?: number
+    y?: number
+    tag?: string
+  }
+  if (!loc1 || !loc1.ok) {
+    throw new ActionError(`找不到拖拽起始元素 ${ref}`)
+  }
+
+  const x1 = Math.max(0, loc1.x ?? 0)
+  const y1 = Math.max(0, loc1.y ?? 0)
+  let x2 = x1
+  let y2 = y1
+
+  if (opts.toRef) {
+    const loc2 = (await wc.executeJavaScript(locateScript(opts.toRef), false)) as {
+      ok: boolean
+      reason?: string
+      x?: number
+      y?: number
+    }
+    if (!loc2 || !loc2.ok) throw new ActionError(`找不到拖拽目标元素 ${opts.toRef}`)
+    x2 = Math.max(0, loc2.x ?? 0)
+    y2 = Math.max(0, loc2.y ?? 0)
+  } else if (opts.dx != null || opts.dy != null) {
+    x2 = Math.max(0, x1 + (opts.dx ?? 0))
+    y2 = Math.max(0, y1 + (opts.dy ?? 0))
+  } else {
+    throw new ActionError('拖拽操作必须指定 toRef 目标元素或 dx/dy 偏移像素')
+  }
+
+  // 播放起始与终点光标
+  void wc.executeJavaScript(laserCursorScript(x1, y1, 'drag'), false).catch(() => {})
+  void wc.executeJavaScript(laserCursorScript(x2, y2, 'drag'), false).catch(() => {})
+
+  // 模拟真实轨迹平滑拖动（5 步插值）
+  wc.sendInputEvent({ type: 'mouseMove', x: x1, y: y1 })
+  wc.sendInputEvent({ type: 'mouseDown', x: x1, y: y1, button: 'left', clickCount: 1 })
+  await delay(50)
+
+  const steps = 7
+  for (let i = 1; i <= steps; i++) {
+    const curX = Math.round(x1 + ((x2 - x1) * i) / steps)
+    const curY = Math.round(y1 + ((y2 - y1) * i) / steps)
+    wc.sendInputEvent({ type: 'mouseMove', x: curX, y: curY })
+    await delay(20)
+  }
+
+  wc.sendInputEvent({ type: 'mouseUp', x: x2, y: y2, button: 'left', clickCount: 1 })
+  await settle(wc)
+
+  const snapshot = opts.wantSnapshot ? await captureSnapshot(wc) : undefined
+  return { dragged: `从 (${x1},${y1}) 拖动至 (${x2},${y2})`, snapshot }
 }
 
 export async function inspectTypeTarget(tab: Tab, ref: string): Promise<{ ok: boolean; sensitive?: boolean; label?: string; type?: string; fingerprint?: string }> {
@@ -421,6 +494,7 @@ export async function doHover(tab: Tab, ref: string): Promise<{ hovered: string 
   }
   const x = Math.max(0, loc.x ?? 0)
   const y = Math.max(0, loc.y ?? 0)
+  void wc.executeJavaScript(laserCursorScript(x, y, 'hover'), false).catch(() => {})
   wc.sendInputEvent({ type: 'mouseMove', x, y })
   await delay(150)
   return { hovered: `${loc.tag} @(${x},${y})` }

@@ -168,7 +168,8 @@ npm run dev
 | --- | --- |
 | `browser_navigate` | 导航到 URL（非 URL 文本自动转搜索词；结果内嵌完整快照，`snapshot: false` 可跳过） |
 | `browser_snapshot` | 结构化页面快照（增量模式省 token；`full: true` 强制完整树） |
-| `browser_click` | 按 ref 点击（自动返回增量快照） |
+| `browser_click` | 按 ref 点击（支持左键/右键/双击，自动返回增量快照） |
+| `browser_drag` | 按 ref 拖拽（拖到目标元素 `toRef` 或相对偏移 `dx, dy`，支持滑块与看板） |
 | `browser_type` | 按 ref 输入文本（支持 `submit` 回车提交、`clear` 清空） |
 | `browser_select_option` | 按 ref 选择下拉项（按 value 或可见文本匹配） |
 | `browser_scroll` | 滚动页面（先主文档，后最大滚动区域） |

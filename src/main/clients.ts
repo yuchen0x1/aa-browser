@@ -146,7 +146,7 @@ export function bridgeEntry(): { command: string; args: string[]; env?: Record<s
       : path.join(app.getPath('userData'), 'connection.json')
   }
   try {
-    const r = spawnSync('node', ['--version'], { encoding: 'utf-8', shell: true, timeout: 5000 })
+    const r = spawnSync('node', ['--version'], { encoding: 'utf-8', shell: false, timeout: 5000 })
     if (r.status === 0 && /^v\d/.test((r.stdout || '').trim())) {
       return { command: 'node', args: [mcp], env }
     }

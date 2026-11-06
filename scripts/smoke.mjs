@@ -237,6 +237,10 @@ async function main() {
     const chk = await mcp.call('browser_click', { ref: checkRef, snapshot: false })
     check('复选框点击成功', !chk.isError, mcp.text(chk).slice(0, 120))
 
+    console.log('\n[7b] 拖拽操作 (browser_drag)')
+    const dragged = await mcp.call('browser_drag', { ref: buttonRef, dx: 40, dy: 10, snapshot: false })
+    check('拖拽执行成功', !dragged.isError && mcp.text(dragged).includes('已拖拽: 从'), mcp.text(dragged))
+
     console.log('\n[8] 文本提取')
     const ext = await mcp.call('browser_extract', {})
     const extText = mcp.text(ext)

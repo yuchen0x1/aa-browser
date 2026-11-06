@@ -21,6 +21,14 @@ export interface PendingApprovalInfo {
   createdAt: number
 }
 
+export interface ActionLogItem {
+  id: string
+  tool: string
+  summary: string
+  ts: number
+  isError?: boolean
+}
+
 export interface UiState {
   tabs: TabInfo[]
   activeId: string | null
@@ -29,6 +37,7 @@ export interface UiState {
   connectionMessage: string
   pendingApprovals: PendingApprovalInfo[]
   agentInterrupted: boolean
+  recentActions?: ActionLogItem[]
 }
 
 /** 快照里的单个元素（供 Agent 理解与动作引擎定位） */

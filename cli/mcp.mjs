@@ -16,7 +16,7 @@ import readline from 'node:readline'
 import process from 'node:process'
 import WebSocket from 'ws'
 
-const VERSION = '0.4.0'
+const VERSION = '0.5.0'
 const CONNECT_FILE = process.env['AA_BROWSER_CONNECTION_FILE'] || path.join(os.homedir(), '.aabrowser', 'connection.json')
 const CALL_TIMEOUT_MS = 60000
 
@@ -58,11 +58,31 @@ const TOOL_DEFS = [
     name: 'browser_click',
     title: '点击',
     description:
-      'Click an element by its snapshot ref (e.g. "e12"). An incremental snapshot is returned afterwards so you can see the result and continue.',
+      'Click an element by its snapshot ref (e.g. "e12"). Supports left click, right click (context menu), double click. An incremental snapshot is returned afterwards so you can see the result and continue.',
     inputSchema: {
       type: 'object',
       properties: {
         ref: { type: 'string', description: 'Element ref from browser_snapshot, e.g. "e12"' },
+        button: { type: 'string', enum: ['left', 'right', 'middle'], description: 'Mouse button (default "left")' },
+        doubleClick: { type: 'boolean', description: 'Perform double click (default false)' },
+        snapshot: { type: 'boolean', description: 'Return an incremental snapshot after the action (default true)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      },
+      required: ['ref']
+    }
+  },
+  {
+    name: 'browser_drag',
+    title: '拖拽',
+    description:
+      'Drag an element by ref to another element (toRef) or by a relative pixel offset (dx, dy). Useful for sliders, drag-and-drop sortable lists, and canvas boards.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string', description: 'Source element ref to drag from' },
+        toRef: { type: 'string', description: 'Target element ref to drop onto' },
+        dx: { type: 'number', description: 'Relative horizontal offset in pixels (e.g. 150)' },
+        dy: { type: 'number', description: 'Relative vertical offset in pixels (e.g. -50)' },
         snapshot: { type: 'boolean', description: 'Return an incremental snapshot after the action (default true)' },
         tabId: { type: 'string', description: 'Tab id (default: active tab)' }
       },

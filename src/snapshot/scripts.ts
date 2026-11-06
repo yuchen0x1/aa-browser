@@ -50,8 +50,9 @@ export const locateScript = (ref: string): string => {
 }
 
 /** 命中测试失败时的兜底：在页面内合成完整鼠标事件序列 */
-export const syntheticClickScript = (ref: string): string => {
+export const syntheticClickScript = (ref: string, button: 'left' | 'right' | 'middle' = 'left'): string => {
   REF_GUARD(ref)
+  const btnCode = button === 'right' ? 2 : button === 'middle' ? 1 : 0
   return `(() => {
   const el = (window.__aaRefs || {})['${ref}']
   if (!el) return { ok: false, reason: 'no-ref' }
@@ -61,13 +62,17 @@ export const syntheticClickScript = (ref: string): string => {
     const r = el.getBoundingClientRect()
     cx = r.x + r.width / 2; cy = r.y + r.height / 2
   } catch (e) {}
-  const opts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: 0 }
+  const opts = { bubbles: true, cancelable: true, view: window, clientX: cx, clientY: cy, button: ${btnCode} }
   try {
     if (typeof PointerEvent === 'function') el.dispatchEvent(new PointerEvent('pointerdown', opts))
     el.dispatchEvent(new MouseEvent('mousedown', opts))
     if (typeof PointerEvent === 'function') el.dispatchEvent(new PointerEvent('pointerup', opts))
     el.dispatchEvent(new MouseEvent('mouseup', opts))
-    el.dispatchEvent(new MouseEvent('click', opts))
+    if (${btnCode} === 2) {
+      el.dispatchEvent(new MouseEvent('contextmenu', opts))
+    } else {
+      el.dispatchEvent(new MouseEvent('click', opts))
+    }
   } catch (e) {
     try { el.click() } catch (e2) { return { ok: false, reason: 'dispatch-failed' } }
   }
@@ -372,5 +377,43 @@ export const uploadScript = (ref: string, files: { name: string; type: string; d
     el.dispatchEvent(new Event('change', { bubbles: true }))
     return { ok: true, count: el.files.length, names: Array.from(el.files).map(f => f.name) }
   } catch (e) { return { ok: false, reason: String(e && e.message || e) } }
+})()`
+}
+
+/** 视觉光标与波纹投影：在页面注入 AI 操作动画 */
+export const laserCursorScript = (x: number, y: number, actionType: 'click' | 'hover' | 'drag' | 'type'): string => {
+  return `(() => {
+  try {
+    let container = document.getElementById('__aa_agent_laser_overlay__')
+    if (!container) {
+      container = document.createElement('div')
+      container.id = '__aa_agent_laser_overlay__'
+      container.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647;overflow:hidden;'
+      document.documentElement.appendChild(container)
+    }
+
+    const dot = document.createElement('div')
+    const color = '${actionType === 'click' ? '#ff3b30' : actionType === 'type' ? '#34c759' : actionType === 'drag' ? '#af52de' : '#007aff'}'
+    dot.style.cssText = 'position:absolute;left:' + ${x} + 'px;top:' + ${y} + 'px;width:18px;height:18px;border-radius:50%;background:' + color + ';box-shadow:0 0 12px ' + color + ';transform:translate(-50%,-50%) scale(1);transition:transform 0.45s cubic-bezier(0.1, 1, 0.1, 1), opacity 0.45s ease-out;opacity:0.95;pointer-events:none;'
+
+    const ripple = document.createElement('div')
+    ripple.style.cssText = 'position:absolute;left:' + ${x} + 'px;top:' + ${y} + 'px;width:14px;height:14px;border-radius:50%;border:2px solid ' + color + ';transform:translate(-50%,-50%) scale(1);transition:transform 0.6s ease-out, opacity 0.6s ease-out;opacity:1;pointer-events:none;'
+
+    container.appendChild(dot)
+    container.appendChild(ripple)
+
+    requestAnimationFrame(() => {
+      dot.style.transform = 'translate(-50%,-50%) scale(0.6)'
+      ripple.style.transform = 'translate(-50%,-50%) scale(3.5)'
+      ripple.style.opacity = '0'
+      setTimeout(() => {
+        dot.style.opacity = '0'
+        setTimeout(() => {
+          dot.remove()
+          ripple.remove()
+        }, 500)
+      }, 400)
+    })
+  } catch (e) {}
 })()`
 }

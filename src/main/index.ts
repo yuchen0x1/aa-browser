@@ -34,6 +34,13 @@ let agentCount = 0
 let bridgeState: UiState['bridgeState'] = 'waiting'
 let connectionMessage = '等待 MCP 桥启动并连接'
 const approvals = new ApprovalManager()
+const recentActions: import('@shared/types').ActionLogItem[] = []
+
+export function logAgentAction(item: import('@shared/types').ActionLogItem): void {
+  recentActions.push(item)
+  if (recentActions.length > 30) recentActions.shift()
+  pushState()
+}
 
 /** 新标签页地址：dev 走 vite dev server，产物走打包出的 renderer 文件 */
 function newtabUrl(): string {
@@ -91,7 +98,8 @@ function pushState(): void {
     bridgeState,
     connectionMessage,
     pendingApprovals: approvals.list(),
-    agentInterrupted: approvals.isInterrupted()
+    agentInterrupted: approvals.isInterrupted(),
+    recentActions: [...recentActions]
   }
   chromeView.webContents.send('aa:state', state)
 }
@@ -314,7 +322,8 @@ app.whenReady().then(() => {
         })
     },
     getDownloadTracker(),
-    approvals
+    approvals,
+    logAgentAction
   )
   agentServer = new AgentServer(
     tools,

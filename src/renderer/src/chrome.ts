@@ -31,6 +31,10 @@ const btnForward = document.getElementById('btn-forward') as HTMLButtonElement
 const btnReload = document.getElementById('btn-reload') as HTMLButtonElement
 const agentStop = document.getElementById('agent-stop') as HTMLButtonElement
 const approvalPanel = document.getElementById('approval-panel') as HTMLDivElement
+const btnFeed = document.getElementById('btn-feed') as HTMLButtonElement | null
+const feedDrawer = document.getElementById('action-feed-drawer') as HTMLDivElement | null
+const feedList = document.getElementById('action-feed-list') as HTMLDivElement | null
+const btnCloseFeed = document.getElementById('btn-close-feed') as HTMLButtonElement | null
 
 function activeTab(): TabInfo | null {
   return state.tabs.find((t) => t.active) ?? null
@@ -160,10 +164,34 @@ function renderApprovals(): void {
   }
 }
 
+function renderFeed(): void {
+  if (!feedList) return
+  const actions = state.recentActions || []
+  if (!actions.length) {
+    feedList.innerHTML = '<div class="empty-feed">暂无 Agent 操作记录</div>'
+    return
+  }
+  feedList.innerHTML = ''
+  for (const item of actions.slice().reverse()) {
+    const el = document.createElement('div')
+    el.className = 'feed-item' + (item.isError ? ' error' : '')
+    const timeStr = new Date(item.ts).toLocaleTimeString()
+    el.innerHTML = `
+      <div class="feed-head">
+        <span class="feed-tool">${item.tool}</span>
+        <span class="feed-time">${timeStr}</span>
+      </div>
+      <div class="feed-summary">${item.summary}</div>
+    `
+    feedList.appendChild(el)
+  }
+}
+
 function applyState(next: UiState): void {
   state = next
   renderTabs()
   renderToolbar()
+  renderFeed()
 }
 
 /* ── 事件绑定 ─────────────────────── */
@@ -173,6 +201,14 @@ btnForward.addEventListener('click', () => void window.aa.forward())
 btnReload.addEventListener('click', () => void window.aa.reload())
 agentStop.addEventListener('click', () => void (state.agentInterrupted ? window.aa.resumeAgent() : window.aa.interruptAgent()))
 document.getElementById('btn-newtab')?.addEventListener('click', () => void window.aa.tabNew())
+
+btnFeed?.addEventListener('click', () => {
+  if (!feedDrawer) return
+  feedDrawer.hidden = !feedDrawer.hidden
+})
+btnCloseFeed?.addEventListener('click', () => {
+  if (feedDrawer) feedDrawer.hidden = true
+})
 
 omnibox.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {

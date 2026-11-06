@@ -33,9 +33,21 @@
           <input id="omnibox" spellcheck="false" autocomplete="off" placeholder="搜索或输入网址 (Ctrl+L)" />
         </div>
         <button id="agent-pill" title="AI Agent 连接状态">○ 未连接</button>
+        <button id="btn-feed" class="navbtn" title="查看 Agent 实时活动日志">
+          <svg width="15" height="15" viewBox="0 0 16 16"><path d="M2.5 4h11M2.5 8h11M2.5 12h7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </button>
         <button id="agent-stop" class="agent-stop" title="中断 Agent 的后续浏览器操作">中断</button>
       </div>
       <div id="approval-panel" class="approval-panel" hidden></div>
+      <div id="action-feed-drawer" class="action-feed-drawer" hidden>
+        <div class="drawer-header">
+          <span>Agent 实时活动日志</span>
+          <button id="btn-close-feed" class="drawer-close">×</button>
+        </div>
+        <div id="action-feed-list" class="drawer-content">
+          <div class="empty-feed">暂无 Agent 操作记录</div>
+        </div>
+      </div>
     </div>
     <script type="module" src="./src/chrome.ts"></script>
   </body>

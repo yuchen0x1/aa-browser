@@ -173,8 +173,11 @@ export function __aaSnapshot() {
       if (name) return name
     }
     if (el.tagName === 'INPUT') {
-      var v = el.getAttribute('value')
-      if (v) return v
+      var ty = (el.type || 'text').toLowerCase()
+      if (ty !== 'password') {
+        var v = el.getAttribute('value')
+        if (v) return v
+      }
     }
     var tx = el.innerText || el.textContent || ''
     return tx.trim()
