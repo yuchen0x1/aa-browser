@@ -59,6 +59,17 @@ export class AgentServer {
     fs.writeFileSync(this.ownConnectionFile, JSON.stringify(info, null, 2), 'utf-8')
   }
 
+  /** 供设置面板展示：本地 Agent 服务的连接信息 */
+  info(): { port: number; token: string; version: string; discoveryFile: string; clientCount: number } {
+    return {
+      port: this.port,
+      token: this.token,
+      version: this.version,
+      discoveryFile: this.ownConnectionFile || connectionFile(),
+      clientCount: this.clients.size
+    }
+  }
+
   private onConnection(ws: WebSocket, req: http.IncomingMessage): void {
     // 仅允许本机 + token 校验
     const remote = req.socket.remoteAddress ?? ''

@@ -1,6 +1,8 @@
-import { app, BaseWindow, WebContentsView, ipcMain, Menu } from 'electron'
+import { app, BaseWindow, WebContentsView, ipcMain, Menu, MenuItem, shell, clipboard } from 'electron'
+import type { MenuItemConstructorOptions } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
+import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { TabManager } from './tabs'
 import { AgentServer } from './agent-server'
@@ -8,6 +10,8 @@ import { buildTools } from './tools'
 import { normalizeUrl } from './tabs'
 import { detectClients, setupClients } from './clients'
 import { getDownloadTracker } from './downloads'
+import { getHistoryStore } from './history'
+import { getSettingsStore } from './settings'
 import { ApprovalManager } from './approvals'
 import { session } from 'electron'
 import type { UiState } from '@shared/types'
@@ -16,7 +20,11 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const VERSION = app.getVersion()
 
 const CHROME_HEIGHT = 78
-const SEARCH_URL = 'https://www.bing.com/search?q='
+
+/** 默认搜索引擎基址：优先读取用户设置 */
+function searchUrlBase(): string {
+  return getSettingsStore().get().searchEngine
+}
 
 // 开发版使用独立 userData：避免与安装版争单实例锁/登录态/connection.json。
 // ⚠️ 必须在 requestSingleInstanceLock() 之前调用（锁按 userData 路径区分）。
@@ -99,7 +107,8 @@ function pushState(): void {
     connectionMessage,
     pendingApprovals: approvals.list(),
     agentInterrupted: approvals.isInterrupted(),
-    recentActions: [...recentActions]
+    recentActions: [...recentActions],
+    downloads: getDownloadTracker().list(20)
   }
   chromeView.webContents.send('aa:state', state)
 }
@@ -154,6 +163,67 @@ function handleBeforeInput(wc: Electron.WebContents): void {
   })
 }
 
+/** 为单个页面 WebContents 注册右键菜单（普通网页浏览器基本操作） */
+function installPageContextMenu(wc: Electron.WebContents): void {
+  wc.on('context-menu', (_e, params) => {
+    const menu = new Menu()
+    const hasLink = /^https?:|^file:/i.test(params.linkURL)
+    const linkAllowed = !!tabManager?.isUrlAllowed(params.linkURL)
+    const hasSelection = !!params.selectionText
+    const editable = !!params.isEditable
+
+    const push = (opts: MenuItemConstructorOptions): void => { menu.append(new MenuItem(opts)) }
+
+    if (editable) {
+      push({ label: '撤销', role: 'undo' })
+      push({ label: '重做', role: 'redo' })
+      push({ type: 'separator' })
+      push({ label: '剪切', role: 'cut' })
+      push({ label: '复制', role: 'copy' })
+      push({ label: '粘贴', role: 'paste' })
+      push({ label: '全选', role: 'selectAll' })
+    } else if (hasSelection) {
+      push({ label: '复制', role: 'copy' })
+    }
+
+    if (menu.items.length) push({ type: 'separator' })
+
+    if (hasLink) {
+      push({ label: '打开链接', enabled: linkAllowed, click: () => { if (linkAllowed) void wc.loadURL(params.linkURL) } })
+      push({ label: '在新标签页打开链接', enabled: linkAllowed, click: () => { if (linkAllowed) tabManager?.createTab(params.linkURL) } })
+      push({ label: '复制链接地址', click: () => { clipboard.writeText(params.linkURL) } })
+      push({ type: 'separator' })
+    }
+
+    const active = tabManager?.active()
+    const isActiveTab = active?.view.webContents === wc
+    const canBack = tabManager && active ? tabManager.canBack(active) : false
+    const canForward = tabManager && active ? tabManager.canForward(active) : false
+    push({ label: '后退', enabled: isActiveTab && canBack, click: () => { const t = tabManager?.active(); if (t) tabManager?.goBack(t) } })
+    push({ label: '前进', enabled: isActiveTab && canForward, click: () => { const t = tabManager?.active(); if (t) tabManager?.goForward(t) } })
+    push({ label: '刷新', click: () => wc.reload() })
+    push({ type: 'separator' })
+    push({ label: '查看源代码', enabled: !getSettingsStore().get().allowedSites.length, click: () => {
+      if (!getSettingsStore().get().allowedSites.length) void wc.loadURL(`view-source:${wc.getURL()}`)
+    } })
+    push({ label: '开发者工具', click: () => {
+      const t = tabManager?.tabs.find((x) => x.view.webContents === wc)
+      t?.net.dispose() // DevTools 与抓包共用调试通道
+      wc.openDevTools({ mode: 'detach' })
+    } })
+    push({ label: '截图保存', click: () => {
+      void wc.capturePage().then((img) => {
+        const dir = app.getPath('pictures') || os.homedir()
+        const p = path.join(dir, `aabrowser-${Date.now()}.png`)
+        fs.writeFileSync(p, img.toPNG())
+        shell.showItemInFolder(p)
+      }).catch(() => {})
+    } })
+
+    menu.popup({ window: win ?? undefined })
+  })
+}
+
 function createWindow(): void {
   win = new BaseWindow({
     width: 1280,
@@ -205,12 +275,18 @@ function registerIpc(): void {
       bridgeState,
       connectionMessage,
       pendingApprovals: approvals.list(),
-      agentInterrupted: approvals.isInterrupted()
+      agentInterrupted: approvals.isInterrupted(),
+      downloads: getDownloadTracker().list(20)
     } satisfies UiState
   })
   ipcMain.handle('aa:tab-new', (_e, url?: string) => {
-    const target = url ? normalizeUrl(url, SEARCH_URL, newtabUrl()) : newtabUrl()
-    tabManager?.createTab(target)
+    const target = url ? normalizeUrl(url, searchUrlBase(), newtabUrl()) : newtabUrl()
+    try {
+      tabManager?.createTab(target)
+    } catch {
+      return false
+    }
+    return true
   })
   ipcMain.handle('aa:tab-close', (_e, id: string) => {
     const tab = tabManager?.get(id)
@@ -240,9 +316,15 @@ function registerIpc(): void {
   })
   ipcMain.handle('aa:omnibox-submit', (_e, value: string) => {
     const active = tabManager?.active()
-    if (!active) return
-    const target = normalizeUrl(value, SEARCH_URL, newtabUrl())
+    if (!active || !tabManager) return false
+    const target = normalizeUrl(value, searchUrlBase(), newtabUrl())
+    try {
+      tabManager.assertUrlAllowed(target)
+    } catch {
+      return false
+    }
     void active.view.webContents.loadURL(target)
+    return true
   })
   ipcMain.handle('aa:devtools', () => {
     const active = tabManager?.active()
@@ -270,6 +352,40 @@ function registerIpc(): void {
   ipcMain.handle('aa:clients-setup', (_e, ids: string[]) => {
     return setupClients(Array.isArray(ids) ? ids : [])
   })
+  ipcMain.handle('aa:downloads-list', (event) => {
+    if (event.sender !== chromeView?.webContents) return []
+    return getDownloadTracker().list(20)
+  })
+  ipcMain.handle('aa:download-open', (event, id: string) => {
+    if (event.sender !== chromeView?.webContents) return
+    getDownloadTracker().open(String(id))
+  })
+  ipcMain.handle('aa:download-show', (event, id: string) => {
+    if (event.sender !== chromeView?.webContents) return
+    getDownloadTracker().showInFolder(String(id))
+  })
+  ipcMain.handle('aa:download-dir', (event) => {
+    if (event.sender !== chromeView?.webContents) return ''
+    return getDownloadTracker().dir
+  })
+  ipcMain.handle('aa:history-suggest', (event, query: string, limit?: number) => {
+    if (event.sender !== chromeView?.webContents) return []
+    return getHistoryStore().suggest(String(query ?? ''), Number(limit) || 8)
+  })
+  ipcMain.handle('aa:settings-get', (event) => {
+    if (event.sender !== chromeView?.webContents) return null
+    const s = getSettingsStore()
+    return { settings: s.get(), presets: s.presets() }
+  })
+  ipcMain.handle('aa:settings-set', (event, patch: unknown) => {
+    if (event.sender !== chromeView?.webContents) return null
+    return getSettingsStore().set((patch ?? {}) as Record<string, unknown>)
+  })
+  ipcMain.handle('aa:agent-info', (event) => {
+    if (event.sender !== chromeView?.webContents) return null
+    return agentServer?.info() ?? null
+  })
+  getDownloadTracker().onChange = pushState
 }
 
 function onTabChange(): void {
@@ -292,23 +408,28 @@ app.whenReady().then(() => {
 
   registerIpc()
 
-  tabManager = new TabManager(newtabUrl(), SEARCH_URL)
+  tabManager = new TabManager(newtabUrl(), searchUrlBase())
   tabManager.newtabPreload = path.join(__dirname, '../preload/index.js')
   tabManager.onChange = onTabChange
+  tabManager.onContextMenu = installPageContextMenu
+  tabManager.onNavigate = (url, title) => getHistoryStore().add(url, title)
+  tabManager.getAllowedSites = () => getSettingsStore().get().allowedSites
+  tabManager.onSession = (ses) => getDownloadTracker().attach(ses)
+  getDownloadTracker().setDirectoryProvider(() => getSettingsStore().get().downloadDir)
 
   createWindow()
 
   // 首个标签页：新标签页
   tabManager.createTab()
 
-  // 下载追踪：静默捕获所有下载（自动保存到 ~/.aabrowser/downloads/）
+  // 下载追踪：静默捕获所有标签页隔离 session 的下载
   getDownloadTracker().attach(session.defaultSession)
 
   // Agent 接入服务
   const tools = buildTools(
     tabManager,
     newtabUrl(),
-    SEARCH_URL,
+    searchUrlBase(),
     {
       resize: (w, h) =>
         new Promise((resolve, reject) => {
@@ -323,7 +444,8 @@ app.whenReady().then(() => {
     },
     getDownloadTracker(),
     approvals,
-    logAgentAction
+    logAgentAction,
+    () => ({ requireOperationApproval: getSettingsStore().get().requireOperationApproval })
   )
   agentServer = new AgentServer(
     tools,

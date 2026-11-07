@@ -19,6 +19,10 @@ export interface PendingApprovalInfo {
   tabTitle: string
   fieldLabel: string
   createdAt: number
+  /** sensitive=敏感输入；operation=高危操作确认 */
+  kind?: 'sensitive' | 'operation'
+  /** operation 类型的说明文案 */
+  detail?: string
 }
 
 export interface ActionLogItem {
@@ -38,6 +42,51 @@ export interface UiState {
   pendingApprovals: PendingApprovalInfo[]
   agentInterrupted: boolean
   recentActions?: ActionLogItem[]
+  downloads?: DownloadInfo[]
+}
+
+/** chrome UI 展示的下载条目（精简自主进程 DownloadRecord，避免前端依赖主进程类型） */
+export interface DownloadInfo {
+  id: string
+  filename: string
+  url: string
+  savePath: string
+  totalBytes: number
+  receivedBytes: number
+  state: 'progressing' | 'completed' | 'cancelled' | 'interrupted'
+  ts: number
+}
+
+/** omnibox 历史补全建议条目 */
+export interface HistoryEntry {
+  url: string
+  title: string
+  ts: number
+  count: number
+}
+
+/** 用户可调设置（渲染层视图，主进程持久化） */
+export interface AppSettings {
+  searchEngine: string
+  fullSnapshot: boolean
+  downloadDir: string
+  requireOperationApproval: boolean
+  allowedSites: string[]
+}
+
+/** 设置面板返回值 */
+export interface SettingsView {
+  settings: AppSettings
+  presets: { label: string; url: string }[]
+}
+
+/** 本地 Agent 服务连接信息（设置面板展示） */
+export interface AgentInfo {
+  port: number
+  token: string
+  version: string
+  discoveryFile: string
+  clientCount: number
 }
 
 /** 快照里的单个元素（供 Agent 理解与动作引擎定位） */

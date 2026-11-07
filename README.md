@@ -191,6 +191,9 @@ npm run dev
 | `browser_network_requests` | **抓包**：列出捕获的 HTTP 请求（方法/状态/类型/大小/耗时/URL，支持过滤） |
 | `browser_network_detail` | **抓包**：单个请求的完整请求/响应头 + 响应体（`body: true`） |
 | `browser_har` | **抓包**：导出 HAR 1.2 文件（可导入 DevTools/Fiddler 人工分析） |
+| `browser_mock_requests` | **拦截 Mock**：按 URL 子串+方法拦截请求，返回假状态/头/体（`action: continue` 只观察放行） |
+| `browser_list_mocks` | **拦截 Mock**：列出当前 mock 规则（匹配器/状态/命中次数） |
+| `browser_clear_mocks` | **拦截 Mock**：按 id 删除或清空全部 mock 规则 |
 | `browser_tabs` | 列表 / 新建 / 切换 / 关闭标签页 |
 
 ## 安全说明
@@ -199,6 +202,8 @@ npm run dev
 - token 与端口写在用户目录 `~/.aabrowser/connection.json`（仅当前用户可读）
 - 一键接入写入其他客户端配置前**自动备份**、只改 `aa-browser` 一个键、幂等可重复
 - **注意**：Agent 能看到页面内容与网络流量，包括可能含秘密的 Cookie、Storage、请求头和响应体。敏感输入审批是基于页面字段特征的保护，不是通用 DLP；不要让不可信 Agent 访问高敏站点。
+- **站点白名单**：在设置中每行填写一个 `https://example.com` 或 `https://*.example.com` 规则；填写后仅允许匹配的 HTTP/HTTPS 站点导航，留空表示关闭白名单。
+- **会话隔离**：每个标签页使用独立的持久化 Electron session 分区，Cookie、Storage、缓存和请求拦截规则不会在标签页之间共享。
 
 ## 项目结构
 
@@ -227,11 +232,11 @@ node scripts/live-test.mjs   # 实战示例：MCP 驱动必应搜索全流程
 
 ## Roadmap
 
-- [ ] 操作确认弹窗：Agent 点击/提交前可选人工确认
-- [ ] 站点白名单 / 会话隔离分区
+- [x] ~~操作确认弹窗：Agent 点击/提交前可选人工确认~~（v0.6.0 已完成）
+- [x] ~~站点白名单 / 会话隔离分区~~（v0.6.0 已完成）
 - [x] ~~快照增量更新与缓存（进一步降 token）~~（v0.2.0 已完成）
 - [x] ~~一键接入各大 AI 客户端 + 网络抓包工具集 + Windows 安装包~~（v0.3.0 已完成）
-- [ ] 请求拦截与 Mock（Agent 修改/重放请求）
+- [x] ~~请求拦截与 Mock（Agent 修改/重放请求）~~（v0.6.0 已完成）
 - [ ] npm 发布 `aa-browser-mcp`，支持 `npx` 一行接入
 - [ ] macOS / Linux 打包分发、代码签名
 

@@ -21,6 +21,25 @@ export interface NetRequest {
 const MAX_ENTRIES = 500
 const MAX_BODY_CHARS = 50000
 
+/** 一条请求 Mock 规则 */
+export interface MockRule {
+  id: string
+  /** 匹配 URL 子串（大小写不敏感） */
+  urlContains: string
+  /** 可选：仅匹配指定 HTTP 方法 */
+  method?: string
+  /** mock 响应状态码（默认 200） */
+  status: number
+  /** mock 响应头 */
+  headers: Record<string, string>
+  /** mock 响应体（文本） */
+  body: string
+  /** 请求拦截后的行为：respond=返回 mock；continue=放行 */
+  action: 'respond' | 'continue'
+  /** 命中次数 */
+  hits: number
+}
+
 /**
  * 基于 CDP Network 域的抓包引擎（每 tab 一个实例，惰性启用）。
  * Attach 会独占调试通道：DevTools 打开时启用会失败，需提示用户先关闭。
@@ -31,6 +50,9 @@ export class NetworkCapture {
   private entries: NetRequest[] = []
   private byId = new Map<string, NetRequest>()
   private listener: ((_e: unknown, method: string, params: Record<string, unknown>) => void) | null = null
+  private fetchAttached = false
+  private mocks: MockRule[] = []
+  private mockSeq = 0
 
   constructor(wc: WebContents) {
     this.wc = wc
@@ -82,6 +104,134 @@ export class NetworkCapture {
     }
     this.attached = false
     this.listener = null
+    if (this.fetchAttached) {
+      this.fetchAttached = false
+      this.mocks = []
+    }
+  }
+
+  /** 新增/替换一条 mock 规则；urlContains 相同则覆盖。返回规则 id。 */
+  setMock(input: { urlContains: string; method?: string; status?: number; headers?: Record<string, string>; body?: string; action?: 'respond' | 'continue' }): string {
+    const existing = this.mocks.find((m) => m.urlContains.toLowerCase() === input.urlContains.toLowerCase() && (m.method ?? '').toLowerCase() === (input.method ?? '').toLowerCase())
+    if (existing) {
+      existing.status = input.status ?? 200
+      existing.headers = input.headers ?? {}
+      existing.body = input.body ?? ''
+      existing.action = input.action ?? 'respond'
+      existing.hits = 0
+      return existing.id
+    }
+    const rule: MockRule = {
+      id: `mock${Date.now().toString(36)}${this.mockSeq++}`,
+      urlContains: input.urlContains,
+      method: input.method,
+      status: input.status ?? 200,
+      headers: input.headers ?? {},
+      body: input.body ?? '',
+      action: input.action ?? 'respond',
+      hits: 0
+    }
+    this.mocks.push(rule)
+    return rule.id
+  }
+
+  /** 删除规则；返回是否删除成功 */
+  removeMock(id: string): boolean {
+    const before = this.mocks.length
+    this.mocks = this.mocks.filter((m) => m.id !== id)
+    return this.mocks.length < before
+  }
+
+  clearMocks(): number {
+    const n = this.mocks.length
+    this.mocks = []
+    return n
+  }
+
+  listMocks(): MockRule[] {
+    return this.mocks.map((m) => ({ ...m }))
+  }
+
+  get mockEnabled(): boolean {
+    return this.mocks.length > 0
+  }
+
+  /**
+   * 开启请求拦截（CDP Fetch 域）。一旦启用：
+   *  - 已配置的规则命中 → 直接返回 mock 响应；
+   *  - 未命中的请求 → 放行（Fetch.continueRequest）。
+   * 仅在存在规则时生效；规则清空后自动放行。
+   */
+  async ensureMockInterception(): Promise<void> {
+    if (!this.mocks.length) {
+      if (this.fetchAttached) this.disableMockInterception()
+      return
+    }
+    const dbg = this.wc.debugger
+    if (!this.attached) await this.ensure()
+    if (this.fetchAttached) return
+    try {
+      await dbg.sendCommand('Fetch.enable', {
+        patterns: [{ urlPattern: '*', requestStage: 'Request' }],
+        handleAuthRequests: false
+      })
+      dbg.on('message', this.onFetchMessage)
+      this.fetchAttached = true
+    } catch (err) {
+      throw new ActionError(`无法开启请求拦截：${(err as Error).message}（需先关闭 DevTools）`)
+    }
+  }
+
+  private disableMockInterception(): void {
+    if (!this.fetchAttached) return
+    this.fetchAttached = false
+    const dbg = this.wc.debugger
+    try {
+      dbg.removeListener('message', this.onFetchMessage)
+      dbg.sendCommand('Fetch.disable').catch(() => {})
+    } catch {
+      /* 忽略 */
+    }
+  }
+
+  private onFetchMessage = (_e: unknown, method: string, params: Record<string, unknown>): void => {
+    if (method !== 'Fetch.requestPaused') return
+    const requestId = String(params['requestId'] ?? '')
+    const req = params['request'] as Record<string, unknown> | undefined
+    const url = String(req?.['url'] ?? '')
+    const reqMethod = String(req?.['method'] ?? 'GET')
+    const rule = this.matchMock(url, reqMethod)
+    if (!rule || rule.action === 'continue') {
+      this.continueRequest(requestId)
+      return
+    }
+    rule.hits++
+    const headers = [
+      ...Object.entries(rule.headers).map(([k, v]) => ({ name: k, value: String(v) })),
+      { name: 'Content-Type', value: rule.headers['Content-Type'] || 'text/plain; charset=utf-8' }
+    ]
+    this.respondRequest(requestId, {
+      responseCode: rule.status,
+      responseHeaders: headers,
+      body: Buffer.from(rule.body, 'utf-8').toString('base64')
+    })
+  }
+
+  private matchMock(url: string, method: string): MockRule | null {
+    const u = url.toLowerCase()
+    for (const m of [...this.mocks].reverse()) {
+      if (m.method && m.method.toUpperCase() !== method.toUpperCase()) continue
+      if (u.includes(m.urlContains.toLowerCase())) return m
+    }
+    return null
+  }
+
+  private continueRequest(requestId: string): void {
+    void this.wc.debugger.sendCommand('Fetch.continueRequest', { requestId }).catch(() => {})
+  }
+
+  private respondRequest(requestId: string, response: { responseCode: number; responseHeaders: { name: string; value: string }[]; body: string }): void {
+    void this.wc.debugger.sendCommand('Fetch.fulfillRequest', { requestId, ...response }).catch(() => {})
   }
 
   private push(entry: NetRequest): void {

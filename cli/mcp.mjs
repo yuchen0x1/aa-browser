@@ -16,7 +16,7 @@ import readline from 'node:readline'
 import process from 'node:process'
 import WebSocket from 'ws'
 
-const VERSION = '0.5.0'
+const VERSION = '0.6.0'
 const CONNECT_FILE = process.env['AA_BROWSER_CONNECTION_FILE'] || path.join(os.homedir(), '.aabrowser', 'connection.json')
 const CALL_TIMEOUT_MS = 60000
 

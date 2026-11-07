@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
+import type { DownloadInfo, HistoryEntry, AppSettings, SettingsView, AgentInfo } from '@shared/types'
 
 /** 浏览器外壳 UI 与主进程的桥（chromeView 专用，页面视图不带 preload） */
 contextBridge.exposeInMainWorld('aa', {
@@ -14,6 +15,14 @@ contextBridge.exposeInMainWorld('aa', {
   decideApproval: (id: string, allowed: boolean): Promise<boolean> => ipcRenderer.invoke('aa:approval-decide', id, allowed),
   interruptAgent: (): Promise<boolean> => ipcRenderer.invoke('aa:agent-interrupt'),
   resumeAgent: (): Promise<boolean> => ipcRenderer.invoke('aa:agent-resume'),
+  downloadsList: (): Promise<unknown> => ipcRenderer.invoke('aa:downloads-list'),
+  downloadOpen: (id: string): Promise<void> => ipcRenderer.invoke('aa:download-open', id),
+  downloadShow: (id: string): Promise<void> => ipcRenderer.invoke('aa:download-show', id),
+  downloadDir: (): Promise<string> => ipcRenderer.invoke('aa:download-dir'),
+  historySuggest: (query: string, limit?: number): Promise<HistoryEntry[]> => ipcRenderer.invoke('aa:history-suggest', query, limit),
+  settingsGet: (): Promise<SettingsView | null> => ipcRenderer.invoke('aa:settings-get'),
+  settingsSet: (patch: Partial<AppSettings>): Promise<AppSettings | null> => ipcRenderer.invoke('aa:settings-set', patch),
+  agentInfo: (): Promise<AgentInfo | null> => ipcRenderer.invoke('aa:agent-info'),
   onState: (cb: (state: unknown) => void): void => {
     ipcRenderer.on('aa:state', (_e, state) => cb(state))
   },

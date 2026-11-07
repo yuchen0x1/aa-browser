@@ -1,4 +1,4 @@
-import type { TabInfo, UiState } from '@shared/types'
+import type { TabInfo, UiState, DownloadInfo, HistoryEntry, AppSettings, SettingsView, AgentInfo } from '@shared/types'
 
 declare global {
   interface Window {
@@ -15,6 +15,14 @@ declare global {
       decideApproval: (id: string, allowed: boolean) => Promise<boolean>
       interruptAgent: () => Promise<boolean>
       resumeAgent: () => Promise<boolean>
+      downloadsList: () => Promise<DownloadInfo[]>
+      downloadOpen: (id: string) => Promise<void>
+      downloadShow: (id: string) => Promise<void>
+      downloadDir: () => Promise<string>
+      historySuggest: (query: string, limit?: number) => Promise<HistoryEntry[]>
+      settingsGet: () => Promise<SettingsView | null>
+      settingsSet: (patch: Partial<AppSettings>) => Promise<AppSettings | null>
+      agentInfo: () => Promise<AgentInfo | null>
       onState: (cb: (state: UiState) => void) => void
       onFocusOmnibox: (cb: () => void) => void
     }
@@ -35,6 +43,21 @@ const btnFeed = document.getElementById('btn-feed') as HTMLButtonElement | null
 const feedDrawer = document.getElementById('action-feed-drawer') as HTMLDivElement | null
 const feedList = document.getElementById('action-feed-list') as HTMLDivElement | null
 const btnCloseFeed = document.getElementById('btn-close-feed') as HTMLButtonElement | null
+const btnDownloads = document.getElementById('btn-downloads') as HTMLButtonElement | null
+const dlPanel = document.getElementById('download-panel') as HTMLDivElement | null
+const dlList = document.getElementById('download-list') as HTMLDivElement | null
+const suggestPanel = document.getElementById('suggest-panel') as HTMLDivElement | null
+const suggestList = document.getElementById('suggest-list') as HTMLDivElement | null
+const btnSettings = document.getElementById('btn-settings') as HTMLButtonElement | null
+const settingsModal = document.getElementById('settings-modal') as HTMLDivElement | null
+const setEngine = document.getElementById('set-engine') as HTMLSelectElement | null
+const setEngineUrl = document.getElementById('set-engine-url') as HTMLInputElement | null
+const setFullSnapshot = document.getElementById('set-full-snapshot') as HTMLInputElement | null
+const setOpApproval = document.getElementById('set-op-approval') as HTMLInputElement | null
+const setDownloadDir = document.getElementById('set-download-dir') as HTMLInputElement | null
+const setAllowedSites = document.getElementById('set-allowed-sites') as HTMLTextAreaElement | null
+const setAgentInfo = document.getElementById('set-agent-info') as HTMLDivElement | null
+const settingsStatus = document.getElementById('settings-status') as HTMLSpanElement | null
 
 function activeTab(): TabInfo | null {
   return state.tabs.find((t) => t.active) ?? null
@@ -140,15 +163,18 @@ function renderApprovals(): void {
   approvalPanel.hidden = pending.length === 0
   approvalPanel.textContent = ''
   for (const item of pending) {
+    const isOp = item.kind === 'operation'
     const title = document.createElement('div')
     title.className = 'approval-title'
-    title.textContent = '需要你亲自填写敏感信息'
+    title.textContent = isOp ? 'Agent 请求执行高危操作' : '需要你亲自填写敏感信息'
     const meta = document.createElement('div')
     meta.className = 'approval-meta'
-    meta.textContent = `网站：${item.site} · 标签：${item.tabTitle} · 字段：${item.fieldLabel}`
+    meta.textContent = `网站：${item.site} · 标签：${item.tabTitle} · 操作：${item.fieldLabel}`
     const help = document.createElement('div')
     help.className = 'approval-help'
-    help.textContent = '请直接在网页输入框中填写内容；敏感内容不会由 Agent 写入或回传。填写完成后再点“允许继续”。'
+    help.textContent = isOp
+      ? (item.detail || 'Agent 即将执行此操作。请确认后点“允许”，拒绝则中止该步骤。')
+      : '请直接在网页输入框中填写内容；敏感内容不会由 Agent 写入或回传。填写完成后再点“允许继续”。'
     const actions = document.createElement('div')
     actions.className = 'approval-actions'
     const deny = document.createElement('button')
@@ -157,7 +183,7 @@ function renderApprovals(): void {
     deny.addEventListener('click', () => void window.aa.decideApproval(item.id, false))
     const allow = document.createElement('button')
     allow.className = 'approval-allow'
-    allow.textContent = '允许继续'
+    allow.textContent = isOp ? '允许' : '允许继续'
     allow.addEventListener('click', () => void window.aa.decideApproval(item.id, true))
     actions.append(deny, allow)
     approvalPanel.append(title, meta, help, actions)
@@ -187,11 +213,148 @@ function renderFeed(): void {
   }
 }
 
+function formatBytes(n: number): string {
+  if (!n || n <= 0) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let i = 0
+  let v = n
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024
+    i++
+  }
+  return `${v.toFixed(v >= 100 || i === 0 ? 0 : 1)} ${units[i]}`
+}
+
+function downloadStateLabel(s: string): string {
+  switch (s) {
+    case 'progressing': return '下载中'
+    case 'completed': return '完成'
+    case 'cancelled': return '已取消'
+    case 'interrupted': return '已中断'
+    default: return s
+  }
+}
+
+function renderDownloads(): void {
+  if (!dlList) return
+  const items = state.downloads || []
+  const hasActive = items.some((d) => d.state === 'progressing')
+  if (btnDownloads) {
+    btnDownloads.classList.toggle('has-active', hasActive)
+    btnDownloads.title = items.length ? `下载（${items.length}）` : '下载'
+  }
+  if (!items.length) {
+    dlList.innerHTML = '<div class="empty-feed">暂无下载记录</div>'
+    return
+  }
+  dlList.innerHTML = ''
+  for (const d of items.slice().reverse()) {
+    const el = document.createElement('div')
+    el.className = `dl-item ${d.state === 'completed' ? 'done' : ''} ${d.state === 'progressing' ? 'active' : ''}`
+    const pct = d.totalBytes > 0 ? Math.round((d.receivedBytes / d.totalBytes) * 100) : 0
+
+    const name = document.createElement('div')
+    name.className = 'dl-name'
+    name.title = d.url
+    name.textContent = d.filename
+
+    const meta = document.createElement('div')
+    meta.className = 'dl-meta'
+    const st = document.createElement('span')
+    st.className = 'dl-state'
+    st.textContent = downloadStateLabel(d.state)
+    const size = document.createElement('span')
+    size.className = 'dl-size'
+    size.textContent = formatBytes(d.receivedBytes) + (d.state === 'progressing' && d.totalBytes ? ' / ' + formatBytes(d.totalBytes) : '')
+    meta.append(st, size)
+    el.appendChild(name)
+    el.appendChild(meta)
+
+    if (d.state === 'progressing') {
+      const bar = document.createElement('div')
+      bar.className = 'dl-bar'
+      const fill = document.createElement('div')
+      fill.className = 'dl-bar-fill'
+      fill.style.width = `${pct}%`
+      bar.appendChild(fill)
+      el.appendChild(bar)
+    }
+
+    const actions = document.createElement('div')
+    actions.className = 'dl-actions'
+    const open = document.createElement('button')
+    open.className = 'dl-act'
+    open.textContent = '打开'
+    open.addEventListener('click', () => void window.aa.downloadOpen(d.id))
+    const show = document.createElement('button')
+    show.className = 'dl-act'
+    show.textContent = '在文件夹中显示'
+    show.addEventListener('click', () => void window.aa.downloadShow(d.id))
+    actions.append(open, show)
+    el.appendChild(actions)
+
+    dlList.appendChild(el)
+  }
+}
+
+function hideSuggest(): void {
+  if (suggestPanel) suggestPanel.hidden = true
+}
+
+function renderSuggest(items: HistoryEntry[]): void {
+  if (!suggestPanel || !suggestList) return
+  if (!items.length) {
+    hideSuggest()
+    return
+  }
+  suggestList.innerHTML = ''
+  for (const it of items) {
+    const el = document.createElement('div')
+    el.className = 'suggest-item'
+    el.addEventListener('click', () => {
+      void window.aa.submit(it.url)
+      hideSuggest()
+    })
+    const icon = document.createElement('span')
+    icon.className = 'suggest-icon'
+    icon.textContent = it.count > 3 ? '★' : '•'
+    const text = document.createElement('div')
+    text.className = 'suggest-text'
+    const t = document.createElement('div')
+    t.className = 'suggest-title'
+    t.textContent = it.title || it.url
+    const u = document.createElement('div')
+    u.className = 'suggest-url'
+    u.textContent = it.url
+    text.append(t, u)
+    el.append(icon, text)
+    suggestList.appendChild(el)
+  }
+  suggestPanel.hidden = false
+}
+
+let suggestTimer: ReturnType<typeof setTimeout> | undefined
+function onOmniboxInput(): void {
+  const q = omnibox.value.trim()
+  if (!q) {
+    hideSuggest()
+    return
+  }
+  clearTimeout(suggestTimer)
+  suggestTimer = setTimeout(() => {
+    void window.aa.historySuggest(q).then((items) => {
+      if (document.activeElement === omnibox) renderSuggest(items)
+    })
+  }, 140)
+}
+
 function applyState(next: UiState): void {
   state = next
   renderTabs()
   renderToolbar()
   renderFeed()
+  renderDownloads()
+  if (document.activeElement !== omnibox) hideSuggest()
 }
 
 /* ── 事件绑定 ─────────────────────── */
@@ -202,6 +365,20 @@ btnReload.addEventListener('click', () => void window.aa.reload())
 agentStop.addEventListener('click', () => void (state.agentInterrupted ? window.aa.resumeAgent() : window.aa.interruptAgent()))
 document.getElementById('btn-newtab')?.addEventListener('click', () => void window.aa.tabNew())
 
+btnDownloads?.addEventListener('click', () => {
+  if (!dlPanel) return
+  dlPanel.hidden = !dlPanel.hidden
+  if (feedDrawer) feedDrawer.hidden = true
+})
+document.getElementById('btn-close-dl')?.addEventListener('click', () => {
+  if (dlPanel) dlPanel.hidden = true
+})
+document.addEventListener('click', (e) => {
+  if (!dlPanel || dlPanel.hidden) return
+  if (btnDownloads?.contains(e.target as Node) || dlPanel.contains(e.target as Node)) return
+  dlPanel.hidden = true
+})
+
 btnFeed?.addEventListener('click', () => {
   if (!feedDrawer) return
   feedDrawer.hidden = !feedDrawer.hidden
@@ -210,16 +387,95 @@ btnCloseFeed?.addEventListener('click', () => {
   if (feedDrawer) feedDrawer.hidden = true
 })
 
+/* ── 设置面板 ─────────────────────── */
+async function openSettings(): Promise<void> {
+  if (!settingsModal) return
+  settingsModal.hidden = false
+  if (settingsStatus) settingsStatus.textContent = ''
+  const view = await window.aa.settingsGet().catch(() => null)
+  const agent = await window.aa.agentInfo().catch(() => null)
+  if (view && setEngine) {
+    setEngine.innerHTML = ''
+    for (const p of view.presets) {
+      const opt = document.createElement('option')
+      opt.value = p.url
+      opt.textContent = p.label
+      setEngine.appendChild(opt)
+    }
+    setEngine.value = view.settings.searchEngine
+    if (setEngineUrl) setEngineUrl.value = view.settings.searchEngine
+    if (setFullSnapshot) setFullSnapshot.checked = view.settings.fullSnapshot
+    if (setOpApproval) setOpApproval.checked = !!view.settings.requireOperationApproval
+    if (setDownloadDir) setDownloadDir.value = view.settings.downloadDir
+    if (setAllowedSites) setAllowedSites.value = view.settings.allowedSites.join('\n')
+  }
+  if (setAgentInfo) {
+    if (agent) {
+      setAgentInfo.textContent = `端口 ${agent.port} · 版本 ${agent.version} · 已连接 ${agent.clientCount} · 发现文件 ${agent.discoveryFile}`
+      setAgentInfo.title = `token: ${agent.token}`
+    } else {
+      setAgentInfo.textContent = 'Agent 服务未启动'
+    }
+  }
+}
+btnSettings?.addEventListener('click', () => {
+  if (settingsModal?.hidden) void openSettings()
+})
+document.getElementById('btn-close-settings')?.addEventListener('click', () => {
+  if (settingsModal) settingsModal.hidden = true
+})
+document.getElementById('btn-save-settings')?.addEventListener('click', async () => {
+  const patch: Partial<AppSettings> = {}
+  if (setEngine) patch.searchEngine = setEngine.value || 'https://www.bing.com/search?q='
+  if (setEngineUrl) patch.searchEngine = setEngineUrl.value.trim() || patch.searchEngine
+  if (setFullSnapshot) patch.fullSnapshot = setFullSnapshot.checked
+  if (setOpApproval) patch.requireOperationApproval = setOpApproval.checked
+  if (setDownloadDir) patch.downloadDir = setDownloadDir.value
+  if (setAllowedSites) patch.allowedSites = setAllowedSites.value.split(/\r?\n/).map((site) => site.trim()).filter(Boolean)
+  await window.aa.settingsSet(patch).catch(() => null)
+  if (settingsStatus) {
+    settingsStatus.textContent = '已保存'
+    setTimeout(() => { if (settingsStatus) settingsStatus.textContent = '' }, 1800)
+  }
+})
+
 omnibox.addEventListener('keydown', (e) => {
   if (e.key === 'Enter') {
     const v = omnibox.value.trim()
     if (v) void window.aa.submit(v)
+    hideSuggest()
     omnibox.blur()
   } else if (e.key === 'Escape') {
+    hideSuggest()
     omnibox.blur()
+  } else if (e.key === 'ArrowDown' && suggestPanel && !suggestPanel.hidden) {
+    e.preventDefault()
+    const sel = suggestList?.querySelector<HTMLElement>('.suggest-item.selected')
+    const items = suggestList?.querySelectorAll<HTMLElement>('.suggest-item') ?? []
+    const idx = sel ? Array.from(items).indexOf(sel) : -1
+    const next = items[Math.min(idx + 1, items.length - 1)]
+    if (next) selectSuggest(next)
+  } else if (e.key === 'ArrowUp' && suggestPanel && !suggestPanel.hidden) {
+    e.preventDefault()
+    const sel = suggestList?.querySelector<HTMLElement>('.suggest-item.selected')
+    const items = suggestList?.querySelectorAll<HTMLElement>('.suggest-item') ?? []
+    const idx = sel ? Array.from(items).indexOf(sel) : 0
+    const next = items[Math.max(idx - 1, 0)]
+    if (next) selectSuggest(next)
   }
 })
+function selectSuggest(el: HTMLElement): void {
+  suggestList?.querySelectorAll('.suggest-item').forEach((x) => x.classList.remove('selected'))
+  el.classList.add('selected')
+  const u = el.querySelector('.suggest-url')?.textContent
+  if (u) {
+    omnibox.value = u
+    omnibox.setSelectionRange(u.length, u.length)
+  }
+}
 omnibox.addEventListener('focus', () => omnibox.select())
+omnibox.addEventListener('blur', () => setTimeout(hideSuggest, 120))
+omnibox.addEventListener('input', onOmniboxInput)
 
 window.aa.onState(applyState)
 window.aa.onFocusOmnibox(() => {

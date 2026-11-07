@@ -63,9 +63,22 @@ export function buildTools(
   windowCtl: { resize: (w: number, h: number) => Promise<{ width: number; height: number }> },
   downloads: DownloadTracker,
   approvals?: ApprovalManager,
-  onAction?: (item: import('@shared/types').ActionLogItem) => void
+  onAction?: (item: import('@shared/types').ActionLogItem) => void,
+  getSettings?: () => { requireOperationApproval: boolean }
 ): McpToolDef[] {
   const tools: McpToolDef[] = []
+
+  /** 若开启"高危操作人工确认"，请求一次人工批准；未开启直接放行。 */
+  async function opGate(desc: { site: string; tabTitle: string; action: string; detail?: string }, signal?: unknown): Promise<void> {
+    if (!approvals) return
+    if (!getSettings?.().requireOperationApproval) return
+    const sig = signal instanceof AbortSignal ? signal : undefined
+    const allowed = await approvals.opRequest(
+      { site: desc.site, tabTitle: desc.tabTitle, fieldLabel: desc.action, detail: desc.detail },
+      sig
+    )
+    if (!allowed) throw new ActionError(`高危操作已取消：${desc.action}`)
+  }
 
   tools.push({
     name: 'browser_navigate',
@@ -231,6 +244,9 @@ export function buildTools(
         if (!rechecked.ok || !rechecked.sensitive || rechecked.fingerprint !== originalFrame.fingerprint) throw new ActionError('敏感输入目标已变化；请重新获取快照后再继续。')
         if (args['submit']) throw new ActionError('敏感字段已填写，但 Agent 不会自动提交；请由你在网页中亲自确认提交。')
         return { content: [text('已允许继续。敏感字段内容由你在网页中输入；Agent 提供的文本未写入、读取或回传。请继续后续步骤。')] }
+      }
+      if (args['submit']) {
+        await opGate({ site: new URL(tab.view.webContents.getURL()).host || tab.view.webContents.getURL(), tabTitle: tab.title, action: '提交表单/输入后回车' })
       }
       const want = args['snapshot'] !== false
       const r = await doType(tab, ref, String(args['text'] ?? ''), {
@@ -806,6 +822,98 @@ export function buildTools(
       fs.mkdirSync(path.dirname(file), { recursive: true })
       fs.writeFileSync(file, JSON.stringify(tab.net.toHar(app.getVersion()), null, 2), 'utf-8')
       return { content: [text(`HAR 已导出: ${file}\n共 ${fs.statSync(file).size} 字节`)] }
+    }
+  })
+
+  /* ── v0.6.0 新增：请求拦截与 Mock ── */
+
+  tools.push({
+    name: 'browser_mock_requests',
+    title: '请求拦截 Mock',
+    description:
+      'Intercept and mock HTTP requests of the active tab. Add or replace a rule that matches a URL ' +
+      'substring (and optional method); matched requests are answered with a fake status/headers/body ' +
+      'instead of reaching the network. Use to simulate API responses, error states, or stub third-party ' +
+      'calls during testing. Pass action:"continue" to just observe (log) a matching request without ' +
+      'answering it. Returns the rule id and current rules.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        urlContains: { type: 'string', description: 'Substring of request URL to match (case-insensitive), e.g. "/api/v1/quote"' },
+        method: { type: 'string', description: 'Only mock this HTTP method (e.g. GET/POST). Omit to match any.' },
+        status: { type: 'number', description: 'Fake response status code (default 200)' },
+        headers: { type: 'object', description: 'Fake response headers (optional)' },
+        body: { type: 'string', description: 'Fake response body text (default empty)' },
+        action: { type: 'string', enum: ['respond', 'continue'], description: 'respond=answer with mock (default); continue=just pass through' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      },
+      required: ['urlContains']
+    },
+    handler: async (args) => {
+      const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      const id = tab.net.setMock({
+        urlContains: String(args['urlContains'] ?? ''),
+        method: args['method'] as string | undefined,
+        status: args['status'] as number | undefined,
+        headers: (args['headers'] as Record<string, string> | undefined) ?? {},
+        body: args['body'] as string | undefined,
+        action: (args['action'] as 'respond' | 'continue') ?? 'respond'
+      })
+      await tab.net.ensureMockInterception()
+      const list = tab.net.listMocks()
+      const lines = list.map(
+        (m) => `[${m.id}] ${m.method ?? '*'}: ${m.urlContains} → ${m.status} (${m.action}, 命中${m.hits}次)`
+      )
+      return { content: [text(`已拦截规则 ${id}\n当前 ${lines.length} 条：\n${lines.join('\n') || '（无）'}`)] }
+    }
+  })
+
+  tools.push({
+    name: 'browser_list_mocks',
+    title: '列出 Mock 规则',
+    description: 'List all active request-mock rules of the active tab (id, matcher, status, hits).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      }
+    },
+    handler: async (args) => {
+      const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      const list = tab.net.listMocks()
+      if (!list.length) return { content: [text('（当前无 mock 规则）')] }
+      const lines = list.map(
+        (m) => `[${m.id}] ${m.method ?? '*'}: ${m.urlContains} → ${m.status} (${m.action}, 命中${m.hits}次)`
+      )
+      return { content: [text(`共 ${lines.length} 条规则：\n${lines.join('\n')}`)] }
+    }
+  })
+
+  tools.push({
+    name: 'browser_clear_mocks',
+    title: '清空 Mock 规则',
+    description:
+      'Remove all (or one, by rule id) request-mock rules of the active tab and stop intercepting. ' +
+      'Pass id to remove a single rule. Returns how many were removed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Rule id to remove (omit to clear all)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      }
+    },
+    handler: async (args) => {
+      const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      const id = args['id'] as string | undefined
+      if (id) {
+        const ok = tab.net.removeMock(String(id))
+        if (!ok) throw new ActionError(`找不到规则 ${id}`)
+        await tab.net.ensureMockInterception()
+        return { content: [text(`已删除规则 ${id}`)] }
+      }
+      const n = tab.net.clearMocks()
+      await tab.net.ensureMockInterception()
+      return { content: [text(`已清空 ${n} 条 mock 规则`)] }
     }
   })
 

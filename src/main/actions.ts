@@ -80,10 +80,11 @@ export function resolveWebContents(tabs: { active: () => Tab | null; get: (id: s
 }
 
 export async function doNavigate(
-  tabs: { active: () => Tab | null; get: (id: string) => Tab | null; createTab: (url?: string) => Tab },
+  tabs: { active: () => Tab | null; get: (id: string) => Tab | null; createTab: (url?: string) => Tab; assertUrlAllowed?: (url: string) => void },
   url: string,
   opts: { newTab?: boolean; tabId?: string }
 ): Promise<{ tabId: string; url: string; title: string }> {
+  tabs.assertUrlAllowed?.(url)
   let tab: Tab | null = null
   if (opts.tabId) {
     tab = tabs.get(opts.tabId)

@@ -34,6 +34,16 @@
   box-sizing: border-box;
 }
 
+@keyframes slideDown {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
 html,
 body {
   height: 100%;
@@ -326,6 +336,60 @@ body {
   font-family: var(--font-sans);
 }
 
+/* ── 地址栏补全下拉 (Omnibox Suggest) ─────────────────── */
+.suggest-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  max-height: 320px;
+  overflow-y: auto;
+  background: rgba(16, 18, 27, 0.96);
+  backdrop-filter: blur(24px);
+  border: 1px solid rgba(0, 242, 254, 0.22);
+  border-radius: 10px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7), 0 0 20px rgba(0, 242, 254, 0.1);
+  z-index: 70;
+  animation: slideDown 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.suggest-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 12px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+.suggest-item:hover,
+.suggest-item.selected {
+  background: rgba(0, 242, 254, 0.08);
+}
+
+.suggest-icon {
+  color: var(--accent-cyan);
+  font-size: 12px;
+  flex: none;
+  margin-top: 2px;
+}
+
+.suggest-title {
+  font-size: 12.5px;
+  color: #eef1f8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.suggest-url {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ── AI Agent 状态胶囊 ─────────────────────────── */
 #agent-pill {
   height: 28px;
@@ -570,6 +634,215 @@ body {
   text-align: center;
   padding: 36px 0;
   font-style: italic;
+}
+
+/* ── 下载面板 (Download Panel) ─────────────────────── */
+#btn-downloads.has-active {
+  color: var(--accent-cyan);
+  box-shadow: 0 0 8px rgba(0, 242, 254, 0.25);
+}
+
+.download-panel {
+  position: absolute;
+  z-index: 60;
+  right: 14px;
+  top: 84px;
+  width: 400px;
+  max-height: 520px;
+  background: rgba(18, 20, 29, 0.94);
+  backdrop-filter: blur(24px);
+  border: 1px solid rgba(0, 242, 254, 0.22);
+  border-radius: 12px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.8), 0 0 24px rgba(0, 242, 254, 0.12);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: slideDown 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.dl-item {
+  background: rgba(12, 13, 18, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-left: 3px solid var(--accent-cyan);
+  border-radius: 8px;
+  padding: 9px 12px;
+  transition: all 0.2s ease;
+}
+.dl-item.active {
+  border-left-color: var(--accent-blue);
+}
+.dl-item.done {
+  border-left-color: var(--accent-green);
+}
+
+.dl-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #eef1f8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dl-meta {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.dl-state {
+  color: var(--accent-cyan);
+}
+.dl-item.done .dl-state {
+  color: var(--accent-green);
+}
+
+.dl-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  margin-top: 8px;
+  overflow: hidden;
+}
+.dl-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent-cyan), var(--accent-blue));
+  transition: width 0.3s ease;
+}
+
+.dl-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.dl-act {
+  padding: 4px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.05);
+  color: #d5d9e4;
+  border-radius: 6px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.dl-act:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(0, 242, 254, 0.4);
+  color: #ffffff;
+}
+
+/* ── 设置面板 (Settings Modal) ─────────────────────── */
+.settings-modal {
+  position: absolute;
+  z-index: 90;
+  inset: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 60px;
+  background: rgba(5, 6, 9, 0.5);
+  backdrop-filter: blur(4px);
+}
+
+.settings-card {
+  width: min(560px, calc(100vw - 40px));
+  max-height: calc(100vh - 120px);
+  overflow-y: auto;
+  background: rgba(18, 20, 29, 0.96);
+  backdrop-filter: blur(24px);
+  border: 1px solid rgba(0, 242, 254, 0.22);
+  border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.8), 0 0 30px rgba(0, 242, 254, 0.1);
+  display: flex;
+  flex-direction: column;
+  animation: fadeIn 0.2s ease;
+}
+
+.settings-body {
+  padding: 18px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.settings-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--accent-cyan);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.settings-select,
+.settings-input {
+  background: rgba(10, 11, 16, 0.8);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #e8ebf4;
+  font-size: 12.5px;
+  padding: 8px 12px;
+  outline: none;
+  font-family: var(--font-sans);
+}
+.settings-select:focus,
+.settings-input:focus {
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 10px rgba(0, 242, 254, 0.2);
+}
+
+.settings-textarea {
+  resize: vertical;
+  min-height: 82px;
+  line-height: 1.5;
+}
+
+.settings-hint {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.settings-check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+  color: #dfe3ee;
+  cursor: pointer;
+}
+.settings-check input {
+  accent-color: var(--accent-cyan);
+}
+
+.settings-info {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  line-height: 1.6;
+  padding: 8px 12px;
+  background: rgba(0, 0, 0, 0.25);
+  border-radius: 8px;
+  border-left: 2px solid var(--accent-cyan);
+  word-break: break-all;
+}
+
+.settings-save {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 4px;
+}
+.settings-status {
+  font-size: 12px;
+  color: var(--accent-green);
 }
 
 .feed-item {

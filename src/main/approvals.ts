@@ -6,6 +6,10 @@ export interface PendingApproval {
   tabTitle: string
   fieldLabel: string
   createdAt: number
+  /** 审批类型：sensitive=敏感输入；operation=高危操作确认 */
+  kind?: 'sensitive' | 'operation'
+  /** operation 类型的说明文案 */
+  detail?: string
 }
 
 type Pending = PendingApproval & { resolve: (allowed: boolean) => void; timer: NodeJS.Timeout }
@@ -51,6 +55,11 @@ export class ApprovalManager {
       })
       this.onChange()
     })
+  }
+
+  /** 高危操作人工确认（提交表单/下载等）。与 request 同构，kind=operation + detail 说明。 */
+  opRequest(meta: { site: string; tabTitle: string; fieldLabel: string; detail?: string }, signal?: AbortSignal): Promise<boolean> {
+    return this.request({ ...meta, kind: 'operation' }, signal)
   }
 
   decide(id: string, allowed: boolean): boolean {
