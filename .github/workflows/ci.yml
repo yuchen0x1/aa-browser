@@ -65,28 +65,31 @@ jobs:
           if ($tag -ne $version) { throw "Tag v$tag does not match package.json version $version" }
 
       - name: Build Windows installer and update metadata
-        run: npm run dist -- --publish always
+        run: npm run dist -- --publish never
         env:
           ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Generate SHA-256 manifest
         shell: pwsh
         run: |
-          $files = Get-ChildItem release -File | Where-Object { $_.Extension -in '.exe', '.yml', '.blockmap' }
+          $files = Get-ChildItem release -File | Where-Object { $_.Extension -in '.exe', '.blockmap' -or $_.Name -eq 'latest.yml' }
           $lines = foreach ($file in $files) {
             $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
             "$hash  $($file.Name)"
           }
           $lines | Set-Content release/SHA256SUMS.txt
 
-      - name: Upload checksums to release
+      - name: Create GitHub Release and upload assets
         uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
           name: Aa Browser ${{ github.ref_name }}
           body_path: release-notes-${{ github.ref_name }}.md
-          files: release/SHA256SUMS.txt
+          files: |
+            release/*.exe
+            release/latest.yml
+            release/*.blockmap
+            release/SHA256SUMS.txt
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
