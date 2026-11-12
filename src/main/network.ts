@@ -20,6 +20,29 @@ export interface NetRequest {
 
 const MAX_ENTRIES = 500
 const MAX_BODY_CHARS = 50000
+const SENSITIVE_HEADER = /^(authorization|proxy-authorization|cookie2?|set-cookie|.*(?:auth|token|secret|api[-_]?key|password|passwd|credential).*)$/i
+const SENSITIVE_QUERY = /^(access[-_]?token|refresh[-_]?token|id[-_]?token|token|jwt|bearer|api[-_]?key|key|secret|signature|sig|password|passwd|auth|authorization|session|session[-_]?id|credential|code)$/i
+
+/** Keep captured credentials in memory for debugging, but redact them at MCP output boundaries by default. */
+export function safeNetworkUrl(raw: string, includeSensitive = false): string {
+  if (includeSensitive) return raw
+  try {
+    const url = new URL(raw)
+    const safeParams = new URLSearchParams()
+    url.searchParams.forEach((value, key) => safeParams.append(key, SENSITIVE_QUERY.test(key) ? '[redacted]' : value))
+    url.search = safeParams.toString()
+    if (url.username) url.username = '[redacted]'
+    if (url.password) url.password = '[redacted]'
+    return url.toString()
+  } catch {
+    return raw
+  }
+}
+
+export function safeNetworkHeaders(headers: Record<string, string>, includeSensitive = false): Record<string, string> {
+  if (includeSensitive) return headers
+  return Object.fromEntries(Object.entries(headers).map(([name, value]) => [name, SENSITIVE_HEADER.test(name) ? '[redacted]' : value]))
+}
 
 /** 一条请求 Mock 规则 */
 export interface MockRule {
@@ -66,12 +89,15 @@ export class NetworkCapture {
   async ensure(): Promise<void> {
     if (this.attached) return
     const dbg = this.wc.debugger
-    try {
-      dbg.attach('1.3')
-    } catch (err) {
-      throw new ActionError(
-        `无法开启抓包：调试通道被占用（通常是 DevTools 已打开，请先关闭后重试）。(${(err as Error).message})`
-      )
+    // 对话框守卫会先一步 attach 同一个 debugger；此时不应再 attach，直接复用。
+    if (!dbg.isAttached()) {
+      try {
+        dbg.attach('1.3')
+      } catch (err) {
+        throw new ActionError(
+          `无法开启抓包：调试通道被占用（通常是 DevTools 已打开，请先关闭后重试）。(${(err as Error).message})`
+        )
+      }
     }
     try {
       await dbg.sendCommand('Network.enable', { maxResourceBufferSize: 5000000 })
@@ -97,8 +123,10 @@ export class NetworkCapture {
         /* 忽略 */
       }
     }
+    // 只关闭 Network 域，不 detach 调试器：
+    // 调试通道现在由对话框守卫与抓包共用，detach 会让守卫在后续导航中失效。
     try {
-      this.wc.debugger.detach()
+      void this.wc.debugger.sendCommand('Network.disable').catch(() => {})
     } catch {
       /* 忽略 */
     }
@@ -107,6 +135,19 @@ export class NetworkCapture {
     if (this.fetchAttached) {
       this.fetchAttached = false
       this.mocks = []
+    }
+  }
+
+  /**
+   * 彻底释放调试通道（仅在打开 DevTools 前调用）。
+   * DevTools 与 debugger 无法同时附着，因此必须先 detach 才能开 DevTools。
+   */
+  releaseDebugger(): void {
+    this.dispose()
+    try {
+      if (this.wc.debugger.isAttached()) this.wc.debugger.detach()
+    } catch {
+      /* 忽略 */
     }
   }
 
@@ -339,7 +380,7 @@ export class NetworkCapture {
   }
 
   /** 导出 HAR 1.2（不含响应体） */
-  toHar(version: string): Record<string, unknown> {
+  toHar(version: string, includeSensitive = false): Record<string, unknown> {
     return {
       log: {
         version: '1.2',
@@ -349,10 +390,10 @@ export class NetworkCapture {
           time: e.durationMs ?? 0,
           request: {
             method: e.method,
-            url: e.url,
+            url: safeNetworkUrl(e.url, includeSensitive),
             httpVersion: 'HTTP/1.1',
-            headers: toHarHeaders(e.requestHeaders),
-            queryString: [],
+            headers: toHarHeaders(safeNetworkHeaders(e.requestHeaders, includeSensitive)),
+            queryString: toHarQuery(safeNetworkUrl(e.url, includeSensitive)),
             headersSize: -1,
             bodySize: -1
           },
@@ -360,7 +401,7 @@ export class NetworkCapture {
             status: e.status,
             statusText: e.statusText,
             httpVersion: 'HTTP/1.1',
-            headers: toHarHeaders(e.responseHeaders),
+            headers: toHarHeaders(safeNetworkHeaders(e.responseHeaders, includeSensitive)),
             content: { size: e.size, mimeType: e.mimeType || 'unknown' },
             redirectURL: '',
             headersSize: -1,
@@ -388,6 +429,21 @@ function normalizeHeaders(raw: unknown): Record<string, string> {
 
 function toHarHeaders(h: Record<string, string>): { name: string; value: string }[] {
   return Object.entries(h).map(([name, value]) => ({ name, value }))
+}
+
+/**
+ * HAR 的 queryString 必须是真实参数列表。此前恒为空数组，
+ * 导致导出的 HAR 在 DevTools/Fiddler 里看不到任何查询参数。
+ * 传入的 url 已按 includeSensitive 处理过，因此脱敏结果会一并带出。
+ */
+function toHarQuery(url: string): { name: string; value: string }[] {
+  try {
+    const out: { name: string; value: string }[] = []
+    new URL(url).searchParams.forEach((value, name) => out.push({ name, value }))
+    return out
+  } catch {
+    return []
+  }
 }
 
 /** 截断响应体为 Agent 可读文本 */

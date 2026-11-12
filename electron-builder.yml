@@ -21,3 +21,8 @@ nsis:
   artifactName: aa-browser-setup-${version}.${ext}
   uninstallDisplayName: Aa Browser
   createDesktopShortcut: true
+publish:
+  provider: github
+  owner: yuchen0x1
+  repo: aa-browser
+  releaseType: release

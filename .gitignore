@@ -4,5 +4,11 @@ dist/
 release/
 release-v*/
 *.log
+*.blockmap
 .DS_Store
 Thumbs.db
+
+# 一次性调试脚本（下划线前缀）与本地审计/会话草稿，不入库
+scripts/_*
+.autonomous-upgrade/
+PROJECT_AUDIT_REPORT.md

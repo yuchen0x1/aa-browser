@@ -13,6 +13,12 @@ export interface AppSettings {
   requireOperationApproval: boolean
   /** 允许导航的站点规则；空数组表示不启用白名单 */
   allowedSites: string[]
+  /** 新建标签默认使用一次性隔离会话（不共享登录态，关闭即清理） */
+  isolatedSessions: boolean
+  /** 是否自动检查 GitHub Releases 更新 */
+  autoUpdate: boolean
+  /** 更新通道 */
+  updateChannel: 'stable' | 'beta'
 }
 
 const DEFAULTS: AppSettings = {
@@ -20,7 +26,10 @@ const DEFAULTS: AppSettings = {
   fullSnapshot: false,
   downloadDir: '',
   requireOperationApproval: false,
-  allowedSites: []
+  allowedSites: [],
+  isolatedSessions: false,
+  autoUpdate: true,
+  updateChannel: 'stable'
 }
 
 const PRESETS: { label: string; url: string }[] = [
@@ -48,6 +57,9 @@ export class SettingsStore {
     if (typeof patch.fullSnapshot === 'boolean') this.settings.fullSnapshot = patch.fullSnapshot
     if (typeof patch.downloadDir === 'string') this.settings.downloadDir = patch.downloadDir.trim()
     if (typeof patch.requireOperationApproval === 'boolean') this.settings.requireOperationApproval = patch.requireOperationApproval
+    if (typeof patch.isolatedSessions === 'boolean') this.settings.isolatedSessions = patch.isolatedSessions
+    if (typeof patch.autoUpdate === 'boolean') this.settings.autoUpdate = patch.autoUpdate
+    if (patch.updateChannel === 'stable' || patch.updateChannel === 'beta') this.settings.updateChannel = patch.updateChannel
     if (Array.isArray(patch.allowedSites)) {
       this.settings.allowedSites = patch.allowedSites
         .filter((site): site is string => typeof site === 'string')
@@ -71,6 +83,8 @@ export class SettingsStore {
       this.settings = {
         ...DEFAULTS,
         ...parsed,
+        autoUpdate: parsed.autoUpdate !== false,
+        updateChannel: parsed.updateChannel === 'beta' ? 'beta' : 'stable',
         allowedSites: Array.isArray(parsed.allowedSites)
           ? parsed.allowedSites.filter((site): site is string => typeof site === 'string').map((site) => site.trim()).filter(Boolean)
           : [...DEFAULTS.allowedSites]

@@ -7,6 +7,16 @@
 > 人像人一样浏览网页，Agent 像工程师一样驱动它。
 > **The Agent-Native Browser** — snapshots, actions, and packet capture over MCP.
 
+## 最新更新
+
+### v0.6.2
+
+- 修复启动后默认新标签页白屏；Windows 安装版支持稳定版/Beta 更新检查、下载和重启安装。
+- 普通标签默认共享登录态，支持按需隔离会话；扩展 MCP 交互工具，并在设置页集中管理 AI 客户端接入与软件更新。
+- 网络详情和 HAR 默认遮蔽认证信息，减少敏感凭据意外暴露。
+
+完整版本历史见[发布说明](./docs/releases/release-notes.md)。
+
 传统浏览器是为"人眼看像素"设计的；而 AI Agent 需要的是**结构化页面数据**。Aa Browser 是一个完整的 Chromium 浏览器，任何人都可以正常使用它上网；同时，任何支持 MCP（Model Context Protocol）的 AI Agent 都可以连接进来，读取页面的**结构化快照**（可访问性树 + 元素 ref 编号），并执行点击、输入、选择、滚动、提取等操作——不看截图、不猜坐标。
 
 ## 特性
@@ -112,13 +122,17 @@ WorkBuddy 路径尝试写入用户级 `~/.workbuddy/mcp.json` 并生成本地 Co
 
 要求：Node.js ≥ 20，Windows / macOS / Linux。
 
+### 自动更新
+
+正式 Windows 安装版使用 GitHub Releases 和 `electron-updater` 检查更新。打开「设置 → 软件更新」可以手动检查、选择稳定版/Beta 通道、查看状态并在下载完成后重启安装。发布和配置说明见 [docs/AUTO_UPDATE.md](./docs/AUTO_UPDATE.md)。
+
 ### 方式一：Windows 安装包（推荐给普通用户）
 
 ```bash
 npm run dist       # 产出 release/Aa Browser-Setup-<版本>.exe（NSIS 安装器）
 ```
 
-双击安装（未做代码签名，Windows SmartScreen 会提示"更多信息 → 仍要运行"）。装好后打开 Aa Browser，新标签页上有**「一键接入你的 AI 客户端」**卡片，勾选客户端点一下即完成 MCP 配置。
+双击安装（未做代码签名，Windows SmartScreen 会提示"更多信息 → 仍要运行"）。装好后打开 Aa Browser，点工具栏「设置」→「连接 AI 客户端」，勾选客户端写入即可完成 MCP 配置。
 
 ### 方式二：源码运行（开发者）
 
@@ -139,7 +153,7 @@ npm run dev
 
 ## 接入你的 Agent
 
-**方式 A · 一键接入（推荐）**：Aa Browser 新标签页 → 「一键接入你的 AI 客户端」卡片 → 勾选 → 写入。
+**方式 A · 一键接入（推荐）**：Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写入。
 命令行等效：`node cli/setup.mjs --yes`（`--list` 查看，`--client zcode,cursor` 指定目标）。
 支持传统配置式 MCP 客户端：**ZCode / Claude Code / Cursor / Windsurf / Cline / VS Code / Gemini CLI / Qwen Code**。写入前自动备份原配置为 `<file>.aa-backup-<时间戳>`，幂等可重复执行。
 
@@ -171,10 +185,13 @@ npm run dev
 | `browser_click` | 按 ref 点击（支持左键/右键/双击，自动返回增量快照） |
 | `browser_drag` | 按 ref 拖拽（拖到目标元素 `toRef` 或相对偏移 `dx, dy`，支持滑块与看板） |
 | `browser_type` | 按 ref 输入文本（支持 `submit` 回车提交、`clear` 清空） |
+| `browser_fill_form` | **批量填写**：一次调用填多个字段（文本/下拉/复选），末尾只回一次快照，省 token |
 | `browser_select_option` | 按 ref 选择下拉项（按 value 或可见文本匹配） |
 | `browser_scroll` | 滚动页面（先主文档，后最大滚动区域） |
 | `browser_extract` | 提取整页或指定元素的纯文本 |
-| `browser_wait` | 等待指定文本出现（轮询） |
+| `browser_evaluate` | 在页面执行 JS 表达式并返回 JSON（可按 ref 绑定 `element`） |
+| `browser_dialogs` | 读取页面弹过的 `alert`/`confirm`/`prompt`（已被拦截，不会卡死） |
+| `browser_wait` | 等待文本出现 / 消失 / 固定时长（`text``textGone`\`time`） |
 | `browser_press_key` | 按键：Enter / Escape / 方向键 / 单字符等 |
 | `browser_screenshot` | PNG 截图（支持 `ref` 元素级截图：滚动到位并按包围盒裁剪） |
 | `browser_hover` | 按 ref 悬停（真实 mouseMove，触发悬停菜单/提示） |
@@ -211,8 +228,8 @@ npm run dev
 aa-browser/
 ├── src/
 │   ├── main/          # 主进程：窗口 / 标签 / 动作 / 抓包 / Agent 服务 / MCP 工具 / 客户端接入
-│   ├── preload/       # 外壳 UI 与新标签页的 IPC 桥
-│   ├── renderer/      # 浏览器外壳 UI + 新标签页（一键接入卡片）
+│   ├── preload/       # 仅外壳 UI 的 IPC 桥（页面视图不挂 preload）
+│   ├── renderer/      # 浏览器外壳 UI（含设置面板）+ 新标签页
 │   ├── shared/        # 三方共享的协议类型
 │   └── snapshot/      # 注入引擎（DOM → 快照）与动作脚本
 ├── cli/
@@ -252,3 +269,13 @@ Aa Browser 站在巨人的肩膀上，设计中对齐 / 借鉴了这些优秀开
 - [browser-use](https://github.com/browser-use/browser-use) — Agent 驱动浏览器的理念与动作后回读状态的实践
 - [BrowserTools MCP](https://github.com/AgentDeskAI/browser-tools-mcp) — Cookie/本地存储/选择器导出等"浏览器状态透明化"工具集
 - [Chrome DevTools MCP](https://github.com/ChromeDevTools/mcp) — CDP 能力面（网络抓包域）的参照
+
+## Star History
+
+<a href="https://star-history.com/#yuchen0x1/aa-browser&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=yuchen0x1/aa-browser&type=Date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=yuchen0x1/aa-browser&type=Date" />
+    <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=yuchen0x1/aa-browser&type=Date" />
+  </picture>
+</a>

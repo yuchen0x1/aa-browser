@@ -47,6 +47,25 @@ export function findElement(snap: PageSnapshot, ref: string): SnapshotElement | 
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
+/** 单次导航的等待上限：超过则交给 settle + URL 校验判断实际结果 */
+const NAVIGATE_TIMEOUT_MS = 20000
+
+/**
+ * Chromium exposes file:// URLs in their serialized (percent-encoded) form.
+ * The MCP caller may provide a Windows path containing non-ASCII characters,
+ * so comparing the raw input with webContents.getURL() produces a false
+ * navigation failure even though the page loaded successfully.
+ */
+function comparableNavigationUrl(raw: string): string {
+  try {
+    const parsed = new URL(raw)
+    parsed.hash = ''
+    return parsed.href.replace(/\/$/, '')
+  } catch {
+    return raw.replace(/\/$/, '')
+  }
+}
+
 /** 等待页面加载稳定（导航结束 + 小缓冲），供动作后调用 */
 async function settle(wc: WebContents): Promise<void> {
   try {
@@ -71,8 +90,58 @@ async function settle(wc: WebContents): Promise<void> {
   await delay(250)
 }
 
-/** 找到 tab 对应的 webContents（可指定 tabId，默认活动标签） */
-export function resolveWebContents(tabs: { active: () => Tab | null; get: (id: string) => Tab | null }, tabId?: string): Tab {
+/**
+ * 点击送达探针。
+ *
+ * `webContents.sendInputEvent` 注入的鼠标事件偶发不会进入渲染进程——实测同一坐标
+ * 上一次生效、下一次静默丢失，而调用本身仍然"成功"返回。对 Agent 来说这就是
+ * "点了但页面没反应"，且无法从返回值察觉。因此点击后必须回验页面是否真的收到 click。
+ */
+async function armClickProbe(wc: WebContents, ref: string): Promise<boolean> {
+  try {
+    return (await wc.executeJavaScript(
+      `(() => {
+        const el = (window.__aaRefs || {})[${JSON.stringify(ref)}]
+        if (!el) return false
+        window.__aaClickProbe = { fired: false }
+        el.addEventListener('click', () => { window.__aaClickProbe.fired = true }, { once: true, capture: true })
+        return true
+      })()`,
+      false
+    )) as boolean
+  } catch {
+    return false
+  }
+}
+
+/** 读取探针；null 表示无法判定（上下文已销毁且 URL 未变） */
+async function readClickProbe(wc: WebContents, urlBefore: string): Promise<boolean | null> {
+  try {
+    const fired = (await wc.executeJavaScript(
+      `(() => { const p = window.__aaClickProbe; return p ? !!p.fired : null })()`,
+      false
+    )) as boolean | null
+    return fired
+  } catch {
+    // 上下文被销毁：通常是点击触发了导航，等同于点击已送达
+    return wc.getURL() !== urlBefore ? true : null
+  }
+}
+
+/** 轮询探针，等待 click 事件被页面处理 */
+async function waitClickProbe(wc: WebContents, urlBefore: string, timeoutMs = 700): Promise<boolean | null> {
+  const deadline = Date.now() + timeoutMs
+  let last: boolean | null = null
+  while (Date.now() < deadline) {
+    await delay(60)
+    last = await readClickProbe(wc, urlBefore)
+    if (last === true) return true
+    if (wc.getURL() !== urlBefore) return true
+  }
+  return last
+}
+
+/** 找到 tab 对应的 webContents（可指定 tabId，默认活动标签） */export function resolveWebContents(tabs: { active: () => Tab | null; get: (id: string) => Tab | null }, tabId?: string): Tab {
   const tab = tabId ? tabs.get(tabId) : tabs.active()
   if (!tab) throw new ActionError(tabId ? `标签不存在: ${tabId}` : '浏览器没有打开的标签页')
   if (tab.view.webContents.isDestroyed()) throw new ActionError('页面已关闭')
@@ -98,22 +167,22 @@ export async function doNavigate(
   // 导航前确保抓包已启用（保证本次导航的请求都被捕获）
   await tab.net.ensure().catch(() => {})
   // loadURL 在打断进行中的导航时会抛出上一次导航的 ERR_ABORTED，
-  // 因此不信任其 Promise，以"加载停止后的最终 URL"为准
+  // 因此不信任其 Promise，以"加载停止后的最终 URL"为准。
+  // 同时给 loadURL 加超时：标签刚创建时对话框守卫正在注入，此时 loadURL
+  // 可能长期不 settle，会把整个工具调用拖到 MCP 超时。
   try {
-    await wc.loadURL(url)
+    await Promise.race([wc.loadURL(url), delay(NAVIGATE_TIMEOUT_MS)])
   } catch {
-    /* ERR_ABORTED 等由下方 URL 校验兜底 */
+    /* ERR_ABORTED / 超时：由下方 URL 校验兜底 */
   }
   await settle(wc)
   const finalUrl = wc.getURL() || ''
-  const ok =
-    finalUrl === url ||
-    finalUrl === url + '/' ||
-    (url.startsWith('file://') && finalUrl.replace(/\\/g, '/') === url.replace(/\\/g, '/'))
+  const expectedComparable = comparableNavigationUrl(url)
+  const finalComparable = comparableNavigationUrl(finalUrl)
+  const ok = finalComparable === expectedComparable
   if (!ok && finalUrl && !finalUrl.startsWith(url)) {
     // 未到达目标（如被重定向到完全不同的地址且非正常跳转）时仍放行常见情形
-    const norm = (u: string): string => u.replace(/\/$/, '')
-    if (norm(finalUrl) !== norm(url)) {
+    if (finalComparable !== expectedComparable) {
       throw new ActionError(`导航未到达目标：当前 ${finalUrl}，目标 ${url}`)
     }
   }
@@ -370,15 +439,36 @@ export async function doExtract(tab: Tab, ref?: string): Promise<{ text: string;
 }
 
 export async function doWaitForText(tab: Tab, text: string, timeoutMs: number): Promise<{ found: boolean; elapsedMs: number }> {
+  const r = await doWaitForCondition(tab, { text, timeoutMs })
+  return { found: r.found, elapsedMs: r.elapsedMs }
+}
+
+/**
+ * 等待文本出现 / 消失 / 任一发生。
+ *
+ * 相比只支持"出现"，增加"消失"能覆盖加载态（spinner 文字消失＝加载完成）
+ * 这类常见 Agent 场景，且不必让 Agent 自己 sleep 固定时长。
+ */
+export async function doWaitForCondition(
+  tab: Tab,
+  opts: { text?: string; textGone?: string; timeoutMs: number }
+): Promise<{ found: boolean; elapsedMs: number; which?: 'appeared' | 'gone' }> {
   const wc = tab.view.webContents
-  const script = containsTextScript(text)
   const start = Date.now()
-  const deadline = start + Math.min(30000, Math.max(1000, timeoutMs))
+  const deadline = start + Math.min(30000, Math.max(1000, opts.timeoutMs))
+  const textScript = opts.text !== undefined ? containsTextScript(opts.text) : null
+  const goneScript = opts.textGone !== undefined ? containsTextScript(opts.textGone) : null
   // eslint-disable-next-line no-constant-condition
   while (true) {
     try {
-      const found = (await wc.executeJavaScript(script, false)) as boolean
-      if (found) return { found: true, elapsedMs: Date.now() - start }
+      if (textScript) {
+        const seen = (await wc.executeJavaScript(textScript, false)) as boolean
+        if (seen) return { found: true, elapsedMs: Date.now() - start, which: 'appeared' }
+      }
+      if (goneScript) {
+        const stillThere = (await wc.executeJavaScript(goneScript, false)) as boolean
+        if (!stillThere) return { found: true, elapsedMs: Date.now() - start, which: 'gone' }
+      }
     } catch {
       /* 页面导航中，继续等 */
     }

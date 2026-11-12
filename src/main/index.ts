@@ -3,7 +3,7 @@ import type { MenuItemConstructorOptions } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
 import os from 'node:os'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { TabManager } from './tabs'
 import { AgentServer } from './agent-server'
 import { buildTools } from './tools'
@@ -13,8 +13,10 @@ import { getDownloadTracker } from './downloads'
 import { getHistoryStore } from './history'
 import { getSettingsStore } from './settings'
 import { ApprovalManager } from './approvals'
+import { applyPermissionPolicy, clearIsolatedPartition, sweepStalePartitions } from './sessions'
 import { session } from 'electron'
 import type { UiState } from '@shared/types'
+import { UpdateManager } from './updater'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const VERSION = app.getVersion()
@@ -42,6 +44,7 @@ let agentCount = 0
 let bridgeState: UiState['bridgeState'] = 'waiting'
 let connectionMessage = '等待 MCP 桥启动并连接'
 const approvals = new ApprovalManager()
+let updater: UpdateManager | null = null
 const recentActions: import('@shared/types').ActionLogItem[] = []
 
 export function logAgentAction(item: import('@shared/types').ActionLogItem): void {
@@ -54,7 +57,7 @@ export function logAgentAction(item: import('@shared/types').ActionLogItem): voi
 function newtabUrl(): string {
   const devUrl = process.env['ELECTRON_RENDERER_URL']
   if (devUrl) return `${devUrl}/newtab.html`
-  return path.join(__dirname, '../renderer/newtab.html')
+  return pathToFileURL(path.join(__dirname, '../renderer/newtab.html')).toString()
 }
 
 function isDev(): boolean {
@@ -108,7 +111,8 @@ function pushState(): void {
     pendingApprovals: approvals.list(),
     agentInterrupted: approvals.isInterrupted(),
     recentActions: [...recentActions],
-    downloads: getDownloadTracker().list(20)
+    downloads: getDownloadTracker().list(20),
+    update: updater?.getState()
   }
   chromeView.webContents.send('aa:state', state)
 }
@@ -156,7 +160,7 @@ function handleBeforeInput(wc: Electron.WebContents): void {
       event.preventDefault()
       // DevTools 与抓包共用调试通道：打开前先释放抓包
       const t = tabManager?.tabs.find((x) => x.view.webContents === wc)
-      t?.net.dispose()
+      t?.net.releaseDebugger()
       wc.openDevTools({ mode: 'detach' })
       return
     }
@@ -208,7 +212,7 @@ function installPageContextMenu(wc: Electron.WebContents): void {
     } })
     push({ label: '开发者工具', click: () => {
       const t = tabManager?.tabs.find((x) => x.view.webContents === wc)
-      t?.net.dispose() // DevTools 与抓包共用调试通道
+      t?.net.releaseDebugger() // DevTools 与 debugger/对话框守卫互斥
       wc.openDevTools({ mode: 'detach' })
     } })
     push({ label: '截图保存', click: () => {
@@ -262,13 +266,37 @@ function createWindow(): void {
   // chrome UI 加载完成后再显示窗口，避免白闪
   cv.webContents.once('did-finish-load', () => win?.show())
   setTimeout(() => win?.show(), 2500) // 兜底：加载卡住也要出窗口
-  void cv.webContents.loadURL(assets.index)
+  // 外壳视图是唯一带 preload 的 WebContents：禁止它离开应用自身的 UI 文件，
+  // 否则一次导航就会把特权桥暴露给任意站点（与页面视图同类的泄漏路径）。
+  const chromeEntryUrl = /^[a-z]+:/i.test(assets.index) ? assets.index : pathToFileURL(assets.index).toString()
+  cv.webContents.on('will-navigate', (event, target) => {
+    if (target !== chromeEntryUrl) event.preventDefault()
+  })
+  cv.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  void cv.webContents.loadURL(chromeEntryUrl).catch((error: unknown) => {
+    console.error(`[aa-browser] chrome UI 加载失败: ${error instanceof Error ? error.message : String(error)}`)
+  })
   handleBeforeInput(cv.webContents)
 }
 
 function registerIpc(): void {
-  ipcMain.handle('aa:get-state', () => {
-    return {
+  /**
+   * 特权 IPC 只接受外壳 chrome 视图。
+   *
+   * chrome 视图是唯一挂 preload 的 WebContents；页面标签永不挂 preload（见 TabManager.createTab）。
+   * 这里再做一次显式校验，防止将来有人给页面视图加回 preload 时静默放宽权限。
+   * 注意 approvals/downloads 等 handler 原本就逐项比对 sender，统一后语义不变。
+   */
+  function isTrustedSender(event: Electron.IpcMainInvokeEvent): boolean {
+    return !!chromeView && event.sender === chromeView.webContents
+  }
+  function guard<T>(event: Electron.IpcMainInvokeEvent, fallback: T, fn: () => T): T {
+    if (!isTrustedSender(event)) return fallback
+    return fn()
+  }
+
+  ipcMain.handle('aa:get-state', (event) => {
+    return guard(event, null, () => ({
       tabs: tabManager?.infos() ?? [],
       activeId: tabManager?.activeId ?? null,
       agentCount,
@@ -277,114 +305,137 @@ function registerIpc(): void {
       pendingApprovals: approvals.list(),
       agentInterrupted: approvals.isInterrupted(),
       downloads: getDownloadTracker().list(20)
-    } satisfies UiState
+    } satisfies UiState))
   })
-  ipcMain.handle('aa:tab-new', (_e, url?: string) => {
-    const target = url ? normalizeUrl(url, searchUrlBase(), newtabUrl()) : newtabUrl()
-    try {
-      tabManager?.createTab(target)
-    } catch {
-      return false
-    }
-    return true
+  ipcMain.handle('aa:tab-new', (event, url?: string) => {
+    return guard(event, false, () => {
+      const target = url ? normalizeUrl(url, searchUrlBase(), newtabUrl()) : newtabUrl()
+      try {
+        tabManager?.createTab(target)
+      } catch {
+        return false
+      }
+      return true
+    })
   })
-  ipcMain.handle('aa:tab-close', (_e, id: string) => {
-    const tab = tabManager?.get(id)
-    if (tab) detachTabView(tab.view)
-    tabManager?.closeTab(id)
+  ipcMain.handle('aa:tab-close', (event, id: string) => {
+    return guard(event, undefined, () => {
+      const tab = tabManager?.get(id)
+      if (tab) detachTabView(tab.view)
+      tabManager?.closeTab(id)
+    })
   })
-  ipcMain.handle('aa:tab-select', (_e, id: string) => {
-    const prev = tabManager?.tabs.find((t) => t.id === tabManager?.activeId)
-    const next = tabManager?.get(id)
-    if (!tabManager || !next) return
-    if (prev && prev.id !== id) detachTabView(prev.view)
-    attachTabView(next.view)
-    tabManager.selectTab(id)
-    next.view.webContents.focus()
+  ipcMain.handle('aa:tab-select', (event, id: string) => {
+    return guard(event, undefined, () => {
+      const prev = tabManager?.tabs.find((t) => t.id === tabManager?.activeId)
+      const next = tabManager?.get(id)
+      if (!tabManager || !next) return
+      if (prev && prev.id !== id) detachTabView(prev.view)
+      attachTabView(next.view)
+      tabManager.selectTab(id)
+      next.view.webContents.focus()
+    })
   })
-  ipcMain.handle('aa:back', () => {
-    const active = tabManager?.active()
-    if (active) tabManager?.goBack(active)
+  ipcMain.handle('aa:back', (event) => {
+    return guard(event, undefined, () => {
+      const active = tabManager?.active()
+      if (active) tabManager?.goBack(active)
+    })
   })
-  ipcMain.handle('aa:forward', () => {
-    const active = tabManager?.active()
-    if (active) tabManager?.goForward(active)
+  ipcMain.handle('aa:forward', (event) => {
+    return guard(event, undefined, () => {
+      const active = tabManager?.active()
+      if (active) tabManager?.goForward(active)
+    })
   })
-  ipcMain.handle('aa:reload', () => {
-    const active = tabManager?.active()
-    active?.view.webContents.reload()
+  ipcMain.handle('aa:reload', (event) => {
+    return guard(event, undefined, () => {
+      const active = tabManager?.active()
+      active?.view.webContents.reload()
+    })
   })
-  ipcMain.handle('aa:omnibox-submit', (_e, value: string) => {
-    const active = tabManager?.active()
-    if (!active || !tabManager) return false
-    const target = normalizeUrl(value, searchUrlBase(), newtabUrl())
-    try {
-      tabManager.assertUrlAllowed(target)
-    } catch {
-      return false
-    }
-    void active.view.webContents.loadURL(target)
-    return true
+  ipcMain.handle('aa:omnibox-submit', (event, value: string) => {
+    return guard(event, false, () => {
+      const active = tabManager?.active()
+      if (!active || !tabManager) return false
+      const target = normalizeUrl(value, searchUrlBase(), newtabUrl())
+      try {
+        tabManager.assertUrlAllowed(target)
+      } catch {
+        return false
+      }
+      void active.view.webContents.loadURL(target)
+      return true
+    })
   })
-  ipcMain.handle('aa:devtools', () => {
-    const active = tabManager?.active()
-    active?.net.dispose() // DevTools 与抓包共用调试通道
-    active?.view.webContents.openDevTools({ mode: 'detach' })
+  ipcMain.handle('aa:devtools', (event) => {
+    return guard(event, undefined, () => {
+      const active = tabManager?.active()
+      active?.net.releaseDebugger() // DevTools 与 debugger/对话框守卫互斥
+      active?.view.webContents.openDevTools({ mode: 'detach' })
+    })
   })
   ipcMain.handle('aa:approval-decide', (event, id: string, allowed: boolean) => {
-    if (event.sender !== chromeView?.webContents || !approvals.decide(String(id), allowed === true)) return false
-    return true
+    if (!isTrustedSender(event)) return false
+    return approvals.decide(String(id), allowed === true)
   })
   ipcMain.handle('aa:agent-interrupt', (event) => {
-    if (event.sender !== chromeView?.webContents) return false
+    if (!isTrustedSender(event)) return false
     approvals.interrupt()
     return true
   })
   ipcMain.handle('aa:agent-resume', (event) => {
-    if (event.sender !== chromeView?.webContents) return false
+    if (!isTrustedSender(event)) return false
     approvals.resume()
     return true
   })
   approvals.onChange = pushState
-  ipcMain.handle('aa:clients-detect', () => {
-    return detectClients()
+  ipcMain.handle('aa:clients-detect', (event) => {
+    return guard(event, [], () => detectClients())
   })
-  ipcMain.handle('aa:clients-setup', (_e, ids: string[]) => {
-    return setupClients(Array.isArray(ids) ? ids : [])
+  ipcMain.handle('aa:clients-setup', (event, ids: string[]) => {
+    return guard(event, [], () => setupClients(Array.isArray(ids) ? ids : []))
   })
   ipcMain.handle('aa:downloads-list', (event) => {
-    if (event.sender !== chromeView?.webContents) return []
-    return getDownloadTracker().list(20)
+    return guard(event, [], () => getDownloadTracker().list(20))
   })
   ipcMain.handle('aa:download-open', (event, id: string) => {
-    if (event.sender !== chromeView?.webContents) return
-    getDownloadTracker().open(String(id))
+    return guard(event, undefined, () => getDownloadTracker().open(String(id)))
   })
   ipcMain.handle('aa:download-show', (event, id: string) => {
-    if (event.sender !== chromeView?.webContents) return
-    getDownloadTracker().showInFolder(String(id))
+    return guard(event, undefined, () => getDownloadTracker().showInFolder(String(id)))
   })
   ipcMain.handle('aa:download-dir', (event) => {
-    if (event.sender !== chromeView?.webContents) return ''
-    return getDownloadTracker().dir
+    return guard(event, '', () => getDownloadTracker().dir)
   })
   ipcMain.handle('aa:history-suggest', (event, query: string, limit?: number) => {
-    if (event.sender !== chromeView?.webContents) return []
-    return getHistoryStore().suggest(String(query ?? ''), Number(limit) || 8)
+    return guard(event, [], () => getHistoryStore().suggest(String(query ?? ''), Number(limit) || 8))
   })
   ipcMain.handle('aa:settings-get', (event) => {
-    if (event.sender !== chromeView?.webContents) return null
-    const s = getSettingsStore()
-    return { settings: s.get(), presets: s.presets() }
+    return guard(event, null, () => {
+      const s = getSettingsStore()
+      return { settings: s.get(), presets: s.presets() }
+    })
   })
   ipcMain.handle('aa:settings-set', (event, patch: unknown) => {
-    if (event.sender !== chromeView?.webContents) return null
-    return getSettingsStore().set((patch ?? {}) as Record<string, unknown>)
+    return guard(event, null, () => {
+      const result = getSettingsStore().set((patch ?? {}) as Record<string, unknown>)
+      updater?.refreshSettings()
+      return result
+    })
   })
   ipcMain.handle('aa:agent-info', (event) => {
-    if (event.sender !== chromeView?.webContents) return null
-    return agentServer?.info() ?? null
+    return guard(event, null, () => agentServer?.info() ?? null)
   })
+  ipcMain.handle('aa:update-check', async (event) => {
+    if (!isTrustedSender(event)) return updater?.getState() ?? null
+    return updater?.check() ?? null
+  })
+  ipcMain.handle('aa:update-download', async (event) => {
+    if (!isTrustedSender(event)) return updater?.getState() ?? null
+    return updater?.download() ?? null
+  })
+  ipcMain.handle('aa:update-install', (event) => guard(event, false, () => updater?.install() ?? false))
   getDownloadTracker().onChange = pushState
 }
 
@@ -406,15 +457,37 @@ app.whenReady().then(() => {
   app.setAppUserModelId('com.aa.browser')
   Menu.setApplicationMenu(null)
 
+  updater = new UpdateManager(VERSION, () => {
+    const settings = getSettingsStore().get()
+    return { autoUpdate: settings.autoUpdate, updateChannel: settings.updateChannel }
+  }, app.isPackaged)
+  updater.init(pushState)
+
   registerIpc()
 
+  // 清理上次异常退出遗留的隔离分区与 v0.6.x 的每标签分区目录。
+  // 必须在创建任何会话之前做，避免和 Chromium 抢占同一批文件。
+  try {
+    const swept = sweepStalePartitions()
+    if (swept.removed.length) {
+      console.log(`[aa-browser] 已清理 ${swept.removed.length} 个过期会话分区目录`)
+    }
+  } catch {
+    /* 清理失败不应阻塞启动 */
+  }
+
   tabManager = new TabManager(newtabUrl(), searchUrlBase())
-  tabManager.newtabPreload = path.join(__dirname, '../preload/index.js')
   tabManager.onChange = onTabChange
   tabManager.onContextMenu = installPageContextMenu
   tabManager.onNavigate = (url, title) => getHistoryStore().add(url, title)
   tabManager.getAllowedSites = () => getSettingsStore().get().allowedSites
-  tabManager.onSession = (ses) => getDownloadTracker().attach(ses)
+  tabManager.getDefaultIsolated = () => getSettingsStore().get().isolatedSessions
+  tabManager.onSession = (ses) => {
+    applyPermissionPolicy(ses)
+    getDownloadTracker().attach(ses)
+  }
+  tabManager.onIsolatedClosed = (partition) => void clearIsolatedPartition(partition)
+  tabManager.onViewDetach = (view) => detachTabView(view)
   getDownloadTracker().setDirectoryProvider(() => getSettingsStore().get().downloadDir)
 
   createWindow()
@@ -445,7 +518,7 @@ app.whenReady().then(() => {
     getDownloadTracker(),
     approvals,
     logAgentAction,
-    () => ({ requireOperationApproval: getSettingsStore().get().requireOperationApproval })
+    () => ({ requireOperationApproval: getSettingsStore().get().requireOperationApproval, fullSnapshot: getSettingsStore().get().fullSnapshot })
   )
   agentServer = new AgentServer(
     tools,

@@ -1,5 +1,11 @@
 import crypto from 'node:crypto'
 
+/**
+ * 审批等待上限。必须小于 MCP 桥的 CALL_TIMEOUT_MS（cli/mcp.mjs: 180s），
+ * 否则用户还没点“允许”桥就已超时并发出 cancel，审批结果永远送不回去。
+ */
+export const APPROVAL_TIMEOUT_MS = 120_000
+
 export interface PendingApproval {
   id: string
   site: string
@@ -35,7 +41,7 @@ export class ApprovalManager {
     this.assertRunning()
     const id = crypto.randomUUID()
     return new Promise((resolve) => {
-      const timer = setTimeout(() => this.finish(id, false), 120_000)
+      const timer = setTimeout(() => this.finish(id, false), APPROVAL_TIMEOUT_MS)
       const abort = (): void => { this.finish(id, false) }
       if (signal?.aborted) {
         clearTimeout(timer)

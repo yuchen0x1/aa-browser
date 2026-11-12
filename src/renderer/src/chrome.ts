@@ -1,4 +1,20 @@
-import type { TabInfo, UiState, DownloadInfo, HistoryEntry, AppSettings, SettingsView, AgentInfo } from '@shared/types'
+import type { TabInfo, UiState, DownloadInfo, HistoryEntry, AppSettings, SettingsView, AgentInfo, UpdateState } from '@shared/types'
+
+/** 与主进程 clients.ts 的 ClientDetectResult / ClientSetupResult 对应 */
+interface ClientDetectResult {
+  id: string
+  name: string
+  file: string
+  installed: boolean
+  configured: boolean
+  outdated: boolean
+}
+interface ClientSetupResult {
+  id: string
+  name: string
+  status: 'added' | 'updated' | 'skipped' | 'manual' | 'error'
+  message: string
+}
 
 declare global {
   interface Window {
@@ -23,6 +39,11 @@ declare global {
       settingsGet: () => Promise<SettingsView | null>
       settingsSet: (patch: Partial<AppSettings>) => Promise<AppSettings | null>
       agentInfo: () => Promise<AgentInfo | null>
+      clientsDetect: () => Promise<ClientDetectResult[]>
+      clientsSetup: (ids: string[]) => Promise<ClientSetupResult[]>
+      updateCheck: () => Promise<UpdateState>
+      updateDownload: () => Promise<UpdateState>
+      updateInstall: () => Promise<boolean>
       onState: (cb: (state: UiState) => void) => void
       onFocusOmnibox: (cb: () => void) => void
     }
@@ -54,10 +75,47 @@ const setEngine = document.getElementById('set-engine') as HTMLSelectElement | n
 const setEngineUrl = document.getElementById('set-engine-url') as HTMLInputElement | null
 const setFullSnapshot = document.getElementById('set-full-snapshot') as HTMLInputElement | null
 const setOpApproval = document.getElementById('set-op-approval') as HTMLInputElement | null
+const setIsolatedSessions = document.getElementById('set-isolated-sessions') as HTMLInputElement | null
 const setDownloadDir = document.getElementById('set-download-dir') as HTMLInputElement | null
 const setAllowedSites = document.getElementById('set-allowed-sites') as HTMLTextAreaElement | null
 const setAgentInfo = document.getElementById('set-agent-info') as HTMLDivElement | null
 const settingsStatus = document.getElementById('settings-status') as HTMLSpanElement | null
+const setClientList = document.getElementById('set-client-list') as HTMLDivElement | null
+const btnClientScan = document.getElementById('btn-client-scan') as HTMLButtonElement | null
+const btnClientSetup = document.getElementById('btn-client-setup') as HTMLButtonElement | null
+const setClientResult = document.getElementById('set-client-result') as HTMLDivElement | null
+const setAutoUpdate = document.getElementById('set-auto-update') as HTMLInputElement | null
+const setUpdateChannel = document.getElementById('set-update-channel') as HTMLSelectElement | null
+const updateStatus = document.getElementById('update-status') as HTMLDivElement | null
+const btnUpdateCheck = document.getElementById('btn-update-check') as HTMLButtonElement | null
+const btnUpdateAction = document.getElementById('btn-update-action') as HTMLButtonElement | null
+
+function formatUpdateBytes(value?: number): string {
+  if (!value || value < 1024) return value ? `${value} B` : '未知大小'
+  const units = ['KB', 'MB', 'GB']
+  let n = value / 1024
+  let i = 0
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++ }
+  return `${n.toFixed(n >= 10 ? 0 : 1)} ${units[i]}`
+}
+
+function renderUpdate(update?: UpdateState): void {
+  if (!updateStatus || !update) return
+  const labels: Record<UpdateState['status'], string> = {
+    disabled: '开发模式不检查更新', idle: `当前版本 ${update.currentVersion}`, checking: '正在检查更新…',
+    'up-to-date': `已是最新版本（${update.currentVersion}）`, available: `发现新版本 ${update.version ?? ''}`,
+    downloading: `正在下载 ${update.version ?? ''} · ${Math.max(0, Math.round(update.progress ?? 0))}%`,
+    downloaded: `已下载 ${update.version ?? ''}，可以重启安装`, error: `更新失败：${update.error ?? '未知错误'}`
+  }
+  updateStatus.textContent = labels[update.status]
+  updateStatus.title = [update.releaseDate ? `发布时间：${update.releaseDate}` : '', update.size ? `大小：${formatUpdateBytes(update.size)}` : '', update.releaseNotes ?? ''].filter(Boolean).join('\n')
+  if (btnUpdateCheck) btnUpdateCheck.disabled = update.status === 'checking' || update.status === 'downloading'
+  if (btnUpdateAction) {
+    btnUpdateAction.hidden = !['available', 'downloaded'].includes(update.status)
+    btnUpdateAction.disabled = update.status === 'downloading'
+    btnUpdateAction.textContent = update.status === 'downloaded' ? '重启并安装' : '下载更新'
+  }
+}
 
 function activeTab(): TabInfo | null {
   return state.tabs.find((t) => t.active) ?? null
@@ -80,7 +138,11 @@ function renderTabs(): void {
   for (const t of state.tabs) {
     const el = document.createElement('div')
     el.className = 'tab' + (t.active ? ' active' : '')
-    el.title = `${t.title}\n${t.url}`
+    el.title = `${t.title}\n${t.url}${t.isolated ? '\n（隔离会话：不共享登录态）' : ''}`
+    el.setAttribute('role', 'tab')
+    el.setAttribute('aria-selected', String(t.active))
+    el.tabIndex = t.active ? 0 : -1
+    el.dataset['tabId'] = t.id
 
     const fav = document.createElement('div')
     fav.className = 'favicon'
@@ -108,9 +170,21 @@ function renderTabs(): void {
     title.textContent = t.title || '无标题'
     el.appendChild(title)
 
+    // 隔离会话标签带锁标识：用户必须能一眼看出哪些标签不共享登录态
+    if (t.isolated) {
+      const lock = document.createElement('span')
+      lock.className = 'tab-lock'
+      lock.textContent = '🔒'
+      lock.title = '隔离会话：不共享 Cookie / 登录态，关闭后清除数据'
+      lock.setAttribute('aria-label', '隔离会话标签')
+      el.appendChild(lock)
+      el.classList.add('isolated')
+    }
+
     const close = document.createElement('button')
     close.className = 'close'
     close.title = '关闭标签页 (Ctrl+W)'
+    close.setAttribute('aria-label', `关闭标签页：${t.title || '无标题'}`)
     close.textContent = '×'
     close.addEventListener('click', (e) => {
       e.stopPropagation()
@@ -194,23 +268,33 @@ function renderFeed(): void {
   if (!feedList) return
   const actions = state.recentActions || []
   if (!actions.length) {
-    feedList.innerHTML = '<div class="empty-feed">暂无 Agent 操作记录</div>'
+    const empty = document.createElement('div')
+    empty.className = 'empty-feed'
+    empty.textContent = '暂无 Agent 操作记录'
+    feedList.replaceChildren(empty)
     return
   }
-  feedList.innerHTML = ''
+  const fragment = document.createDocumentFragment()
   for (const item of actions.slice().reverse()) {
     const el = document.createElement('div')
     el.className = 'feed-item' + (item.isError ? ' error' : '')
     const timeStr = new Date(item.ts).toLocaleTimeString()
-    el.innerHTML = `
-      <div class="feed-head">
-        <span class="feed-tool">${item.tool}</span>
-        <span class="feed-time">${timeStr}</span>
-      </div>
-      <div class="feed-summary">${item.summary}</div>
-    `
-    feedList.appendChild(el)
+    const head = document.createElement('div')
+    head.className = 'feed-head'
+    const tool = document.createElement('span')
+    tool.className = 'feed-tool'
+    tool.textContent = item.tool
+    const time = document.createElement('span')
+    time.className = 'feed-time'
+    time.textContent = timeStr
+    const summary = document.createElement('div')
+    summary.className = 'feed-summary'
+    summary.textContent = item.summary
+    head.append(tool, time)
+    el.append(head, summary)
+    fragment.appendChild(el)
   }
+  feedList.replaceChildren(fragment)
 }
 
 function formatBytes(n: number): string {
@@ -349,11 +433,14 @@ function onOmniboxInput(): void {
 }
 
 function applyState(next: UiState): void {
+  const focusedTabId = (document.activeElement as HTMLElement | null)?.dataset?.['tabId']
   state = next
   renderTabs()
+  if (focusedTabId) tabsEl.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(focusedTabId)}"]`)?.focus()
   renderToolbar()
   renderFeed()
   renderDownloads()
+  renderUpdate(next.update)
   if (document.activeElement !== omnibox) hideSuggest()
 }
 
@@ -364,6 +451,19 @@ btnForward.addEventListener('click', () => void window.aa.forward())
 btnReload.addEventListener('click', () => void window.aa.reload())
 agentStop.addEventListener('click', () => void (state.agentInterrupted ? window.aa.resumeAgent() : window.aa.interruptAgent()))
 document.getElementById('btn-newtab')?.addEventListener('click', () => void window.aa.tabNew())
+
+tabsEl.addEventListener('keydown', (event: KeyboardEvent) => {
+  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+  const tabs = Array.from(tabsEl.querySelectorAll<HTMLElement>('[role="tab"]'))
+  if (!tabs.length) return
+  const current = tabs.indexOf(document.activeElement as HTMLElement)
+  const direction = event.key === 'ArrowRight' ? 1 : -1
+  const next = tabs[(current + direction + tabs.length) % tabs.length]
+  event.preventDefault()
+  next.focus()
+  const id = next.dataset['tabId']
+  if (id) void window.aa.tabSelect(id)
+})
 
 btnDownloads?.addEventListener('click', () => {
   if (!dlPanel) return
@@ -387,6 +487,104 @@ btnCloseFeed?.addEventListener('click', () => {
   if (feedDrawer) feedDrawer.hidden = true
 })
 
+/* ── 设置面板：连接 AI 客户端 ─────────────── */
+const CLIENT_STATUS_BADGE: Record<ClientSetupResult['status'], string> = {
+  added: '✅ 已写入',
+  updated: '✅ 已更新',
+  skipped: 'ℹ️ 已配置',
+  manual: '⚠️ 需手动',
+  error: '❌ 失败'
+}
+
+function renderClients(clients: ClientDetectResult[]): void {
+  if (!setClientList) return
+  const installed = clients.filter((c) => c.installed)
+  if (!installed.length) {
+    const empty = document.createElement('span')
+    empty.className = 'settings-hint'
+    empty.textContent = '未检测到已安装的 AI 客户端。安装后点「重新扫描」。'
+    setClientList.replaceChildren(empty)
+    setClientList.removeAttribute('aria-busy')
+    if (btnClientSetup) btnClientSetup.disabled = true
+    return
+  }
+  const fragment = document.createDocumentFragment()
+  for (const client of installed) {
+    const label = document.createElement('label')
+    label.className = 'client-item'
+    const checkbox = document.createElement('input')
+    checkbox.type = 'checkbox'
+    checkbox.dataset['id'] = client.id
+    checkbox.disabled = client.configured
+    checkbox.checked = !client.configured
+    const name = document.createElement('span')
+    name.className = 'client-name'
+    name.textContent = client.name
+    const badge = document.createElement('span')
+    badge.className = client.configured ? 'client-pill ok' : client.outdated ? 'client-pill warn' : 'client-pill'
+    badge.textContent = client.configured ? '已配置' : client.outdated ? '路径待修复' : '未配置'
+    label.append(checkbox, name, badge)
+    fragment.appendChild(label)
+  }
+  setClientList.replaceChildren(fragment)
+  setClientList.removeAttribute('aria-busy')
+  if (btnClientSetup) {
+    btnClientSetup.disabled = setClientList.querySelectorAll('input[type=checkbox]:not(:disabled)').length === 0
+  }
+}
+
+async function refreshClients(): Promise<void> {
+  if (!setClientList || !btnClientSetup) return
+  setClientList.setAttribute('aria-busy', 'true')
+  setClientList.textContent = '正在扫描已安装的 AI 客户端…'
+  btnClientSetup.disabled = true
+  try {
+    renderClients(await window.aa.clientsDetect())
+  } catch (err) {
+    setClientList.textContent = `扫描失败：${err instanceof Error ? err.message : String(err)}`
+    setClientList.removeAttribute('aria-busy')
+  }
+}
+
+btnClientScan?.addEventListener('click', () => {
+  if (setClientResult) setClientResult.textContent = ''
+  void refreshClients()
+})
+
+btnClientSetup?.addEventListener('click', async () => {
+  if (!setClientList || !btnClientSetup) return
+  const ids = Array.from(setClientList.querySelectorAll<HTMLInputElement>('input[type=checkbox]:checked'))
+    .filter((input) => !input.disabled)
+    .map((input) => input.dataset['id'] ?? '')
+    .filter(Boolean)
+  if (!ids.length) {
+    if (setClientResult) setClientResult.textContent = '请先勾选要接入的客户端。'
+    return
+  }
+  btnClientSetup.disabled = true
+  btnClientSetup.setAttribute('aria-busy', 'true')
+  if (setClientResult) setClientResult.textContent = '正在写入接入配置…'
+  try {
+    const results = await window.aa.clientsSetup(ids)
+    if (setClientResult) {
+      setClientResult.textContent = results.length
+        ? results.map((r) => `${CLIENT_STATUS_BADGE[r.status] ?? '完成'} ${r.name} — ${r.message}`).join('　')
+        : '没有可写入的客户端。'
+    }
+    await refreshClients()
+  } catch (err) {
+    if (setClientResult) setClientResult.textContent = `写入失败：${err instanceof Error ? err.message : String(err)}`
+  } finally {
+    btnClientSetup.removeAttribute('aria-busy')
+  }
+})
+
+btnUpdateCheck?.addEventListener('click', () => { void window.aa.updateCheck() })
+btnUpdateAction?.addEventListener('click', () => {
+  if (state.update?.status === 'downloaded') void window.aa.updateInstall()
+  else void window.aa.updateDownload()
+})
+
 /* ── 设置面板 ─────────────────────── */
 async function openSettings(): Promise<void> {
   if (!settingsModal) return
@@ -406,6 +604,9 @@ async function openSettings(): Promise<void> {
     if (setEngineUrl) setEngineUrl.value = view.settings.searchEngine
     if (setFullSnapshot) setFullSnapshot.checked = view.settings.fullSnapshot
     if (setOpApproval) setOpApproval.checked = !!view.settings.requireOperationApproval
+    if (setIsolatedSessions) setIsolatedSessions.checked = !!view.settings.isolatedSessions
+    if (setAutoUpdate) setAutoUpdate.checked = view.settings.autoUpdate !== false
+    if (setUpdateChannel) setUpdateChannel.value = view.settings.updateChannel || 'stable'
     if (setDownloadDir) setDownloadDir.value = view.settings.downloadDir
     if (setAllowedSites) setAllowedSites.value = view.settings.allowedSites.join('\n')
   }
@@ -417,6 +618,8 @@ async function openSettings(): Promise<void> {
       setAgentInfo.textContent = 'Agent 服务未启动'
     }
   }
+  void refreshClients()
+  renderUpdate(state.update)
 }
 btnSettings?.addEventListener('click', () => {
   if (settingsModal?.hidden) void openSettings()
@@ -430,6 +633,9 @@ document.getElementById('btn-save-settings')?.addEventListener('click', async ()
   if (setEngineUrl) patch.searchEngine = setEngineUrl.value.trim() || patch.searchEngine
   if (setFullSnapshot) patch.fullSnapshot = setFullSnapshot.checked
   if (setOpApproval) patch.requireOperationApproval = setOpApproval.checked
+  if (setIsolatedSessions) patch.isolatedSessions = setIsolatedSessions.checked
+  if (setAutoUpdate) patch.autoUpdate = setAutoUpdate.checked
+  if (setUpdateChannel) patch.updateChannel = setUpdateChannel.value === 'beta' ? 'beta' : 'stable'
   if (setDownloadDir) patch.downloadDir = setDownloadDir.value
   if (setAllowedSites) patch.allowedSites = setAllowedSites.value.split(/\r?\n/).map((site) => site.trim()).filter(Boolean)
   await window.aa.settingsSet(patch).catch(() => null)

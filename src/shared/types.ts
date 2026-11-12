@@ -8,6 +8,8 @@ export interface TabInfo {
   favicon?: string
   loading: boolean
   active: boolean
+  /** 是否使用独立会话分区（不与普通标签共享登录态） */
+  isolated?: boolean
   canBack: boolean
   canForward: boolean
 }
@@ -43,6 +45,23 @@ export interface UiState {
   agentInterrupted: boolean
   recentActions?: ActionLogItem[]
   downloads?: DownloadInfo[]
+  update?: UpdateState
+}
+
+export type UpdateStatus = 'disabled' | 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'downloaded' | 'error'
+
+export interface UpdateState {
+  status: UpdateStatus
+  currentVersion: string
+  version?: string
+  releaseDate?: string
+  releaseNotes?: string
+  size?: number
+  downloaded?: number
+  progress?: number
+  bytesPerSecond?: number
+  error?: string
+  checkedAt?: number
 }
 
 /** chrome UI 展示的下载条目（精简自主进程 DownloadRecord，避免前端依赖主进程类型） */
@@ -72,6 +91,10 @@ export interface AppSettings {
   downloadDir: string
   requireOperationApproval: boolean
   allowedSites: string[]
+  /** 新建标签默认使用一次性隔离会话 */
+  isolatedSessions: boolean
+  autoUpdate: boolean
+  updateChannel: 'stable' | 'beta'
 }
 
 /** 设置面板返回值 */

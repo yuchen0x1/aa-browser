@@ -1,6 +1,6 @@
 import type { ToolContent } from '@shared/types'
 import { TabManager, normalizeUrl } from './tabs'
-import { clipBody } from './network'
+import { clipBody, safeNetworkHeaders, safeNetworkUrl } from './network'
 import type { DownloadTracker } from './downloads'
 import {
   doHover,
@@ -16,6 +16,7 @@ import {
   inspectTypeTarget
 } from './actions'
 import type { ApprovalManager } from './approvals'
+import { readDialogs, clearDialogs } from './dialogs'
 import {
   ActionError,
   captureSnapshot,
@@ -28,6 +29,7 @@ import {
   doScroll,
   doExtract,
   doWaitForText,
+  doWaitForCondition,
   doPressKey,
   doScreenshot,
   doConsoleLogs,
@@ -64,7 +66,7 @@ export function buildTools(
   downloads: DownloadTracker,
   approvals?: ApprovalManager,
   onAction?: (item: import('@shared/types').ActionLogItem) => void,
-  getSettings?: () => { requireOperationApproval: boolean }
+  getSettings?: () => { requireOperationApproval: boolean; fullSnapshot?: boolean }
 ): McpToolDef[] {
   const tools: McpToolDef[] = []
 
@@ -139,7 +141,9 @@ export function buildTools(
     },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
-      const snap = await captureSnapshot(tab.view.webContents, args['full'] === true ? { mode: 'full' } : undefined)
+      // 设置「快照默认全量」此前只存在配置里、从未被读取；这里让 full 参数真正回退到该设置。
+      const forceFull = args['full'] === true || (args['full'] === undefined && getSettings?.().fullSnapshot === true)
+      const snap = await captureSnapshot(tab.view.webContents, forceFull ? { mode: 'full' } : undefined)
       return { content: [text(snapshotText(snap))] }
     }
   })
@@ -225,11 +229,11 @@ export function buildTools(
     handler: async (args) => {
       approvals?.assertRunning()
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
-      if (tabs.activeId !== tab.id) throw new ActionError('敏感输入审批仅支持当前活动标签；请切换到目标标签后重试。')
       const ref = String(args['ref'])
       const target = await inspectTypeTarget(tab, ref)
       if (!target.ok) throw new ActionError(`找不到输入目标 ${ref}；请刷新页面快照后重试。`)
       if (target.sensitive) {
+        if (tabs.activeId !== tab.id) throw new ActionError('敏感输入审批仅支持当前活动标签；请切换到目标标签后重试。')
         // Never write or retain an agent-supplied secret. Let the user type directly into the focused page field.
         const wc = tab.view.webContents
         const originalUrl = wc.getURL()
@@ -246,7 +250,10 @@ export function buildTools(
         return { content: [text('已允许继续。敏感字段内容由你在网页中输入；Agent 提供的文本未写入、读取或回传。请继续后续步骤。')] }
       }
       if (args['submit']) {
-        await opGate({ site: new URL(tab.view.webContents.getURL()).host || tab.view.webContents.getURL(), tabTitle: tab.title, action: '提交表单/输入后回车' })
+        await opGate(
+          { site: new URL(tab.view.webContents.getURL()).host || tab.view.webContents.getURL(), tabTitle: tab.title, action: '提交表单/输入后回车' },
+          args['__aaSignal']
+        )
       }
       const want = args['snapshot'] !== false
       const r = await doType(tab, ref, String(args['text'] ?? ''), {
@@ -338,31 +345,48 @@ export function buildTools(
     name: 'browser_wait',
     title: '等待',
     description:
-      'Wait until the given text appears anywhere on the page (polls every 250ms). ' +
-      'Use after submit/navigation to wait for results to render.',
+      'Wait for one of: text to appear (`text`), text to disappear (`textGone`), or a fixed delay (`time`, ms). ' +
+      'When both text and textGone are given, waits for whichever happens first. Polls every 250ms. ' +
+      'Use after submit/navigation to wait for results, or after an action to wait for a loading state to clear.',
     inputSchema: {
       type: 'object',
       properties: {
-        text: { type: 'string', description: 'Text to wait for' },
+        text: { type: 'string', description: 'Wait until this text appears on the page' },
+        textGone: { type: 'string', description: 'Wait until this text disappears from the page' },
+        time: { type: 'number', description: 'Wait a fixed number of milliseconds (max 30000)' },
         timeoutMs: { type: 'number', description: 'Timeout in ms (default 10000, max 30000)' },
         tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      },
-      required: ['text']
+      }
     },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
-      const timeoutMs = typeof args['timeoutMs'] === 'number' ? args['timeoutMs'] : 10000
-      const r = await doWaitForText(tab, String(args['text'] ?? ''), timeoutMs)
-      return {
-        content: [
-          text(
-            r.found
-              ? `已出现 "${args['text']}"（等待 ${r.elapsedMs}ms）`
-              : `超时 ${r.elapsedMs}ms，页面中未出现 "${args['text']}"。可调用 browser_snapshot 查看当前页面。`
-          )
-        ],
-        isError: !r.found
+      const wantText = typeof args['text'] === 'string' && args['text'] !== ''
+      const wantGone = typeof args['textGone'] === 'string' && args['textGone'] !== ''
+      const fixed = typeof args['time'] === 'number' ? Math.min(30000, Math.max(0, args['time'])) : null
+      if (!wantText && !wantGone && fixed === null) {
+        throw new ActionError('请提供 text、textGone 或 time 之一')
       }
+      if (fixed !== null) {
+        await new Promise((r) => setTimeout(r, fixed))
+        return { content: [text(`已等待 ${fixed}ms`)] }
+      }
+      const timeoutMs = typeof args['timeoutMs'] === 'number' ? args['timeoutMs'] : 10000
+      const r = await doWaitForCondition(tab, {
+        text: wantText ? String(args['text']) : undefined,
+        textGone: wantGone ? String(args['textGone']) : undefined,
+        timeoutMs
+      })
+      if (!r.found) {
+        const what = [wantText ? `"${args['text']}" 出现` : '', wantGone ? `"${args['textGone']}" 消失` : '']
+          .filter(Boolean)
+          .join(' 或 ')
+        return {
+          content: [text(`超时 ${r.elapsedMs}ms，未等到 ${what}。可调用 browser_snapshot 查看当前页面。`)],
+          isError: true
+        }
+      }
+      const what = r.which === 'gone' ? `"${args['textGone']}" 已消失` : `"${args['text']}" 已出现`
+      return { content: [text(`${what}（等待 ${r.elapsedMs}ms）`)] }
     }
   })
 
@@ -751,7 +775,7 @@ export function buildTools(
         (e) =>
           `[${e.requestId}] ${e.method} ${e.status || '…'} ${e.resourceType} ` +
           `${(e.size / 1024).toFixed(1)}KB ${e.durationMs != null ? e.durationMs + 'ms' : '…'} ` +
-          `${e.error ? 'ERROR:' + e.error : ''} ${e.url.slice(0, 160)}`
+          `${e.error ? 'ERROR:' + e.error : ''} ${safeNetworkUrl(e.url).slice(0, 160)}`
       )
       return { content: [text(`共 ${list.length} 条（显示最近 ${shown.length} 条）：\n${lines.join('\n')}`)] }
     }
@@ -761,13 +785,13 @@ export function buildTools(
     name: 'browser_network_detail',
     title: '网络请求详情',
     description:
-      'Inspect one captured network request: full request/response headers, status, size, duration, ' +
-      'and (with body:true) the response body text. This is how the agent reads API responses for testing.',
+      'Inspect one captured network request: headers, status, size, duration, and (with body:true) the response body text. Authentication headers and credential-like URL parameters are redacted by default; pass includeSensitive:true only when needed.',
     inputSchema: {
       type: 'object',
       properties: {
         requestId: { type: 'string', description: 'Request id from browser_network_requests, e.g. "1234.5"' },
         body: { type: 'boolean', description: 'Include the response body (default false)' },
+        includeSensitive: { type: 'boolean', description: 'Include authentication headers and credential-like URL parameters (default false; use only when needed)' },
         tabId: { type: 'string', description: 'Tab id (default: active tab)' }
       },
       required: ['requestId']
@@ -778,15 +802,15 @@ export function buildTools(
       const entry = tab.net.find(String(args['requestId'] ?? ''))
       if (!entry) throw new ActionError(`找不到请求 ${args['requestId']}（用 browser_network_requests 查看当前抓到的请求）`)
       const parts: string[] = [
-        `${entry.method} ${entry.url}`,
+        `${entry.method} ${safeNetworkUrl(entry.url, args['includeSensitive'] === true)}`,
         `状态: ${entry.status} ${entry.statusText}${entry.error ? '（失败: ' + entry.error + '）' : ''}`,
         `类型: ${entry.resourceType} | 大小: ${(entry.size / 1024).toFixed(1)}KB | 耗时: ${entry.durationMs ?? '…'}ms`,
         '',
         '请求头:',
-        ...Object.entries(entry.requestHeaders).map(([k, v]) => `  ${k}: ${v}`),
+        ...Object.entries(safeNetworkHeaders(entry.requestHeaders, args['includeSensitive'] === true)).map(([k, v]) => `  ${k}: ${v}`),
         '',
         '响应头:',
-        ...Object.entries(entry.responseHeaders).map(([k, v]) => `  ${k}: ${v}`)
+        ...Object.entries(safeNetworkHeaders(entry.responseHeaders, args['includeSensitive'] === true)).map(([k, v]) => `  ${k}: ${v}`)
       ]
       if (args['body'] === true) {
         const body = await tab.net.getResponseBody(entry.requestId)
@@ -800,12 +824,12 @@ export function buildTools(
     name: 'browser_har',
     title: '导出 HAR',
     description:
-      'Export all captured network traffic of the active tab as a HAR 1.2 file (headers, timings, sizes; ' +
-      'no response bodies) for manual analysis in DevTools/Fiddler. Saved under ~/.aabrowser/har/ by default.',
+      'Export captured network traffic as HAR 1.2 (no response bodies). Authentication headers and credential-like URL parameters are redacted by default; pass includeSensitive:true only when needed.',
     inputSchema: {
       type: 'object',
       properties: {
         path: { type: 'string', description: 'Output file path (default ~/.aabrowser/har/aa-<timestamp>.har)' },
+        includeSensitive: { type: 'boolean', description: 'Include authentication headers and credential-like URL parameters (default false; handle the exported file as sensitive)' },
         tabId: { type: 'string', description: 'Tab id (default: active tab)' }
       }
     },
@@ -820,7 +844,7 @@ export function buildTools(
         (args['path'] as string | undefined) ||
         path.join(os.homedir(), '.aabrowser', 'har', `aa-${Date.now()}.har`)
       fs.mkdirSync(path.dirname(file), { recursive: true })
-      fs.writeFileSync(file, JSON.stringify(tab.net.toHar(app.getVersion()), null, 2), 'utf-8')
+        fs.writeFileSync(file, JSON.stringify(tab.net.toHar(app.getVersion(), args['includeSensitive'] === true), null, 2), 'utf-8')
       return { content: [text(`HAR 已导出: ${file}\n共 ${fs.statSync(file).size} 字节`)] }
     }
   })
@@ -921,13 +945,15 @@ export function buildTools(
     name: 'browser_tabs',
     title: '标签管理',
     description:
-      'Manage tabs: "list" shows all tabs with ids; "new" opens a URL in a new tab; ' +
-      '"select" makes a tab active; "close" closes a tab.',
+      'Manage tabs: "list" shows all tabs with ids (isolated ones are marked); "new" opens a URL in a new tab; ' +
+      '"select" makes a tab active; "close" closes a tab. Tabs share the default session (cookies/logins) ' +
+      'unless created with isolated:true, which uses a throwaway partition cleared on close.',
     inputSchema: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['list', 'new', 'select', 'close'], description: 'Tab operation' },
         url: { type: 'string', description: '(action=new) URL to open' },
+        isolated: { type: 'boolean', description: '(action=new) Use a throwaway session partition instead of the shared one (default: settings)' },
         tabId: { type: 'string', description: '(action=select/close) target tab id' }
       },
       required: ['action']
@@ -938,15 +964,17 @@ export function buildTools(
       if (action === 'list') {
         const lines = tabs.infos().map(
           (t, i) =>
-            `${i + 1}. [${t.id}]${t.active ? ' ★活动' : ''} ${t.title}\n   ${t.url}`
+            `${i + 1}. [${t.id}]${t.active ? ' ★活动' : ''}${t.isolated ? ' 🔒隔离' : ''} ${t.title}\n   ${t.url}`
         )
         return { content: [text(lines.length ? `共 ${lines.length} 个标签页：\n${lines.join('\n')}` : '（无标签页）')] }
       }
       if (action === 'new') {
         const url = String(args['url'] ?? '')
         const target = url ? normalizeUrl(url, searchUrl, newtabUrl) : newtabUrl
-        const tab = tabs.createTab(target)
-        return { content: [text(`已新建标签页: [${tab.id}] ${target}`)] }
+        const isolated = typeof args['isolated'] === 'boolean' ? args['isolated'] : undefined
+        const tab = tabs.createTab(target, true, isolated)
+        const note = tab.isolated ? '（隔离会话，关闭时清除数据）' : '（共享会话）'
+        return { content: [text(`已新建标签页: [${tab.id}] ${target} ${note}`)] }
       }
       if (action === 'select') {
         const id = String(args['tabId'] ?? '')
@@ -963,6 +991,172 @@ export function buildTools(
         return { content: [text(`已关闭: [${id}] ${t.title}`)] }
       }
       throw new ActionError(`未知 action: ${action}`)
+    }
+  })
+
+tools.push({
+    name: 'browser_fill_form',
+    title: '批量填写表单',
+    description:
+      'Fill multiple form fields in one call instead of one browser_type per field. Each item takes a ref plus ' +
+      'either `value` (text input / select option value), `label` (select by visible label), or `checked` ' +
+      '(checkbox / radio). Fields are filled in order and the resulting snapshot is returned once at the end, ' +
+      'which makes multi-field forms far cheaper than repeated single-field calls.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fields: {
+          type: 'array',
+          description: 'Fields to fill, in order',
+          items: {
+            type: 'object',
+            properties: {
+              ref: { type: 'string', description: 'Element ref' },
+              value: { type: 'string', description: 'Text to type, or option value for a <select>' },
+              label: { type: 'string', description: 'Option visible label for a <select>' },
+              checked: { type: 'boolean', description: 'Desired checked state for checkbox/radio' },
+              submit: { type: 'boolean', description: 'Press Enter after typing this field (default false)' }
+            },
+            required: ['ref']
+          }
+        },
+        snapshot: { type: 'boolean', description: 'Return an incremental snapshot after all fields (default true)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      },
+      required: ['fields']
+    },
+    handler: async (args) => {
+      approvals?.assertRunning()
+      const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      const fields = Array.isArray(args['fields']) ? (args['fields'] as Record<string, unknown>[]) : []
+      if (!fields.length) throw new ActionError('fields 不能为空')
+      const done: string[] = []
+      for (const field of fields) {
+        approvals?.assertRunning()
+        const ref = String(field['ref'] ?? '')
+        if (!ref) throw new ActionError('每个字段都必须提供 ref')
+        if (typeof field['checked'] === 'boolean') {
+          // 复选框/单选框：仅在状态不一致时点击，避免把已勾选的又取消
+          const state = (await tab.view.webContents.executeJavaScript(
+            `(() => { const el = (window.__aaRefs || {})[${JSON.stringify(ref)}]; if (!el) return { ok: false }; return { ok: true, checked: !!el.checked, type: (el.type || '').toLowerCase() } })()`,
+            false
+          )) as { ok: boolean; checked?: boolean; type?: string }
+          if (!state?.ok) throw new ActionError(`找不到元素 ${ref}；请刷新页面快照后重试。`)
+          if (state.type !== 'checkbox' && state.type !== 'radio') {
+            throw new ActionError(`元素 ${ref} 不是复选框/单选框（是 ${state.type || 'unknown'}）`)
+          }
+          if (state.checked !== field['checked']) {
+            await doClick(tab, ref, false)
+          }
+          done.push(`${ref} = ${field['checked'] ? '已勾选' : '未勾选'}`)
+          continue
+        }
+        if (field['label'] !== undefined || (field['value'] !== undefined && !field['submit'])) {
+          // <select> 走下拉选择
+          const probe = (await tab.view.webContents.executeJavaScript(
+            `(() => { const el = (window.__aaRefs || {})[${JSON.stringify(ref)}]; return el ? el.tagName.toLowerCase() : '' })()`,
+            false
+          )) as string
+          if (probe === 'select') {
+            const r = await doSelectOption(tab, ref, {
+              value: field['value'] as string | undefined,
+              label: field['label'] as string | undefined,
+              wantSnapshot: false
+            })
+            done.push(`${ref} → ${r.selected}`)
+            continue
+          }
+        }
+        const r = await doType(tab, ref, String(field['value'] ?? ''), {
+          submit: !!field['submit'],
+          wantSnapshot: false
+        })
+        done.push(`${ref} ← ${String(field['value'] ?? '').slice(0, 40)}`)
+      }
+      const want = args['snapshot'] !== false
+      const snapshot = want ? await captureSnapshot(tab.view.webContents) : undefined
+      return {
+        content: [text(withSnap(`已填写 ${done.length} 个字段：\n${done.join('\n')}`, snapshot, want))]
+      }
+    }
+  })
+
+  tools.push({
+    name: 'browser_dialogs',
+    title: '页面对话框记录',
+    description:
+      'Read (and optionally clear) dialogs the page tried to open — alert / confirm / prompt. ' +
+      'Dialogs are intercepted instead of blocking: confirm always returns false, prompt returns null. ' +
+      'Use this to detect "are you sure?" style interruptions without stalling the automation.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        clear: { type: 'boolean', description: 'Clear the recorded list after reading (default false)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      }
+    },
+    handler: async (args) => {
+      const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      const list = await readDialogs(tab.view.webContents)
+      if (args['clear'] === true) await clearDialogs(tab.view.webContents)
+      if (!list.length) return { content: [text('（页面未弹出任何对话框）')] }
+      const lines = list.map((d, i) => {
+        const def = d.type === 'prompt' && d.defaultValue != null ? ` [默认值: ${d.defaultValue}]` : ''
+        return `${i + 1}. [${d.type}] ${d.message}${def}`
+      })
+      return {
+        content: [
+          text(
+            `共 ${list.length} 条对话框记录（已拦截，未阻塞页面；confirm→false，prompt→null）：\n${lines.join('\n')}`
+          )
+        ]
+      }
+    }
+  })
+
+  tools.push({
+    name: 'browser_evaluate',
+    title: '执行 JavaScript',
+    description:
+      'Evaluate a JavaScript expression in the page (or on a specific element by ref) and return the result ' +
+      'as JSON. Runs in the page main world. Use for values not exposed by snapshot/extract, e.g. reading a ' +
+      'computed style or a JS variable. The expression must be a single expression or IIFE.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        expression: { type: 'string', description: 'JavaScript expression to evaluate, e.g. "document.title" or "(() => {...})()"' },
+        ref: { type: 'string', description: 'Element ref to bind as the `element` variable (optional)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      },
+      required: ['expression']
+    },
+    handler: async (args) => {
+      const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      const expression = String(args['expression'] ?? '')
+      if (!expression.trim()) throw new ActionError('expression 不能为空')
+      const ref = args['ref'] ? String(args['ref']) : ''
+      const source = ref
+        ? `(() => { const element = (window.__aaRefs || {})[${JSON.stringify(ref)}]; if (!element) return { __aaError: '找不到元素 ${ref}' }; return (${expression}) })()`
+        : `(() => { return (${expression}) })()`
+      let value: unknown
+      try {
+        value = await tab.view.webContents.executeJavaScript(source, false)
+      } catch (err) {
+        throw new ActionError(`执行失败：${(err as Error).message}`)
+      }
+      if (value && typeof value === 'object' && '__aaError' in (value as Record<string, unknown>)) {
+        throw new ActionError(String((value as Record<string, unknown>)['__aaError']))
+      }
+      let rendered: string
+      try {
+        rendered = JSON.stringify(value, null, 2)
+      } catch {
+        rendered = String(value)
+      }
+      if (rendered === undefined) rendered = String(value)
+      const MAX = 20000
+      if (rendered.length > MAX) rendered = rendered.slice(0, MAX) + '\n…（结果过长已截断）'
+      return { content: [text(rendered)] }
     }
   })
 

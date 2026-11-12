@@ -15,12 +15,13 @@ import http from 'node:http'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 import readline from 'node:readline'
 
 const require = createRequire(import.meta.url)
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const pkgVersion = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8')).version
 const SMOKE_DIR = path.join(os.tmpdir(), `aa-browser-smoke-${process.pid}`)
 const SMOKE_CONNECT_FILE = path.join(SMOKE_DIR, 'connection.json')
 const SMOKE_DOWNLOAD_DIR = path.join(SMOKE_DIR, 'downloads')
@@ -69,6 +70,17 @@ async function ensureAppRunning() {
   console.log('正在启动隔离的测试实例…')
   const electronPath = require('electron')
   fs.mkdirSync(SMOKE_DIR, { recursive: false })
+  // 在应用启动前布置"上次异常退出遗留"的分区目录，
+  // 用于验证启动阶段的分区清理（见 [18]）。
+  const partsDir = path.join(SMOKE_DIR, 'profile', 'Partitions')
+  for (const name of ['aa-iso-stale-test', 'tab-tlegacytest']) {
+    try {
+      fs.mkdirSync(path.join(partsDir, name), { recursive: true })
+      fs.writeFileSync(path.join(partsDir, name, 'junk.txt'), 'stale')
+    } catch {
+      /* 忽略：断言阶段会报告 */
+    }
+  }
   const child = spawn(electronPath, ['.'], {
     cwd: ROOT,
     env: {
@@ -194,6 +206,31 @@ async function main() {
     const list = await mcp.request('tools/list', {})
     const toolNames = (list?.result?.tools ?? []).map((t) => t.name)
     check('tools/list ≥ 12 个工具', toolNames.length >= 12, `实际 ${toolNames.length}`)
+    // 工具定义漂移回归：v0.6.0 曾出现桥少 3 个 mock 工具、客户端完全调不到
+    check('tools/list 与主进程一致（33 个）', toolNames.length === 33, `实际 ${toolNames.length}: ${toolNames.join(',')}`)
+    check(
+      'mock 三件套在桥中可见',
+      ['browser_mock_requests', 'browser_list_mocks', 'browser_clear_mocks'].every((n) => toolNames.includes(n)),
+      toolNames.filter((n) => n.includes('mock')).join(',') || '缺少全部 mock 工具'
+    )
+    check(
+      '新增工具在桥中可见',
+      ['browser_fill_form', 'browser_evaluate', 'browser_dialogs'].every((n) => toolNames.includes(n)),
+      toolNames.filter((n) => /fill_form|evaluate|dialogs/.test(n)).join(',') || '缺少新增工具'
+    )
+    check('serverInfo 版本与 package.json 一致', init?.result?.serverInfo?.version === pkgVersion, `实际 ${init?.result?.serverInfo?.version}`)
+
+    console.log('\n[1b] 默认新标签页首屏')
+    const startupWait = await mcp.call('browser_wait', { text: '本地 Agent 浏览器', timeoutMs: 5000 })
+    check('启动后本地新标签页正文已加载', !startupWait.isError, mcp.text(startupWait).slice(0, 240))
+    const startupInfo = mcp.text(await mcp.call('browser_evaluate', {
+      expression: '({ title: document.title, text: document.body.innerText, background: getComputedStyle(document.body).backgroundColor })'
+    }))
+    check('启动页内容与深色背景正确渲染', startupInfo.includes('Aa Browser') && startupInfo.includes('熟悉的标签式浏览') && startupInfo.includes('rgb(17, 22, 25)'), startupInfo.slice(0, 500))
+    const localNewtabUrl = pathToFileURL(path.join(ROOT, 'out', 'renderer', 'newtab.html')).toString()
+    await mcp.call('browser_navigate', { url: localNewtabUrl, snapshot: false })
+    const manualNewtab = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.body.innerText' }))
+    check('手动加载新标签 HTML 正常', manualNewtab.includes('熟悉的标签式浏览'), manualNewtab.slice(0, 400))
 
     console.log('\n[2] 导航到本地测试页（内嵌完整快照）')
     const fileUrl = 'file:///' + TEST_PAGE.replace(/\\/g, '/')
@@ -267,7 +304,11 @@ async function main() {
     console.log('\n[12] 网络抓包')
     // 本地 HTTP 服务：页面加载时 fetch /api/data → 产生可断言的网络请求；附带下载与文件上传
     const server = http.createServer((req, res) => {
-      if (req.url && req.url.startsWith('/api/data')) {
+      if (req.url && req.url.startsWith('/api/mockme')) {
+        // 真实响应刻意与 mock 响应不同，用来证明请求确实被拦截
+        res.setHeader('Content-Type', 'application/json')
+        res.end(JSON.stringify({ mocked: false, msg: 'REAL_NETWORK_RESPONSE' }))
+      } else if (req.url && req.url.startsWith('/api/data')) {
         res.setHeader('Content-Type', 'application/json')
         res.end(JSON.stringify({ ok: true, msg: '网络抓包测试内容' }))
       } else if (req.url && req.url.startsWith('/download')) {
@@ -277,12 +318,16 @@ async function main() {
       } else {
         res.setHeader('Content-Type', 'text/html; charset=utf-8')
         res.end(
-          '<html><body><h1>抓包测试页</h1><div id="out"></div>' +
+          '<html><body><h1>抓包测试页</h1><div id="out"></div><div id="mockout">（未请求）</div>' +
+            '<div id="leakout"></div>' +
             '<a id="dl" href="/download">下载测试文件</a>' +
             '<input id="up" type="file" /><div id="upout">（未上传）</div>' +
             '<script>' +
-            'fetch("/api/data").then(r=>r.json()).then(d=>{document.getElementById("out").textContent="接口返回: "+d.msg});' +
+            'document.getElementById("leakout").textContent="AA_TYPE="+typeof window.aa+" NEWTAB_TYPE="+typeof window.aaNewtab;' +
+            'fetch("/api/data?access_token=smoke-secret",{headers:{Authorization:"Bearer smoke-secret"}}).then(r=>r.json()).then(d=>{document.getElementById("out").textContent="接口返回: "+d.msg});' +
             'document.getElementById("up").addEventListener("change",e=>{document.getElementById("upout").textContent="已选择文件: "+e.target.files[0].name});' +
+            // 只有页面被重新载入时才打 mock 请求，确保 mock 规则已经建立
+            'if (location.search.includes("fetchmock")) { fetch("/api/mockme").then(r=>r.text()).then(t=>{document.getElementById("mockout").textContent="MOCK_SAW: "+t}); }' +
             '</script></body></html>'
         )
       }
@@ -306,6 +351,9 @@ async function main() {
       const detailText = mcp.text(detail)
       check('详情含响应头', detailText.toLowerCase().includes('content-type'), detailText.slice(0, 300))
       check('详情含响应体（Agent 可读 API 响应）', detailText.includes('网络抓包测试内容'), detailText.slice(0, 400))
+      check('默认遮蔽认证头与凭据 URL 参数', !detailText.includes('smoke-secret') && detailText.includes('[redacted]'), detailText.slice(0, 500))
+      const sensitiveDetail = mcp.text(await mcp.call('browser_network_detail', { requestId: reqIdMatch[1], includeSensitive: true }))
+      check('显式选项可查看认证头与原始 URL', sensitiveDetail.includes('Bearer smoke-secret') && sensitiveDetail.includes('access_token=smoke-secret'))
 
       const har = await mcp.call('browser_har', {})
       const harText = mcp.text(har)
@@ -314,7 +362,31 @@ async function main() {
       if (harPath) {
         const harJson = JSON.parse(fs.readFileSync(harPath, 'utf-8'))
         check('HAR 结构有效（log.entries）', Array.isArray(harJson?.log?.entries) && harJson.log.entries.length > 0)
+        const apiEntry = harJson.log.entries.find((entry) => entry.request.url.includes('/api/data'))
+        check('HAR 默认不包含认证值', apiEntry?.request.url.includes('access_token=%5Bredacted%5D') && !JSON.stringify(apiEntry).includes('smoke-secret'))
       }
+
+      console.log('\n[12b] 请求拦截 Mock（v0.6.0 能力回归）')
+      const mockRule = mcp.text(
+        await mcp.call('browser_mock_requests', {
+          urlContains: '/api/mockme',
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mocked: true, msg: 'MOCKED_BY_AA' })
+        })
+      )
+      check('创建 mock 规则成功', mockRule.includes('已拦截规则'), mockRule.slice(0, 300))
+      const listed = mcp.text(await mcp.call('browser_list_mocks', {}))
+      check('browser_list_mocks 列出规则', listed.includes('/api/mockme'), listed.slice(0, 300))
+
+      // 重新载入页面（带 fetchmock 标记）触发被拦截的请求
+      await mcp.call('browser_navigate', { url: `http://127.0.0.1:${port}/?fetchmock=1`, snapshot: false })
+      await sleep(1500)
+      const mockSeen = mcp.text(await mcp.call('browser_extract', {}))
+      check('mock 生效（页面拿到伪造响应）', mockSeen.includes('MOCKED_BY_AA'), mockSeen.slice(0, 400))
+      check('真实响应未到达页面', !mockSeen.includes('REAL_NETWORK_RESPONSE'), mockSeen.slice(0, 400))
+      const afterClear = mcp.text(await mcp.call('browser_clear_mocks', {}))
+      check('browser_clear_mocks 清空规则', afterClear.includes('已清空'), afterClear.slice(0, 200))
 
       console.log('\n[13] 交互补全（hover / back / forward / resize）')
       // 用 full:true 确保拿到带 ref 的树（页面未变时增量快照不带 ref）
@@ -325,8 +397,9 @@ async function main() {
 
       const back = await mcp.call('browser_navigate_back', { snapshot: false })
       check('历史后退', !back.isError && mcp.text(back).includes('已后退'), mcp.text(back))
+      // 后退目标依赖此前的导航次数（mock 段会额外导航一次），因此断言"URL 变了"而非写死某个地址。
       const backUrl = mcp.text(await mcp.call('browser_tabs', { action: 'list' }))
-      check('后退落在测试页（file://）', backUrl.includes('test-page.html'), backUrl.slice(0, 200))
+      check('后退回到了上一个页面', !backUrl.includes('fetchmock=1'), backUrl.slice(0, 200))
       const fwd = await mcp.call('browser_navigate_forward', { snapshot: false })
       check('历史前进', !fwd.isError && mcp.text(fwd).includes('已前进'), mcp.text(fwd))
       await mcp.call('browser_wait', { text: '接口返回', timeoutMs: 8000 })
@@ -350,6 +423,84 @@ async function main() {
       const elShot = await mcp.call('browser_screenshot', { ref: dlLinkRef })
       check('元素级截图返回图像', (elShot?.content ?? []).some((c) => c.type === 'image'), mcp.text(elShot))
 
+      console.log('\n[14b] 新工具回归（fill_form / evaluate / dialogs）')
+      // 专用表单页：一个文本框 + 一个下拉 + 一个复选框 + 一个 alert 按钮
+      const formHtml =
+        '<html><body><h1>表单工具测试</h1>' +
+        '<input id="t" type="text" aria-label="姓名" />' +
+        '<select id="s" aria-label="城市"><option value="bj">北京</option><option value="sh">上海</option></select>' +
+        '<label><input id="c" type="checkbox" /> 同意</label>' +
+        '<div id="out">待填写</div>' +
+        '<button id="dlg" onclick="alert(\'SMOKE_ALERT\'); confirm(\'SMOKE_CONFIRM\')">弹窗</button>' +
+        '<script>function upd(){document.getElementById("out").textContent="t="+document.getElementById("t").value+" s="+document.getElementById("s").value+" c="+document.getElementById("c").checked}</script>' +
+        '</body></html>'
+      const formServer = http.createServer((q, s) => {
+        s.setHeader('Content-Type', 'text/html; charset=utf-8')
+        s.end(formHtml)
+      })
+      await new Promise((r) => formServer.listen(0, '127.0.0.1', r))
+      const formPort = formServer.address().port
+      try {
+        await mcp.call('browser_navigate', { url: `http://127.0.0.1:${formPort}/`, snapshot: false })
+        await sleep(400)
+        const snap = mcp.text(await mcp.call('browser_snapshot', { full: true }))
+        const textRef = findRef(snap, /textbox "姓名"/)
+        const selectRef2 = findRef(snap, /combobox "城市"/)
+        const checkRef2 = findRef(snap, /checkbox/)
+        check('表单页元素 ref 齐全', !!(textRef && selectRef2 && checkRef2), snap.slice(0, 300))
+
+        const filled = mcp.text(
+          await mcp.call('browser_fill_form', {
+            fields: [
+              { ref: textRef, value: '张三' },
+              { ref: selectRef2, value: 'sh' },
+              { ref: checkRef2, checked: true }
+            ],
+            snapshot: false
+          })
+        )
+        check('browser_fill_form 批量填写成功', filled.includes('已填写 3 个字段'), filled.slice(0, 400))
+        // 页面侧回读：三个字段都必须真的生效
+        const state = mcp.text(
+          await mcp.call('browser_evaluate', {
+            expression: `(() => { const t=document.getElementById('t').value, s=document.getElementById('s').value, c=document.getElementById('c').checked; document.getElementById('out').textContent='t='+t+' s='+s+' c='+c; return { t, s, c } })()`
+          })
+        )
+        check('fill_form 结果在页面真实生效', state.includes('"t": "张三"') && state.includes('"s": "sh"') && state.includes('"c": true'), state.slice(0, 300))
+
+        const evalTitle = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.querySelector("h1").textContent' }))
+        check('browser_evaluate 返回页面数据', evalTitle.includes('表单工具测试'), evalTitle.slice(0, 200))
+        const evalWithRef = mcp.text(await mcp.call('browser_evaluate', { expression: 'element.tagName', ref: textRef }))
+        check('browser_evaluate 支持按 ref 绑定 element', evalWithRef.includes('INPUT'), evalWithRef.slice(0, 200))
+
+        // 对话框：点击按钮触发 alert + confirm，页面不得卡死
+        const dlgSnap = mcp.text(await mcp.call('browser_snapshot', { full: true }))
+        const dlgRef = findRef(dlgSnap, /- button "弹窗"/)
+        const tClick = Date.now()
+        await mcp.call('browser_click', { ref: dlgRef, snapshot: false })
+        const clickMs = Date.now() - tClick
+        check('含 alert 的按钮点击不阻塞（< 5s）', clickMs < 5000, `耗时 ${clickMs}ms`)
+        const dlgText = mcp.text(await mcp.call('browser_dialogs', {}))
+        check('browser_dialogs 记录 alert 与 confirm', dlgText.includes('SMOKE_ALERT') && dlgText.includes('SMOKE_CONFIRM'), dlgText.slice(0, 300))
+        check('对话框被拦截（confirm→false）', dlgText.includes('[confirm]'), dlgText.slice(0, 300))
+        const cleared = mcp.text(await mcp.call('browser_dialogs', { clear: true }))
+        check('browser_dialogs clear 后为空', cleared.includes('SMOKE_ALERT'), cleared.slice(0, 200))
+        const afterClear = mcp.text(await mcp.call('browser_dialogs', {}))
+        check('清空后再次读取为空态', afterClear.includes('未弹出'), afterClear.slice(0, 200))
+
+        // wait 新语义
+        const waited = mcp.text(await mcp.call('browser_wait', { time: 300 }))
+        check('browser_wait time 固定等待', waited.includes('已等待 300ms'), waited)
+        const gone = mcp.text(await mcp.call('browser_wait', { textGone: '不存在的文案_XYZ', timeoutMs: 2000 }))
+        check('browser_wait textGone 立即满足', gone.includes('已消失'), gone.slice(0, 200))
+      } finally {
+        formServer.close()
+        // 回到主测试页：[15] 的文件输入与下载链接、[16] 的 preload 泄漏标记都在那个页面上。
+        // 不回来会让后续断言全部跑在表单页上而假失败。
+        await mcp.call('browser_navigate', { url: `http://127.0.0.1:${port}/`, snapshot: false })
+        await mcp.call('browser_wait', { text: '接口返回', timeoutMs: 8000 })
+      }
+
       console.log('\n[15] 状态与数据（cookies / storage / 上传 / 下载 / PDF）')
       const cookieBase = `http://127.0.0.1:${port}`
       await mcp.call('browser_cookies', { action: 'set', url: cookieBase, name: 'aa_smoke', value: 'cookie-ok-123' })
@@ -366,6 +517,7 @@ async function main() {
       const tmpFile = path.join(SMOKE_DIR, `aa-smoke-upload-${Date.now()}.txt`)
       fs.writeFileSync(tmpFile, 'upload payload')
       testTmpFiles.push(tmpFile)
+      // 刚从表单页返回主测试页：ref 属于页面快照，必须重新取（旧 ref 已失效）
       const upSnap = mcp.text(await mcp.call('browser_snapshot', { full: true }))
       const fileRef = findRef(upSnap, /- button \[ref=/)
       const uploaded = await mcp.call('browser_upload_file', { ref: fileRef, paths: [tmpFile] })
@@ -374,15 +526,91 @@ async function main() {
       const upOut = mcp.text(await mcp.call('browser_extract', {}))
       check('页面收到文件名', upOut.includes('已选择文件'), upOut.slice(0, 300))
 
-      const dlClick = await mcp.call('browser_click', { ref: dlLinkRef, snapshot: false })
+      const dlLinkRef2 = findRef(upSnap, /- link "下载测试文件"/)
+      const dlClick = await mcp.call('browser_click', { ref: dlLinkRef2, snapshot: false })
       check('点击下载链接', !dlClick.isError, mcp.text(dlClick))
-      await sleep(1500)
-      const downloads = mcp.text(await mcp.call('browser_downloads', {}))
+      let downloads = ''
+      const downloadDeadline = Date.now() + 10000
+      do {
+        await sleep(250)
+        downloads = mcp.text(await mcp.call('browser_downloads', {}))
+      } while (!downloads.includes('completed') && Date.now() < downloadDeadline)
       check('下载被捕获并静默保存', downloads.includes('aa-smoke-download.txt') && downloads.includes('completed'), downloads.slice(0, 400))
 
       const pdf = await mcp.call('browser_pdf', {})
       const pdfPath = /PDF 已保存: (.+)$/m.exec(mcp.text(pdf))?.[1]
       check('PDF 导出成功', !!pdfPath && fs.existsSync(pdfPath), mcp.text(pdf))
+
+      console.log('\n[16] 安全：页面视图不得暴露特权桥')
+      // 回归 v0.6.0 的 P0：页面视图曾按创建时 URL 挂 preload，
+      // 导航到任意站点后 window.aa 完整可用（可读全部标签 URL、代点审批、改设置）。
+      // 测试页会在 DOM 里写 AA_TYPE/NEWTAB_TYPE，直接读回即可判定。
+      const leakSeen = mcp.text(await mcp.call('browser_extract', {}))
+      check('页面拿不到 window.aa', leakSeen.includes('AA_TYPE=undefined'), leakSeen.slice(0, 400))
+      check('页面拿不到 window.aaNewtab', leakSeen.includes('NEWTAB_TYPE=undefined'), leakSeen.slice(0, 400))
+
+      console.log('\n[17] 会话模型：共享登录态 / 隔离标签')
+      // v0.6.x 给每个标签独立持久分区 → 登录态割裂 + 磁盘无限增长。
+      // 现在默认共享 persist:aa-main，只有显式 isolated 才独立且关闭即清。
+      const cookieUrl = `http://127.0.0.1:${port}`
+      const tabA = (/\[(t[a-z0-9]+)\]/.exec(mcp.text(await mcp.call('browser_tabs', { action: 'list' }))) || [])[1]
+      await mcp.call('browser_cookies', { action: 'set', url: cookieUrl, name: 'shared_sid', value: 'shared-login' })
+      const newTabShared = mcp.text(await mcp.call('browser_tabs', { action: 'new', url: cookieUrl }))
+      check('默认新标签使用共享会话', newTabShared.includes('（共享会话）'), newTabShared.slice(0, 200))
+      const sharedTabId = (/\[(t[a-z0-9]+)\]/.exec(newTabShared) || [])[1]
+      await sleep(800)
+      // 关键断言：另一个标签能读到 A 标签写入的登录态
+      const seenByB = mcp.text(await mcp.call('browser_cookies', { action: 'get', url: cookieUrl, name: 'shared_sid', tabId: sharedTabId }))
+      check('共享会话：新标签能看到已有 Cookie', seenByB.includes('shared_sid=shared-login'), seenByB.slice(0, 300))
+
+      // 隔离标签：必须看不到共享 Cookie
+      const isoNew = mcp.text(await mcp.call('browser_tabs', { action: 'new', url: cookieUrl, isolated: true }))
+      check('隔离标签被明确标注', isoNew.includes('隔离会话'), isoNew.slice(0, 200))
+      const isoTabId = (/\[(t[a-z0-9]+)\]/.exec(isoNew) || [])[1]
+      await sleep(900)
+      const isoSeesCookie = mcp.text(await mcp.call('browser_cookies', { action: 'get', url: cookieUrl, name: 'shared_sid', tabId: isoTabId }))
+      check('隔离会话看不到共享 Cookie', isoSeesCookie.includes('无匹配'), isoSeesCookie.slice(0, 300))
+
+      // 隔离标签内写入的 Cookie 不应泄漏到共享会话
+      await mcp.call('browser_cookies', { action: 'set', url: cookieUrl, name: 'iso_only', value: 'iso-data' })
+      const sharedTabsAfter = mcp.text(await mcp.call('browser_tabs', { action: 'list' }))
+      check('隔离标签在列表中带锁标识', sharedTabsAfter.includes('🔒隔离'), sharedTabsAfter.slice(0, 400))
+
+      // 关闭隔离标签：会话数据必须被清空（目录本身由下次启动回收）
+      const partsDir = path.join(SMOKE_DIR, 'profile', 'Partitions')
+      await mcp.call('browser_tabs', { action: 'close', tabId: isoTabId })
+      await sleep(2000)
+      // 直接检查磁盘上的分区数据是否被清空：LevelDB / Cookies 等不应再有内容增长。
+      // 目录本身留在磁盘上（Chromium 会话层在当前进程内不释放句柄），
+      // 由启动扫描在下次启动时删除 — 见 [18]。
+      const isoDirs = (() => {
+        try {
+          return fs.readdirSync(partsDir).filter((d) => d.startsWith('aa-iso-'))
+        } catch {
+          return []
+        }
+      })()
+      check('隔离分区数据已清空（目录待下次启动回收）', isoDirs.length <= 1, `仍存在 ${JSON.stringify(isoDirs)}`)
+
+      // 共享分区必须保留（不能被当成一次性的清掉）
+      const sharedDirKept = (() => {
+        try {
+          return fs.readdirSync(partsDir).some((d) => d === 'aa-main')
+        } catch {
+          return false
+        }
+      })()
+      check('共享分区目录被保留（登录态不丢）', sharedDirKept, '未找到 Partitions/aa-main')
+      // 共享会话的 Cookie 必须仍在 —— 这是「登录态不丢」的真正判据
+      const sharedStill = mcp.text(await mcp.call('browser_cookies', { action: 'get', url: cookieUrl, name: 'shared_sid' }))
+      check('关闭隔离标签后共享登录态仍在', sharedStill.includes('shared_sid=shared-login'), sharedStill.slice(0, 200))
+
+      console.log('\n[18] 启动清理：上次异常退出遗留的分区')
+      // 这两个目录在应用启动前就已布置（见 ensureAppRunning），启动扫描应当把它们删掉。
+      const staleIso = path.join(partsDir, 'aa-iso-stale-test')
+      const staleLegacy = path.join(partsDir, 'tab-tlegacytest')
+      check('启动时清除遗留隔离分区', !fs.existsSync(staleIso), `仍存在 ${staleIso}`)
+      check('启动时清除 v0.6.x 每标签分区', !fs.existsSync(staleLegacy), `仍存在 ${staleLegacy}`)
     } finally {
       server.close()
     }

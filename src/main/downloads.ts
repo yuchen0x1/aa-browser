@@ -58,7 +58,10 @@ export class DownloadTracker {
         /* 忽略 */
       }
       const stamp = Date.now().toString(36)
-      const filename = item.getFilename() || `download-${stamp}`
+      const rawFilename = item.getFilename() || `download-${stamp}`
+      // Chromium normally supplies a basename, but a hostile server can still
+      // return separators or traversal segments in Content-Disposition.
+      const filename = path.basename(rawFilename).replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_').trim() || `download-${stamp}`
       const savePath = path.join(dir, `${stamp}-${filename}`)
       item.setSavePath(savePath)
 

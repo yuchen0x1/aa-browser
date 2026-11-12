@@ -10,48 +10,48 @@
   <body>
     <div id="app">
       <div id="tabstrip">
-        <div id="tabs"></div>
-        <button id="btn-newtab" title="新建标签页 (Ctrl+T)">
+        <div id="tabs" role="tablist" aria-label="浏览器标签页"></div>
+        <button id="btn-newtab" type="button" title="新建标签页 (Ctrl+T)" aria-label="新建标签页">
           <svg width="14" height="14" viewBox="0 0 14 14"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
         </button>
         <div class="win-spacer"></div>
       </div>
       <div id="toolbar">
-        <button id="btn-back" class="navbtn" title="后退 (Alt+←)">
+        <button id="btn-back" type="button" class="navbtn" title="后退 (Alt+←)" aria-label="后退">
           <svg width="16" height="16" viewBox="0 0 16 16"><path d="M10.5 2.5L5 8l5.5 5.5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
-        <button id="btn-forward" class="navbtn" title="前进 (Alt+→)">
+        <button id="btn-forward" type="button" class="navbtn" title="前进 (Alt+→)" aria-label="前进">
           <svg width="16" height="16" viewBox="0 0 16 16"><path d="M5.5 2.5L11 8l-5.5 5.5" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
-        <button id="btn-reload" class="navbtn" title="刷新 (F5)">
+        <button id="btn-reload" type="button" class="navbtn" title="刷新 (F5)" aria-label="刷新页面">
           <svg width="15" height="15" viewBox="0 0 16 16"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 1.5v3h-3" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
         <div id="omnibox-wrap">
           <span id="site-icon">
             <svg width="13" height="13" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" stroke="currentColor" fill="none" stroke-width="1.3"/><path d="M1.5 8h13M8 1.5c-4.5 4.5-4.5 8.5 0 13 4.5-4.5 4.5-8.5 0-13z" stroke="currentColor" fill="none" stroke-width="1.1"/></svg>
           </span>
-          <input id="omnibox" spellcheck="false" autocomplete="off" placeholder="搜索或输入网址 (Ctrl+L)" />
+        <input id="omnibox" aria-label="搜索或输入网址" spellcheck="false" autocomplete="off" placeholder="搜索或输入网址 (Ctrl+L)" />
           <div id="suggest-panel" class="suggest-panel" hidden>
             <div id="suggest-list" class="suggest-list"></div>
           </div>
         </div>
-        <button id="agent-pill" title="AI Agent 连接状态">○ 未连接</button>
-        <button id="btn-feed" class="navbtn" title="查看 Agent 实时活动日志">
+        <button id="agent-pill" type="button" aria-label="AI Agent 连接状态" title="AI Agent 连接状态">○ 未连接</button>
+        <button id="btn-feed" type="button" class="navbtn" aria-label="查看 Agent 活动记录" title="查看 Agent 实时活动日志">
           <svg width="15" height="15" viewBox="0 0 16 16"><path d="M2.5 4h11M2.5 8h11M2.5 12h7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
         </button>
-        <button id="btn-downloads" class="navbtn" title="下载">
+        <button id="btn-downloads" type="button" class="navbtn" aria-label="打开下载列表" title="下载">
           <svg width="15" height="15" viewBox="0 0 16 16"><path d="M8 1.5v8M4.5 6.5L8 10l3.5-3.5M2.5 13.5h11" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
-        <button id="btn-settings" class="navbtn" title="设置">
+        <button id="btn-settings" type="button" class="navbtn" aria-label="打开设置" title="设置">
           <svg width="15" height="15" viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2" stroke="currentColor" stroke-width="1.4" fill="none"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2M3.4 3.4l1.4 1.4M11.2 11.2l1.4 1.4M12.6 3.4l-1.4 1.4M4.8 11.2l-1.4 1.4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
         </button>
-        <button id="agent-stop" class="agent-stop" title="中断 Agent 的后续浏览器操作">中断</button>
+        <button id="agent-stop" type="button" class="agent-stop" title="中断 Agent 的后续浏览器操作">中断</button>
       </div>
       <div id="approval-panel" class="approval-panel" hidden></div>
       <div id="action-feed-drawer" class="action-feed-drawer" hidden>
         <div class="drawer-header">
           <span>Agent 实时活动日志</span>
-          <button id="btn-close-feed" class="drawer-close">×</button>
+          <button id="btn-close-feed" type="button" class="drawer-close" aria-label="关闭 Agent 活动记录">×</button>
         </div>
         <div id="action-feed-list" class="drawer-content">
           <div class="empty-feed">暂无 Agent 操作记录</div>
@@ -60,7 +60,7 @@
       <div id="download-panel" class="download-panel" hidden>
         <div class="drawer-header">
           <span>下载记录</span>
-          <button id="btn-close-dl" class="drawer-close">×</button>
+          <button id="btn-close-dl" type="button" class="drawer-close" aria-label="关闭下载列表">×</button>
         </div>
         <div id="download-list" class="drawer-content">
           <div class="empty-feed">暂无下载记录</div>
@@ -70,7 +70,7 @@
         <div class="settings-card">
           <div class="drawer-header">
             <span>设置</span>
-            <button id="btn-close-settings" class="drawer-close">×</button>
+            <button id="btn-close-settings" type="button" class="drawer-close" aria-label="关闭设置">×</button>
           </div>
           <div class="settings-body">
             <div class="settings-group">
@@ -87,8 +87,15 @@
             <div class="settings-group">
               <label class="settings-check">
                 <input type="checkbox" id="set-op-approval" />
-                <span>高危操作前弹人工确认（提交表单/下载/登录）</span>
+                <span>提交表单或输入后回车前弹人工确认</span>
               </label>
+            </div>
+            <div class="settings-group">
+              <label class="settings-check">
+                <input type="checkbox" id="set-isolated-sessions" />
+                <span>新建标签默认使用隔离会话（不共享登录态，关闭即清除）</span>
+              </label>
+              <div class="settings-hint">关闭时所有标签共享 Cookie / 登录态，与普通浏览器一致；需要测试脏数据时打开此项，或让 Agent 用 <code>browser_tabs new isolated:true</code> 单独开隔离标签。</div>
             </div>
             <div class="settings-group">
               <div class="settings-label">下载保存目录</div>
@@ -98,6 +105,33 @@
               <div class="settings-label">站点白名单</div>
               <textarea id="set-allowed-sites" class="settings-input settings-textarea" rows="4" placeholder="每行一个规则，例如：&#10;https://example.com&#10;https://*.example.org:8443"></textarea>
               <div class="settings-hint">填写后仅允许匹配的 HTTP/HTTPS 站点；留空表示不启用白名单。支持 *.example.com 子域名匹配。</div>
+            </div>
+            <div class="settings-group">
+              <div class="settings-label">软件更新</div>
+              <label class="settings-check">
+                <input type="checkbox" id="set-auto-update" />
+                <span>启动后自动检查更新</span>
+              </label>
+              <select id="set-update-channel" class="settings-select">
+                <option value="stable">稳定版</option>
+                <option value="beta">Beta 测试版</option>
+              </select>
+              <div id="update-status" class="settings-info" role="status" aria-live="polite">当前版本</div>
+              <div class="settings-actions">
+                <button id="btn-update-check" type="button" class="settings-btn">检查更新</button>
+                <button id="btn-update-action" type="button" class="settings-btn settings-btn-primary" hidden>下载更新</button>
+              </div>
+              <div class="settings-hint">更新来自 GitHub Releases；下载完成并通过 electron-updater 校验后才会安装。</div>
+            </div>
+            <div class="settings-group">
+              <div class="settings-label">连接 AI 客户端</div>
+              <div id="set-client-list" class="client-list" aria-live="polite" aria-busy="true">正在扫描已安装的 AI 客户端…</div>
+              <div class="settings-actions">
+                <button id="btn-client-scan" type="button" class="settings-btn">重新扫描</button>
+                <button id="btn-client-setup" type="button" class="settings-btn settings-btn-primary" disabled>写入所选客户端</button>
+              </div>
+              <div id="set-client-result" class="settings-hint" role="status" aria-live="polite"></div>
+              <div class="settings-hint">写入前自动备份，只改 aa-browser 一个键；写入成功不等于客户端已加载工具，仍需在客户端内确认。</div>
             </div>
             <div class="settings-group">
               <div class="settings-label">Agent 本地服务</div>

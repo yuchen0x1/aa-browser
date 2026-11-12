@@ -39,6 +39,7 @@ const FROM = argOf('--from')
 const CLIENTS = argOf('--clients')
 const CUSTOM_DIR = argOf('--dir')
 const NO_LAUNCH = has('--no-launch')
+const SHA256_ARG = argOf('--sha256')
 const HELP = has('--help') || has('-h')
 
 const log = (...a) => console.log(...a)
@@ -55,6 +56,7 @@ if (HELP || (!URL_ARG && !REPO && !FROM)) {
   log('  node install.mjs --repo <owner>/<repo>      # 从 GitHub Releases 取最新版')
   log('  node install.mjs --from <本地安装包/目录>')
   log('选项: --clients zcode,cursor,workbuddy  |  --dir <安装目录>  |  --no-launch')
+  log('      --sha256 <hex>  下载后校验安装包 SHA-256（--repo 会自动使用 Release digest）')
   process.exit(HELP ? 0 : 1)
 }
 
@@ -118,7 +120,51 @@ async function resolveFromRepo(repo) {
     (data.assets || []).find((a) => a.name.endsWith('.exe'))
   if (!asset) die(`Release ${data.tag_name ?? ''} 中没有 .exe 安装包`)
   log(`找到最新版: ${data.tag_name} → ${asset.name}`)
-  return asset['browser_download_url']
+  return { url: asset['browser_download_url'], digest: asset.digest, name: asset.name }
+}
+
+/**
+ * 校验下载的安装包。
+ *
+ * 安装器会被 AI Agent 逐字执行，而包体来自网络：没有校验就无法区分
+ * "官方资产"和"被替换/被中间人篡改的 exe"。GitHub Release API 会给出
+ * 形如 `sha256:<hex>` 的 digest，有则必须匹配；没有 digest 时至少
+ * 校验文件非空且是 PE 可执行文件头，并明确告警。
+ */
+async function verifyArtifact(file, expectedDigest, label) {
+  const size = fs.statSync(file).size
+  if (!size) die(`安装包为空：${file}`)
+  const head = Buffer.alloc(2)
+  const fd = fs.openSync(file, 'r')
+  try {
+    fs.readSync(fd, head, 0, 2, 0)
+  } finally {
+    fs.closeSync(fd)
+  }
+  if (head.toString('latin1') !== 'MZ') die(`安装包不是有效的 Windows 可执行文件（缺少 MZ 头）：${file}`)
+
+  if (!expectedDigest) {
+    log('⚠️  Release 未提供 digest，仅完成格式与大小校验；如需严格校验请用 --sha256 指定预期值。')
+    return
+  }
+  const m = /^(sha256):([0-9a-f]{64})$/i.exec(String(expectedDigest).trim())
+  if (!m) {
+    log(`⚠️  无法识别的 digest 格式（${expectedDigest}），跳过哈希校验。`)
+    return
+  }
+  const { createHash } = await import('node:crypto')
+  const hash = createHash('sha256')
+  await new Promise((resolve, reject) => {
+    fs.createReadStream(file)
+      .on('data', (c) => hash.update(c))
+      .on('end', resolve)
+      .on('error', reject)
+  })
+  const actual = hash.digest('hex')
+  if (actual !== m[2].toLowerCase()) {
+    die(`安装包哈希校验失败：${label}\n  预期 sha256:${m[2]}\n  实际 sha256:${actual}\n可能被篡改或下载不完整，已中止安装。`)
+  }
+  log(`🔒 已校验 SHA-256: ${actual.slice(0, 16)}…`)
 }
 
 function defaultInstallDir() {
@@ -166,6 +212,7 @@ async function main() {
 
   // 1. 取得安装包
   let artifact
+  let expectedDigest = null
   if (FROM) {
     artifact = path.resolve(FROM)
     if (!fs.existsSync(artifact)) die(`--from 路径不存在: ${artifact}`)
@@ -176,15 +223,22 @@ async function main() {
   } else if (URL_ARG && fs.existsSync(URL_ARG)) {
     artifact = path.resolve(URL_ARG) // 本地路径等同 --from
   } else if (REPO) {
-    const url = await resolveFromRepo(REPO)
+    const resolved = await resolveFromRepo(REPO)
+    expectedDigest = resolved.digest ?? null
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-browser-'))
     artifact = path.join(tmp, 'aa-browser-setup.exe')
-    await downloadTo(url, artifact)
+    await downloadTo(resolved.url, artifact)
   } else {
     die('请提供 --url / --repo / --from 之一')
   }
   if (artifact.toLowerCase().endsWith('.zip')) {
     die('暂不支持 zip 便携包，请使用 NSIS 安装包（.exe）')
+  }
+  // 显式 --sha256 优先于 Release 元数据；本地文件（--from / 本地 --url）没有远端 digest，
+  // 仍会校验 PE 头与非空，给了 --sha256 时再做哈希比对。
+  const digestToUse = SHA256_ARG ? `sha256:${String(SHA256_ARG).trim()}` : expectedDigest
+  if (!fs.statSync(artifact).isDirectory()) {
+    await verifyArtifact(artifact, digestToUse, artifact)
   }
 
   // 2. 安装：exe → NSIS 静默安装；目录 → 便携模式就地使用

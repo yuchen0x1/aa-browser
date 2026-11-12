@@ -14,11 +14,47 @@ import os from 'node:os'
 import path from 'node:path'
 import readline from 'node:readline'
 import process from 'node:process'
+import { fileURLToPath } from 'node:url'
 import WebSocket from 'ws'
 
-const VERSION = '0.6.0'
+/**
+ * 版本号单一来源：优先使用构建期注入的 package.json 版本；
+ * 源码直接运行时回退到逐级查找 package.json。
+ * 构建产物 out/bridge/mcp.cjs 位于 <root>/out/bridge/，源码位于 <root>/cli/。
+ *
+ * ⚠️ 注入走 globalThis 动态属性，而不是"常量与字面量比较"：
+ * 打包器会把 `X !== '0.0.0-dev'` 这种常量比较直接折叠掉，
+ * 连注入点一起删除，构建期就再也找不到可替换的位置。
+ */
+function readVersion() {
+  try {
+    const injected = globalThis.__AA_BRIDGE_VERSION__
+    if (typeof injected === 'string' && injected) return injected
+  } catch {
+    /* 宿主禁用 globalThis：继续回退 */
+  }
+  let dir = path.dirname(fileURLToPath(import.meta.url))
+  for (let i = 0; i < 5; i++) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf-8'))
+      if (pkg?.name === 'aa-browser' && typeof pkg.version === 'string') return pkg.version
+    } catch {
+      /* 继续向上 */
+    }
+    const up = path.dirname(dir)
+    if (up === dir) break
+    dir = up
+  }
+  return '0.0.0'
+}
+
+const VERSION = readVersion()
 const CONNECT_FILE = process.env['AA_BROWSER_CONNECTION_FILE'] || path.join(os.homedir(), '.aabrowser', 'connection.json')
-const CALL_TIMEOUT_MS = 60000
+/**
+ * 必须大于主进程的审批等待窗口（ApprovalManager 默认 120s），
+ * 否则用户还在审批时桥已超时并发出 cancel，审批结果永远无法送达。
+ */
+const CALL_TIMEOUT_MS = 180_000
 
 const log = (...a) => console.error('[aa-browser-mcp]', ...a)
 
@@ -153,15 +189,17 @@ const TOOL_DEFS = [
   {
     name: 'browser_wait',
     title: '等待',
-    description: 'Wait until the given text appears anywhere on the page (polls every 250ms). Use after submit/navigation to wait for results to render.',
+    description:
+      'Wait for one of: text to appear (`text`), text to disappear (`textGone`), or a fixed delay (`time`, ms). When both text and textGone are given, waits for whichever happens first. Polls every 250ms. Use after submit/navigation to wait for results, or after an action to wait for a loading state to clear.',
     inputSchema: {
       type: 'object',
       properties: {
-        text: { type: 'string', description: 'Text to wait for' },
+        text: { type: 'string', description: 'Wait until this text appears on the page' },
+        textGone: { type: 'string', description: 'Wait until this text disappears from the page' },
+        time: { type: 'number', description: 'Wait a fixed number of milliseconds (max 30000)' },
         timeoutMs: { type: 'number', description: 'Timeout in ms (default 10000, max 30000)' },
         tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      },
-      required: ['text']
+      }
     }
   },
   {
@@ -380,12 +418,13 @@ const TOOL_DEFS = [
     name: 'browser_network_detail',
     title: '网络请求详情',
     description:
-      'Inspect one captured network request: full request/response headers, status, size, duration, and (with body:true) the response body text. This is how the agent reads API responses for testing.',
+      'Inspect one captured network request: headers, status, size, duration, and (with body:true) the response body text. Authentication headers and credential-like URL parameters are redacted by default; pass includeSensitive:true only when needed.',
     inputSchema: {
       type: 'object',
       properties: {
         requestId: { type: 'string', description: 'Request id from browser_network_requests, e.g. "1234.5"' },
         body: { type: 'boolean', description: 'Include the response body (default false)' },
+        includeSensitive: { type: 'boolean', description: 'Include authentication headers and credential-like URL parameters (default false; use only when needed)' },
         tabId: { type: 'string', description: 'Tab id (default: active tab)' }
       },
       required: ['requestId']
@@ -395,11 +434,112 @@ const TOOL_DEFS = [
     name: 'browser_har',
     title: '导出 HAR',
     description:
-      'Export all captured network traffic of the active tab as a HAR 1.2 file (headers, timings, sizes; no response bodies) for manual analysis in DevTools/Fiddler. Saved under ~/.aabrowser/har/ by default.',
+      'Export captured network traffic as HAR 1.2 (no response bodies). Authentication headers and credential-like URL parameters are redacted by default; pass includeSensitive:true only when needed.',
     inputSchema: {
       type: 'object',
       properties: {
         path: { type: 'string', description: 'Output file path (default ~/.aabrowser/har/aa-<timestamp>.har)' },
+        includeSensitive: { type: 'boolean', description: 'Include authentication headers and credential-like URL parameters (default false; handle the exported file as sensitive)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      }
+    }
+  },
+  {
+    name: 'browser_mock_requests',
+    title: '请求拦截 Mock',
+    description:
+      'Intercept and mock HTTP requests of the active tab. Add or replace a rule that matches a URL substring (and optional method); matched requests are answered with a fake status/headers/body instead of reaching the network. Use to simulate API responses, error states, or stub third-party calls during testing. Pass action:"continue" to just observe (log) a matching request without answering it. Returns the rule id and current rules.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        urlContains: { type: 'string', description: 'Substring of request URL to match (case-insensitive), e.g. "/api/v1/quote"' },
+        method: { type: 'string', description: 'Only mock this HTTP method (e.g. GET/POST). Omit to match any.' },
+        status: { type: 'number', description: 'Fake response status code (default 200)' },
+        headers: { type: 'object', description: 'Fake response headers (optional)' },
+        body: { type: 'string', description: 'Fake response body text (default empty)' },
+        action: { type: 'string', enum: ['respond', 'continue'], description: 'respond=answer with mock (default); continue=just pass through' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      },
+      required: ['urlContains']
+    }
+  },
+  {
+    name: 'browser_list_mocks',
+    title: '列出 Mock 规则',
+    description: 'List all active request-mock rules of the active tab (id, matcher, status, hits).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      }
+    }
+  },
+  {
+    name: 'browser_clear_mocks',
+    title: '清空 Mock 规则',
+    description:
+      'Remove all (or one, by rule id) request-mock rules of the active tab and stop intercepting. Pass id to remove a single rule. Returns how many were removed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string', description: 'Rule id to remove (omit to clear all)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      }
+    }
+  },
+  {
+    name: 'browser_fill_form',
+    title: '批量填写表单',
+    description:
+      'Fill multiple form fields in one call instead of one browser_type per field. Each item takes a ref plus either `value` (text input / select option value), `label` (select by visible label), or `checked` (checkbox / radio). Fields are filled in order and the resulting snapshot is returned once at the end, which makes multi-field forms far cheaper than repeated single-field calls.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        fields: {
+          type: 'array',
+          description: 'Fields to fill, in order',
+          items: {
+            type: 'object',
+            properties: {
+              ref: { type: 'string', description: 'Element ref' },
+              value: { type: 'string', description: 'Text to type, or option value for a <select>' },
+              label: { type: 'string', description: 'Option visible label for a <select>' },
+              checked: { type: 'boolean', description: 'Desired checked state for checkbox/radio' },
+              submit: { type: 'boolean', description: 'Press Enter after typing this field (default false)' }
+            },
+            required: ['ref']
+          }
+        },
+        snapshot: { type: 'boolean', description: 'Return an incremental snapshot after all fields (default true)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      },
+      required: ['fields']
+    }
+  },
+  {
+    name: 'browser_evaluate',
+    title: '执行 JavaScript',
+    description:
+      'Evaluate a JavaScript expression in the page (or on a specific element by ref) and return the result as JSON. Runs in the page main world. Use for values not exposed by snapshot/extract, e.g. reading a computed style or a JS variable. The expression must be a single expression or IIFE.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        expression: { type: 'string', description: 'JavaScript expression to evaluate, e.g. "document.title" or "(() => {...})()"' },
+        ref: { type: 'string', description: 'Element ref to bind as the `element` variable (optional)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      },
+      required: ['expression']
+    }
+  },
+  {
+    name: 'browser_dialogs',
+    title: '页面对话框记录',
+    description:
+      'Read (and optionally clear) dialogs the page tried to open — alert / confirm / prompt. Dialogs are intercepted instead of blocking: confirm always returns false, prompt returns null. Use this to detect "are you sure?" style interruptions without stalling the automation.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        clear: { type: 'boolean', description: 'Clear the recorded list after reading (default false)' },
         tabId: { type: 'string', description: 'Tab id (default: active tab)' }
       }
     }
@@ -407,12 +547,14 @@ const TOOL_DEFS = [
   {
     name: 'browser_tabs',
     title: '标签管理',
-    description: 'Manage tabs: "list" shows all tabs with ids; "new" opens a URL in a new tab; "select" makes a tab active; "close" closes a tab.',
+    description:
+      'Manage tabs: "list" shows all tabs with ids (isolated ones are marked); "new" opens a URL in a new tab; "select" makes a tab active; "close" closes a tab. Tabs share the default session (cookies/logins) unless created with isolated:true, which uses a throwaway partition cleared on close.',
     inputSchema: {
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['list', 'new', 'select', 'close'], description: 'Tab operation' },
         url: { type: 'string', description: '(action=new) URL to open' },
+        isolated: { type: 'boolean', description: '(action=new) Use a throwaway session partition instead of the shared one (default: settings)' },
         tabId: { type: 'string', description: '(action=select/close) target tab id' }
       },
       required: ['action']

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { DownloadInfo, HistoryEntry, AppSettings, SettingsView, AgentInfo } from '@shared/types'
+import type { DownloadInfo, HistoryEntry, AppSettings, SettingsView, AgentInfo, UpdateState } from '@shared/types'
 
 /** 浏览器外壳 UI 与主进程的桥（chromeView 专用，页面视图不带 preload） */
 contextBridge.exposeInMainWorld('aa', {
@@ -23,6 +23,11 @@ contextBridge.exposeInMainWorld('aa', {
   settingsGet: (): Promise<SettingsView | null> => ipcRenderer.invoke('aa:settings-get'),
   settingsSet: (patch: Partial<AppSettings>): Promise<AppSettings | null> => ipcRenderer.invoke('aa:settings-set', patch),
   agentInfo: (): Promise<AgentInfo | null> => ipcRenderer.invoke('aa:agent-info'),
+  clientsDetect: (): Promise<unknown> => ipcRenderer.invoke('aa:clients-detect'),
+  clientsSetup: (ids: string[]): Promise<unknown> => ipcRenderer.invoke('aa:clients-setup', ids),
+  updateCheck: (): Promise<UpdateState> => ipcRenderer.invoke('aa:update-check'),
+  updateDownload: (): Promise<UpdateState> => ipcRenderer.invoke('aa:update-download'),
+  updateInstall: (): Promise<boolean> => ipcRenderer.invoke('aa:update-install'),
   onState: (cb: (state: unknown) => void): void => {
     ipcRenderer.on('aa:state', (_e, state) => cb(state))
   },
@@ -30,11 +35,3 @@ contextBridge.exposeInMainWorld('aa', {
     ipcRenderer.on('aa:focus-omnibox', () => cb())
   }
 })
-
-/** 新标签页专用 API（仅 newtab 页面注入；导航到普通网站时不暴露） */
-if (/newtab\.html$/.test(location.pathname)) {
-  contextBridge.exposeInMainWorld('aaNewtab', {
-    detectClients: (): Promise<unknown> => ipcRenderer.invoke('aa:clients-detect'),
-    setupClients: (ids: string[]): Promise<unknown> => ipcRenderer.invoke('aa:clients-setup', ids)
-  })
-}
