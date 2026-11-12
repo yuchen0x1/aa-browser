@@ -221,16 +221,26 @@ async function main() {
     check('serverInfo 版本与 package.json 一致', init?.result?.serverInfo?.version === pkgVersion, `实际 ${init?.result?.serverInfo?.version}`)
 
     console.log('\n[1b] 默认新标签页首屏')
-    const startupWait = await mcp.call('browser_wait', { text: '本地 Agent 浏览器', timeoutMs: 5000 })
-    check('启动后本地新标签页正文已加载', !startupWait.isError, mcp.text(startupWait).slice(0, 240))
-    const startupInfo = mcp.text(await mcp.call('browser_evaluate', {
-      expression: '({ title: document.title, text: document.body.innerText, background: getComputedStyle(document.body).backgroundColor })'
-    }))
-    check('启动页内容与深色背景正确渲染', startupInfo.includes('Aa Browser') && startupInfo.includes('熟悉的标签式浏览') && startupInfo.includes('rgb(17, 22, 25)'), startupInfo.slice(0, 500))
+    const startupWait = await mcp.call('browser_wait', { text: '让 AI 直接使用', timeoutMs: 5000 })
+    check('启动后 AI 接入向导已加载', !startupWait.isError, mcp.text(startupWait).slice(0, 240))
+    const startupInfo = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.body.innerText' }))
+    const startupPrompt = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.querySelector("#connection-prompt")?.value ?? ""' }))
+    const startupBackground = mcp.text(await mcp.call('browser_evaluate', { expression: 'getComputedStyle(document.body).backgroundColor' }))
+    const startupWidthOk = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.documentElement.scrollWidth <= window.innerWidth' }))
+    check('启动页向导与测试提示词正确渲染', startupInfo.includes('让 AI 直接使用') && startupInfo.includes('复制提示词') && startupPrompt.includes('browser_tabs(action=list)'), startupInfo.slice(0, 500))
+    check('启动页背景与窗口宽度正常', startupBackground.includes('rgb(17, 22, 25)') && startupWidthOk.includes('true'), `${startupBackground}; 横向无溢出=${startupWidthOk}`)
+    const promptSnapshot = mcp.text(await mcp.call('browser_snapshot', { full: true }))
+    const copyPromptRef = findRef(promptSnapshot, /- button "复制提示词"/)
+    check('测试提示词提供可操作的复制按钮', !!copyPromptRef, promptSnapshot.slice(0, 400))
+    if (copyPromptRef) {
+      await mcp.call('browser_click', { ref: copyPromptRef, snapshot: false })
+      const copyStatus = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.querySelector("#copy-status")?.innerText' }))
+      check('复制按钮给出成功或手动复制反馈', copyStatus.includes('提示词已复制') || copyStatus.includes('已选中提示词'), copyStatus)
+    }
     const localNewtabUrl = pathToFileURL(path.join(ROOT, 'out', 'renderer', 'newtab.html')).toString()
     await mcp.call('browser_navigate', { url: localNewtabUrl, snapshot: false })
     const manualNewtab = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.body.innerText' }))
-    check('手动加载新标签 HTML 正常', manualNewtab.includes('熟悉的标签式浏览'), manualNewtab.slice(0, 400))
+    check('手动加载新标签 HTML 正常', manualNewtab.includes('让 AI 直接使用') && manualNewtab.includes('复制提示词'), manualNewtab.slice(0, 400))
 
     console.log('\n[2] 导航到本地测试页（内嵌完整快照）')
     const fileUrl = 'file:///' + TEST_PAGE.replace(/\\/g, '/')

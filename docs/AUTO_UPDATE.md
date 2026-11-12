@@ -24,9 +24,9 @@ Aa Browser 使用 `electron-updater` 配合 `electron-builder` 的 GitHub Releas
 3. 创建并推送匹配版本的标签：
 
    ```powershell
-   git tag v0.6.2
+   git tag v0.6.3
    git push origin main
-   git push origin v0.6.2
+   git push origin v0.6.3
    ```
 
 4. `.github/workflows/ci.yml` 先运行类型检查、工具合约检查、构建和冒烟测试。

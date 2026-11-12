@@ -27,6 +27,9 @@ jobs:
       - name: Tool contract drift check
         run: npm run check:tools
 
+      - name: Codex MCP configuration validation
+        run: npm run validate:codex
+
       - name: Build (main / preload / renderer / mcp bridge)
         run: npm run build
 

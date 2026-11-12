@@ -20,6 +20,7 @@ export class AgentServer {
   private server = http.createServer()
   private wss: WebSocketServer
   private clients = new Set<WebSocket>()
+  private verifiedClients = new Set<WebSocket>()
   private port = 0
   private token = ''
   private instanceId = crypto.randomUUID()
@@ -28,7 +29,7 @@ export class AgentServer {
 
   constructor(
     private tools: McpToolDef[],
-    private onStatusChange: (count: number) => void,
+    private onStatusChange: (count: number, verifiedCount: number) => void,
     private version: string,
     private approvals?: ApprovalManager
   ) {
@@ -60,13 +61,14 @@ export class AgentServer {
   }
 
   /** 供设置面板展示：本地 Agent 服务的连接信息 */
-  info(): { port: number; token: string; version: string; discoveryFile: string; clientCount: number } {
+  info(): { port: number; token: string; version: string; discoveryFile: string; clientCount: number; verifiedClientCount: number } {
     return {
       port: this.port,
       token: this.token,
       version: this.version,
       discoveryFile: this.ownConnectionFile || connectionFile(),
-      clientCount: this.clients.size
+      clientCount: this.clients.size,
+      verifiedClientCount: this.verifiedClients.size
     }
   }
 
@@ -83,7 +85,7 @@ export class AgentServer {
       return
     }
     this.clients.add(ws)
-    this.onStatusChange(this.clients.size)
+    this.onStatusChange(this.clients.size, this.verifiedClients.size)
 
     ws.on('message', (raw) => {
       void this.handleMessage(ws, raw.toString())
@@ -93,14 +95,16 @@ export class AgentServer {
       for (const controller of calls?.values() ?? []) controller.abort()
       this.active.delete(ws)
       this.clients.delete(ws)
-      this.onStatusChange(this.clients.size)
+      this.verifiedClients.delete(ws)
+      this.onStatusChange(this.clients.size, this.verifiedClients.size)
     })
     ws.on('error', () => {
       const calls = this.active.get(ws)
       for (const controller of calls?.values() ?? []) controller.abort()
       this.active.delete(ws)
       this.clients.delete(ws)
-      this.onStatusChange(this.clients.size)
+      this.verifiedClients.delete(ws)
+      this.onStatusChange(this.clients.size, this.verifiedClients.size)
     })
   }
 
@@ -136,6 +140,12 @@ export class AgentServer {
       const result = await tool.handler({ ...(req.args ?? {}), __aaSignal: controller.signal })
       if (controller.signal.aborted || this.approvals?.isInterrupted()) {
         throw new Error('工具调用已被用户中断或取消。')
+      }
+      const args = req.args ?? {}
+      const toolSucceeded = typeof result === 'object' && result !== null && (result as { isError?: boolean }).isError !== true
+      if (toolSucceeded && req.tool === 'browser_tabs' && args['action'] === 'list' && !this.verifiedClients.has(ws)) {
+        this.verifiedClients.add(ws)
+        this.onStatusChange(this.clients.size, this.verifiedClients.size)
       }
       console.log(`[aa-browser] tool complete: ${req.tool} (${req.id})`)
       this.reply(ws, { id: req.id, ok: true, result })

@@ -42,6 +42,7 @@ const CLIENTS = [
   { id: 'vscode', name: 'VS Code (原生 MCP)', detect: jA('Code', 'User'), file: jA('Code', 'User', 'mcp.json'), container: 'servers', vscodeStyle: true, jsonc: true },
   { id: 'gemini', name: 'Gemini CLI', detect: j('.gemini'), file: j('.gemini', 'settings.json'), container: 'mcpServers' },
   { id: 'qwen', name: 'Qwen Code', detect: j('.qwen'), file: j('.qwen', 'settings.json'), container: 'mcpServers' },
+  { id: 'codex', name: 'Codex (Desktop / CLI / IDE)', detect: j('.codex'), file: j('.codex', 'config.toml'), container: 'mcp_servers', toml: true },
   {
     id: 'workbuddy',
     name: 'WorkBuddy (生成本地 MCP 配置；需在应用中导入/启用)',
@@ -108,7 +109,70 @@ function entryFor(def) {
   return entry
 }
 
+function tomlQuote(value) {
+  return JSON.stringify(value)
+}
+
+function codexEntryToml() {
+  const entry = bridgeEntry()
+  const lines = [
+    '[mcp_servers.aa-browser]',
+    `command = ${tomlQuote(entry.command)}`,
+    `args = [${entry.args.map(tomlQuote).join(', ')}]`,
+    'startup_timeout_sec = 20',
+    'tool_timeout_sec = 180'
+  ]
+  if (entry.env && Object.keys(entry.env).length) {
+    const env = Object.entries(entry.env).map(([key, value]) => `${key} = ${tomlQuote(value)}`)
+    lines.push('', '[mcp_servers.aa-browser.env]', ...env)
+  }
+  return lines.join('\n')
+}
+
+function isCodexEntryHeader(line) {
+  const header = /^\s*\[([^\[\]]+)\]\s*(?:#.*)?$/.exec(line)?.[1]?.trim()
+  return !!header && /^mcp_servers\s*\.\s*(?:aa-browser|"aa-browser"|'aa-browser')(?:\s*\.\s*.+)?$/.test(header)
+}
+
+function codexEntryBlocks(text) {
+  const blocks = []
+  let active = false
+  let lines = []
+  for (const line of text.split(/\r?\n/)) {
+    const isHeader = /^\s*\[[^\[\]]+\]\s*(?:#.*)?$/.test(line)
+    if (isHeader) {
+      if (active) blocks.push(lines.join('\n').trim())
+      active = isCodexEntryHeader(line)
+      lines = active ? [line.trim()] : []
+    } else if (active) {
+      lines.push(line)
+    }
+  }
+  if (active) blocks.push(lines.join('\n').trim())
+  return blocks
+}
+
+function replaceCodexEntry(text, entry) {
+  const newline = text.includes('\r\n') ? '\r\n' : '\n'
+  const kept = []
+  let removing = false
+  for (const line of text.split(/\r?\n/)) {
+    if (/^\s*\[[^\[\]]+\]\s*(?:#.*)?$/.test(line)) removing = isCodexEntryHeader(line)
+    if (!removing) kept.push(line)
+  }
+  const base = kept.join(newline).replace(/[\r\n\t ]+$/, '')
+  return `${base}${base ? `${newline}${newline}` : ''}${entry.replace(/\n/g, newline)}${newline}`
+}
+
+function detectCodex(def) {
+  const text = fs.existsSync(def.file) ? fs.readFileSync(def.file, 'utf-8') : ''
+  const blocks = codexEntryBlocks(text)
+  const configured = blocks.some((block) => block === codexEntryToml())
+  return { def, installed: fs.existsSync(def.detect), configured, outdated: blocks.length > 0 && !configured }
+}
+
 function detectOne(def) {
+  if (def.toml) return detectCodex(def)
   const installed = fs.existsSync(def.detect)
   let configured = false
   let outdated = false
@@ -126,6 +190,20 @@ function detectOne(def) {
 }
 
 function setupOne(def, ts) {
+  if (def.toml) {
+    const entry = codexEntryToml()
+    const existingText = fs.existsSync(def.file) ? fs.readFileSync(def.file, 'utf-8') : ''
+    const exists = codexEntryBlocks(existingText).length > 0
+    if (exists && codexEntryBlocks(existingText).some((block) => block === entry)) {
+      log(`  ℹ️  ${def.name}: 已配置，无需变更（${def.file}）`)
+      return
+    }
+    if (fs.existsSync(def.file)) fs.copyFileSync(def.file, `${def.file}.aa-backup-${ts}`)
+    fs.mkdirSync(path.dirname(def.file), { recursive: true })
+    fs.writeFileSync(def.file, replaceCodexEntry(existingText, entry), 'utf-8')
+    log(`  ✅ ${def.name} ${exists ? '已更新' : '已写入'}（${def.file}）`)
+    return
+  }
   const installed = fs.existsSync(def.detect)
   let parsed = {}
   if (fs.existsSync(def.file)) {

@@ -9,11 +9,11 @@
 
 ## 最新更新
 
-### v0.6.2
+### v0.6.3
 
-- 修复启动后默认新标签页白屏；Windows 安装版支持稳定版/Beta 更新检查、下载和重启安装。
-- 普通标签默认共享登录态，支持按需隔离会话；扩展 MCP 交互工具，并在设置页集中管理 AI 客户端接入与软件更新。
-- 网络详情和 HAR 默认遮蔽认证信息，减少敏感凭据意外暴露。
+- 新增首次启动 AI 接入向导与可复制的连接测试提示词；只有 AI 成功调用 `browser_tabs` 后才显示「AI 已连接」。
+- 支持从设置页写入 Codex 桌面端、CLI 和 IDE 的 MCP 配置，更新前自动备份并保留其他 TOML 设置。
+- 新增 Codex 配置保留、备份与幂等验证，并纳入持续集成。
 
 完整版本历史见[发布说明](./docs/releases/release-notes.md)。
 
@@ -24,7 +24,7 @@
 - 🖥️ **真浏览器**：基于 Electron（Chromium），标签页 / 地址栏 / 前进后退 / 登录态持久化，一应俱全
 - 🧠 **结构化快照**：页面被转换成 YAML 风格的可访问性树，每个可交互元素带 `ref` 编号（`- button "登录" [ref=e5]`），格式对齐 Playwright MCP 生态，Agent 零学习成本
 - 💸 **增量快照省 token**：页面没变 → 一行回复；小变化 → 只返回变更区块；ref 跨快照稳定复用（React 重渲染也能靠内容签名接上）；跳转/大变化自动回退完整快照。一次多步任务可省 60%+ 上下文
-- 🤖 **MCP 原生接入**：标准 stdio MCP 桥，ZCode / Claude Code / Cursor 等任何 MCP 客户端均可驱动
+- 🤖 **MCP 原生接入**：标准 stdio MCP 桥，Codex / ZCode / Claude Code / Cursor 等 MCP 客户端均可驱动
 - 🔒 **本地安全**：WebSocket 仅监听 127.0.0.1，随机端口 + 一次性 token，拒绝非本机连接
 - 🎯 **真实输入路径**：点击走受信任的输入事件（`isTrusted=true`），输入走 `insertText` 管线并对 React 受控组件兜底，被遮挡元素自动降级为合成事件
 - 🔁 **动作后自动快照**：每次点击/输入后自动返回新快照，Agent 无需二次请求即可继续决策
@@ -92,7 +92,7 @@ title: Aa Browser - 搜索
                            │ 本地 WebSocket（token 鉴权）
 ┌──────────────────────────┴──────────────────────────┐
 │  cli/mcp.mjs —— stdio MCP 桥（零依赖）              │
-│    任何 MCP 客户端：ZCode / Claude Code / Cursor …  │
+│    MCP 客户端：Codex / ZCode / Claude Code / Cursor …│
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -132,7 +132,7 @@ WorkBuddy 路径尝试写入用户级 `~/.workbuddy/mcp.json` 并生成本地 Co
 npm run dist       # 产出 release/Aa Browser-Setup-<版本>.exe（NSIS 安装器）
 ```
 
-双击安装（未做代码签名，Windows SmartScreen 会提示"更多信息 → 仍要运行"）。装好后打开 Aa Browser，点工具栏「设置」→「连接 AI 客户端」，勾选客户端写入即可完成 MCP 配置。
+双击安装（未做代码签名，Windows SmartScreen 会提示"更多信息 → 仍要运行"）。首次打开后，新标签页会引导你完成接入：点工具栏「设置」→「连接 AI 客户端」写入配置，重启 AI 客户端，再把页面上的测试提示词发给 AI。只有 AI 实际调用 `browser_tabs` 后，工具栏才显示「AI 已连接」；配置写入成功本身不代表接通。
 
 ### 方式二：源码运行（开发者）
 
@@ -153,9 +153,9 @@ npm run dev
 
 ## 接入你的 Agent
 
-**方式 A · 一键接入（推荐）**：Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写入。
+**方式 A · 一键接入（推荐）**：Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写入，然后重启 AI 客户端并按新标签页给出的测试提示词实际调用 `browser_tabs`。工具栏显示「AI 已连接」才算验证通过；MCP 桥连上但尚未成功调用工具时会显示「等待 AI 首次调用」。
 命令行等效：`node cli/setup.mjs --yes`（`--list` 查看，`--client zcode,cursor` 指定目标）。
-支持传统配置式 MCP 客户端：**ZCode / Claude Code / Cursor / Windsurf / Cline / VS Code / Gemini CLI / Qwen Code**。写入前自动备份原配置为 `<file>.aa-backup-<时间戳>`，幂等可重复执行。
+支持传统配置式 MCP 客户端：**Codex（桌面端 / CLI / IDE）/ ZCode / Claude Code / Cursor / Windsurf / Cline / VS Code / Gemini CLI / Qwen Code**。Codex 配置写入用户级 `~/.codex/config.toml`；其他客户端写入各自 MCP 配置。写入前自动备份原配置为 `<file>.aa-backup-<时间戳>`，幂等可重复执行。保存后需重启客户端，并让它实际调用 `browser_tabs` 验证。
 
 **WorkBuddy**：CLI 会单独生成 `~/.workbuddy/mcp.json` 的 stdio 配置（覆盖前备份并只更新 `mcpServers.aa-browser`）。安装后必须在 WorkBuddy 会话中确认 `browser_tabs` 实际出现并成功调用；若 WorkBuddy 要求 MCP UI 授权或重连，完成后再验证。WorkBuddy 不是由“配置写入成功”自动判定连接成功。
 
@@ -244,6 +244,7 @@ aa-browser/
 
 ```bash
 npm run smoke   # 端到端冒烟：启动浏览器 → MCP 驱动 → 断言（含抓包，无外网依赖）
+npm run validate:codex # 验证 Codex TOML 接入、保留其他配置、备份与幂等
 node scripts/live-test.mjs   # 实战示例：MCP 驱动必应搜索全流程
 ```
 

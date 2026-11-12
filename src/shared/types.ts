@@ -39,6 +39,8 @@ export interface UiState {
   tabs: TabInfo[]
   activeId: string | null
   agentCount: number
+  /** 已成功调用 browser_tabs 的 MCP 客户端数；仅令牌握手不计为已验证连接 */
+  agentVerifiedCount: number
   bridgeState: 'connected' | 'waiting' | 'disconnected'
   connectionMessage: string
   pendingApprovals: PendingApprovalInfo[]
@@ -109,7 +111,10 @@ export interface AgentInfo {
   token: string
   version: string
   discoveryFile: string
+  /** 已通过本机令牌认证的 MCP 桥数量 */
   clientCount: number
+  /** 已成功调用 browser_tabs(action=list) 的 MCP 桥数量 */
+  verifiedClientCount: number
 }
 
 /** 快照里的单个元素（供 Agent 理解与动作引擎定位） */

@@ -22,6 +22,8 @@ export interface ClientDef {
   vscodeStyle?: boolean
   /** 配置可能是 JSONC（含注释） */
   jsonc?: boolean
+  /** MCP 配置使用 TOML 格式 */
+  toml?: boolean
 }
 
 export interface ClientDetectResult {
@@ -118,6 +120,14 @@ export const CLIENT_DEFS: ClientDef[] = [
     container: 'mcpServers'
   },
   {
+    id: 'codex',
+    name: 'Codex（桌面端 / CLI / IDE）',
+    detectPath: () => joinHome('.codex'),
+    file: () => joinHome('.codex', 'config.toml'),
+    container: 'mcp_servers',
+    toml: true
+  },
+  {
     id: 'workbuddy',
     name: 'WorkBuddy',
     detectPath: () => joinHome('.workbuddy'),
@@ -206,6 +216,82 @@ export function entryFor(def: ClientDef): Record<string, unknown> {
   return entry
 }
 
+function tomlQuote(value: string): string {
+  return JSON.stringify(value)
+}
+
+function codexEntryToml(): string {
+  const entry = bridgeEntry()
+  const lines = [
+    '[mcp_servers.aa-browser]',
+    `command = ${tomlQuote(entry.command)}`,
+    `args = [${entry.args.map(tomlQuote).join(', ')}]`,
+    'startup_timeout_sec = 20',
+    'tool_timeout_sec = 180'
+  ]
+  if (entry.env && Object.keys(entry.env).length) {
+    const env = Object.entries(entry.env).map(([key, value]) => `${key} = ${tomlQuote(value)}`)
+    lines.push('', '[mcp_servers.aa-browser.env]', ...env)
+  }
+  return lines.join('\n')
+}
+
+function isCodexEntryHeader(line: string): boolean {
+  const header = /^\s*\[([^\[\]]+)\]\s*(?:#.*)?$/.exec(line)?.[1]?.trim()
+  return !!header && /^mcp_servers\s*\.\s*(?:aa-browser|"aa-browser"|'aa-browser')(?:\s*\.\s*.+)?$/.test(header)
+}
+
+function codexEntryBlocks(text: string): string[] {
+  const blocks: string[] = []
+  let active = false
+  let lines: string[] = []
+  for (const line of text.split(/\r?\n/)) {
+    const isHeader = /^\s*\[[^\[\]]+\]\s*(?:#.*)?$/.test(line)
+    if (isHeader) {
+      if (active) blocks.push(lines.join('\n').trim())
+      active = isCodexEntryHeader(line)
+      lines = active ? [line.trim()] : []
+    } else if (active) {
+      lines.push(line)
+    }
+  }
+  if (active) blocks.push(lines.join('\n').trim())
+  return blocks
+}
+
+function replaceCodexEntry(text: string, entry: string): string {
+  const newline = text.includes('\r\n') ? '\r\n' : '\n'
+  const kept: string[] = []
+  let removing = false
+  for (const line of text.split(/\r?\n/)) {
+    if (/^\s*\[[^\[\]]+\]\s*(?:#.*)?$/.test(line)) {
+      removing = isCodexEntryHeader(line)
+    }
+    if (!removing) kept.push(line)
+  }
+  const base = kept.join(newline).replace(/[\r\n\t ]+$/, '')
+  return `${base}${base ? `${newline}${newline}` : ''}${entry.replace(/\n/g, newline)}${newline}`
+}
+
+function configureCodex(def: ClientDef, ts: string): ClientSetupResult {
+  const file = def.file()
+  const entry = codexEntryToml()
+  const existingText = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : ''
+  const exists = codexEntryBlocks(existingText).length > 0
+  if (exists && codexEntryBlocks(existingText).some((block) => block === entry)) {
+    return { id: def.id, name: def.name, status: 'skipped', message: `已配置且无需更新：${file}` }
+  }
+  if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.aa-backup-${ts}`)
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, replaceCodexEntry(existingText, entry), 'utf-8')
+  return {
+    id: def.id,
+    name: def.name,
+    status: exists ? 'updated' : 'added',
+    message: `${exists ? '已更新' : '已写入'} Codex MCP 配置：${file}`
+  }
+}
+
 function sameEntry(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b)
 }
@@ -214,6 +300,13 @@ export function detectClients(): ClientDetectResult[] {
   return CLIENT_DEFS.map((def) => {
     const file = def.file()
     const installed = fs.existsSync(def.detectPath())
+    if (def.toml) {
+      const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : ''
+      const blocks = codexEntryBlocks(text)
+      const expected = codexEntryToml()
+      const configured = blocks.some((block) => block === expected)
+      return { id: def.id, name: def.name, file, installed, configured, outdated: blocks.length > 0 && !configured }
+    }
     let configured = false
     let outdated = false
     if (installed && fs.existsSync(file)) {
@@ -245,6 +338,14 @@ export function setupClients(ids: string[]): ClientSetupResult[] {
   const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
   for (const def of CLIENT_DEFS) {
     if (!ids.includes(def.id)) continue
+    if (def.toml) {
+      try {
+        results.push(configureCodex(def, ts))
+      } catch (err) {
+        results.push({ id: def.id, name: def.name, status: 'error', message: `写入 Codex 配置失败：${(err as Error).message}` })
+      }
+      continue
+    }
     const file = def.file()
     try {
       // 客户端本体未安装：仍可创建配置（对 CLI 型客户端安全），但提示

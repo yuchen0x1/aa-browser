@@ -41,6 +41,7 @@ let chromeView: WebContentsView | null = null
 let tabManager: TabManager | null = null
 let agentServer: AgentServer | null = null
 let agentCount = 0
+let agentVerifiedCount = 0
 let bridgeState: UiState['bridgeState'] = 'waiting'
 let connectionMessage = '等待 MCP 桥启动并连接'
 const approvals = new ApprovalManager()
@@ -106,6 +107,7 @@ function pushState(): void {
     tabs: tabManager?.infos() ?? [],
     activeId: tabManager?.activeId ?? null,
     agentCount,
+    agentVerifiedCount,
     bridgeState,
     connectionMessage,
     pendingApprovals: approvals.list(),
@@ -300,6 +302,7 @@ function registerIpc(): void {
       tabs: tabManager?.infos() ?? [],
       activeId: tabManager?.activeId ?? null,
       agentCount,
+      agentVerifiedCount,
       bridgeState,
       connectionMessage,
       pendingApprovals: approvals.list(),
@@ -522,21 +525,28 @@ app.whenReady().then(() => {
   )
   agentServer = new AgentServer(
     tools,
-    (n) => {
+    (n, verifiedCount) => {
       agentCount = n
+      agentVerifiedCount = verifiedCount
       bridgeState = n > 0 ? 'connected' : 'waiting'
-      connectionMessage = n > 0 ? `${n} 个 MCP 桥已通过本机 token 验证` : '等待 MCP 桥启动并连接'
+      connectionMessage = verifiedCount > 0
+        ? `${verifiedCount} 个 MCP 客户端已成功调用 browser_tabs，连接已验证`
+        : n > 0
+          ? `${n} 个 MCP 桥已通过本机认证，等待 AI 首次调用 browser_tabs`
+          : '等待 AI 客户端连接 MCP 桥'
       pushState()
     },
     VERSION,
     approvals
   )
   void agentServer.start().then(() => {
-    bridgeState = 'waiting'
-    const discoveryFile = process.env['AA_BROWSER_CONNECTION_FILE'] || path.join(app.getPath('home'), '.aabrowser', 'connection.json')
-    connectionMessage = `本地服务已启动，发现文件：${discoveryFile}；等待 MCP 客户端完成认证握手`
+    if (agentCount === 0) {
+      bridgeState = 'waiting'
+      const discoveryFile = process.env['AA_BROWSER_CONNECTION_FILE'] || path.join(app.getPath('home'), '.aabrowser', 'connection.json')
+      connectionMessage = `本地服务已启动，等待 AI 客户端连接并调用 browser_tabs；服务发现文件：${discoveryFile}`
+    }
     pushState()
-    console.log(`[aa-browser] agent server ready: ${discoveryFile}`)
+    console.log('[aa-browser] agent server ready')
   }).catch((err: unknown) => {
     bridgeState = 'disconnected'
     connectionMessage = `本地 Agent 服务启动失败：${err instanceof Error ? err.message : String(err)}`

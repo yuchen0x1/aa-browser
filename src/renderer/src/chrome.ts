@@ -50,7 +50,7 @@ declare global {
   }
 }
 
-let state: UiState = { tabs: [], activeId: null, agentCount: 0, bridgeState: 'waiting', connectionMessage: '等待 MCP 桥启动并连接', pendingApprovals: [], agentInterrupted: false }
+let state: UiState = { tabs: [], activeId: null, agentCount: 0, agentVerifiedCount: 0, bridgeState: 'waiting', connectionMessage: '等待 AI 客户端连接 MCP 桥', pendingApprovals: [], agentInterrupted: false }
 
 const tabsEl = document.getElementById('tabs') as HTMLDivElement
 const omnibox = document.getElementById('omnibox') as HTMLInputElement
@@ -217,12 +217,14 @@ function renderToolbar(): void {
     btnForward.disabled = true
   }
   agentPill.title = state.connectionMessage
-  agentPill.classList.toggle('connected', state.bridgeState === 'connected')
-  agentPill.classList.toggle('waiting', state.bridgeState === 'waiting')
-  if (state.bridgeState === 'connected') {
-    agentPill.textContent = `● 浏览器已连接 ×${state.agentCount}`
+  agentPill.classList.toggle('connected', state.agentVerifiedCount > 0)
+  agentPill.classList.toggle('waiting', state.bridgeState === 'waiting' || (state.agentCount > 0 && state.agentVerifiedCount === 0))
+  if (state.agentVerifiedCount > 0) {
+    agentPill.textContent = `● AI 已连接 ×${state.agentVerifiedCount}`
+  } else if (state.agentCount > 0) {
+    agentPill.textContent = '◌ 等待 AI 首次调用'
   } else if (state.bridgeState === 'waiting') {
-    agentPill.textContent = '◌ 等待 AI 桥接'
+    agentPill.textContent = '◌ 等待 AI 连接'
   } else {
     agentPill.textContent = '○ AI 桥未连接'
   }
@@ -612,7 +614,7 @@ async function openSettings(): Promise<void> {
   }
   if (setAgentInfo) {
     if (agent) {
-      setAgentInfo.textContent = `端口 ${agent.port} · 版本 ${agent.version} · 已连接 ${agent.clientCount} · 发现文件 ${agent.discoveryFile}`
+      setAgentInfo.textContent = `MCP 桥：${agent.clientCount} 个 · 已验证调用：${agent.verifiedClientCount} 个 · 端口 ${agent.port} · 发现文件 ${agent.discoveryFile}`
       setAgentInfo.title = `token: ${agent.token}`
     } else {
       setAgentInfo.textContent = 'Agent 服务未启动'
