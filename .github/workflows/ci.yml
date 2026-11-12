@@ -115,12 +115,17 @@ jobs:
               }
             }
 
+            // Existing releases are treated as immutable metadata. This keeps asset
+            // repair working even when GitHub has more than one release record for
+            // the same tag and rejects metadata updates with already_exists.
             let release = await findRelease()
+            let created = false
             if (!release) {
               try {
                 release = (await github.rest.repos.createRelease({
                   owner, repo, tag_name: tag, name, body, draft: true, prerelease: false,
                 })).data
+                created = true
               } catch (error) {
                 if (error.status !== 422) throw error
                 release = await findRelease()
@@ -129,10 +134,12 @@ jobs:
             }
 
             if (release.immutable) throw new Error(`Release ${tag} is immutable and cannot be updated`)
-            await github.rest.repos.updateRelease({
-              owner, repo, release_id: release.id, name, body,
-              draft: Boolean(release.draft), prerelease: false,
-            })
+            if (created) {
+              await github.rest.repos.updateRelease({
+                owner, repo, release_id: release.id, name, body,
+                draft: true, prerelease: false,
+              })
+            }
 
             let { data: existingAssets } = await github.rest.repos.listReleaseAssets({
               owner, repo, release_id: release.id, per_page: 100,
@@ -166,7 +173,7 @@ jobs:
             const missing = assetNames.filter(file => !uploadedNames.has(file))
             if (missing.length) throw new Error(`Release is missing assets: ${missing.join(', ')}`)
 
-            if (release.draft) {
+            if (created && release.draft) {
               await github.rest.repos.updateRelease({ owner, repo, release_id: release.id, draft: false })
             }
-            core.info(`Published ${tag}: ${assetNames.join(', ')}`)
+            core.info(`${created ? 'Published' : 'Repaired'} ${tag}: ${assetNames.join(', ')}`)
