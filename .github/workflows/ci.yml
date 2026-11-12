@@ -79,17 +79,94 @@ jobs:
           }
           $lines | Set-Content release/SHA256SUMS.txt
 
-      - name: Create GitHub Release and upload assets
-        uses: softprops/action-gh-release@v3
+      - name: Create or update GitHub Release and upload assets
+        uses: actions/github-script@v7
         with:
-          tag_name: ${{ github.ref_name }}
-          name: Aa Browser ${{ github.ref_name }}
-          body_path: release-notes-${{ github.ref_name }}.md
-          files: |
-            release/*.exe
-            release/latest.yml
-            release/*.blockmap
-            release/SHA256SUMS.txt
-          fail_on_unmatched_files: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const crypto = require('node:crypto')
+            const fs = require('node:fs')
+            const path = require('node:path')
+
+            const { owner, repo } = context.repo
+            const tag = context.ref.replace(/^refs\/tags\//, '')
+            const name = `Aa Browser ${tag}`
+            const body = fs.readFileSync(`release-notes-${tag}.md`, 'utf8')
+            const assetsDir = path.resolve('release')
+            const assetNames = fs.readdirSync(assetsDir).filter(file =>
+              file.endsWith('.exe') || file === 'latest.yml' ||
+              file.endsWith('.blockmap') || file === 'SHA256SUMS.txt'
+            ).sort()
+
+            if (!assetNames.some(file => file.endsWith('.exe')) ||
+                !assetNames.includes('latest.yml') ||
+                !assetNames.some(file => file.endsWith('.blockmap')) ||
+                !assetNames.includes('SHA256SUMS.txt')) {
+              throw new Error(`Release asset set is incomplete: ${assetNames.join(', ')}`)
+            }
+
+            async function findRelease() {
+              try {
+                return (await github.rest.repos.getReleaseByTag({ owner, repo, tag })).data
+              } catch (error) {
+                if (error.status !== 404) throw error
+                const { data: releases } = await github.rest.repos.listReleases({ owner, repo, per_page: 100 })
+                return releases.find(release => release.tag_name === tag) || null
+              }
+            }
+
+            let release = await findRelease()
+            if (!release) {
+              try {
+                release = (await github.rest.repos.createRelease({
+                  owner, repo, tag_name: tag, name, body, draft: true, prerelease: false,
+                })).data
+              } catch (error) {
+                if (error.status !== 422) throw error
+                release = await findRelease()
+                if (!release) throw error
+              }
+            }
+
+            if (release.immutable) throw new Error(`Release ${tag} is immutable and cannot be updated`)
+            await github.rest.repos.updateRelease({
+              owner, repo, release_id: release.id, name, body,
+              draft: Boolean(release.draft), prerelease: false,
+            })
+
+            let { data: existingAssets } = await github.rest.repos.listReleaseAssets({
+              owner, repo, release_id: release.id, per_page: 100,
+            })
+            for (const assetName of assetNames) {
+              const filePath = path.join(assetsDir, assetName)
+              const data = fs.readFileSync(filePath)
+              const digest = `sha256:${crypto.createHash('sha256').update(data).digest('hex')}`
+              const existing = existingAssets.find(asset => asset.name === assetName)
+              if (existing && existing.digest === digest) {
+                core.info(`Already uploaded with matching SHA-256: ${assetName}`)
+                continue
+              }
+              if (existing) {
+                await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: existing.id })
+                existingAssets = existingAssets.filter(asset => asset.id !== existing.id)
+              }
+              await github.rest.repos.uploadReleaseAsset({
+                owner, repo, release_id: release.id, name: assetName, data,
+                headers: { 'content-type': 'application/octet-stream', 'content-length': String(data.length) },
+                request: { timeout: 300000 },
+              })
+              core.info(`Uploaded ${assetName} (${data.length} bytes)`)
+              existingAssets.push({ name: assetName })
+            }
+
+            const { data: uploadedAssets } = await github.rest.repos.listReleaseAssets({
+              owner, repo, release_id: release.id, per_page: 100,
+            })
+            const uploadedNames = new Set(uploadedAssets.map(asset => asset.name))
+            const missing = assetNames.filter(file => !uploadedNames.has(file))
+            if (missing.length) throw new Error(`Release is missing assets: ${missing.join(', ')}`)
+
+            if (release.draft) {
+              await github.rest.repos.updateRelease({ owner, repo, release_id: release.id, draft: false })
+            }
+            core.info(`Published ${tag}: ${assetNames.join(', ')}`)
