@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
-    <title>Aa Browser — 连接 AI</title>
+    <title>Aa Browser — 安装并连接 AI</title>
     <style>
       :root {
         color-scheme: dark;
@@ -142,7 +142,7 @@
       #connection-prompt {
         display: block;
         width: 100%;
-        min-height: 104px;
+        min-height: 380px;
         resize: vertical;
         border: 1px solid rgba(220, 235, 230, .08);
         border-radius: 8px;
@@ -193,33 +193,50 @@
     <main class="page">
       <div class="masthead"><span class="mark" aria-hidden="true">Aa</span><span><strong>Aa Browser</strong>　给 AI 用的桌面浏览器</span></div>
       <h1>让 AI 直接使用<br />你打开的这个浏览器。</h1>
-      <p class="intro">Codex 的用户级接入配置可供后续项目开发复用。接入后，让 AI 查看当前网页、搜索资料、操作页面；每次操作都发生在这个窗口里。</p>
+      <p class="intro">复制下方提示词发给具备本机终端和文件操作能力的 AI，它会尝试从官方仓库下载安装、配置并验证 Aa Browser。也可以通过右上角设置手动写入客户端配置。</p>
 
-      <section class="steps" aria-label="连接步骤">
+      <section class="steps" aria-label="安装与连接步骤">
         <article class="step">
-          <div class="step-label"><span class="step-number">1</span>接入客户端</div>
-          <h2>打开连接设置</h2>
-          <p>点窗口右上角 <span class="toolbar-ref">⚙ 设置</span> →「连接 AI 客户端」，勾选 <span class="toolbar-ref">Codex</span>（或你正在用的 AI）并写入配置。</p>
+          <div class="step-label"><span class="step-number">1</span>发安装提示词</div>
+          <h2>让 AI 执行安装</h2>
+          <p>复制下方提示词发给 AI。它需要能执行本机命令、访问文件并获得你的授权，才能自动下载安装和写入配置。</p>
         </article>
         <article class="step">
-          <div class="step-label"><span class="step-number">2</span>让 AI 实际调用</div>
-          <h2>重启 AI，再发送测试词</h2>
-          <p>重启 Codex 或重新连接 AI 客户端，复制下方提示词发给它。它会读取本浏览器的标签和页面。</p>
+          <div class="step-label"><span class="step-number">2</span>重载客户端</div>
+          <h2>完成配置后重启 AI</h2>
+          <p>配置写入后重启或重新加载当前 AI 客户端；如果客户端要求导入/启用本地 Connector，也要按它的官方流程完成。</p>
         </article>
         <article class="step">
-          <div class="step-label"><span class="step-number">3</span>确认连接成功</div>
-          <h2>看右上角状态</h2>
-          <p>AI 成功调用 <code>browser_tabs</code> 后，顶部才显示「AI 已连接」。只写入配置还不算连接。</p>
+          <div class="step-label"><span class="step-number">3</span>实际验证连接</div>
+          <h2>看工具栏左侧的状态</h2>
+          <p>只有 AI 成功调用 <code>browser_tabs</code> 并返回本浏览器的标签信息，左侧才会显示「AI 已连接」；配置文件存在不算连接。</p>
         </article>
       </section>
 
       <section class="prompt-panel" aria-labelledby="prompt-title">
         <div class="prompt-heading">
-          <h2 id="prompt-title">发给 AI 的连接测试词</h2>
-          <button class="copy-button" id="copy-prompt" type="button">复制提示词</button>
+          <h2 id="prompt-title">发给 AI 的安装与连接提示词</h2>
+          <button class="copy-button" id="copy-prompt" type="button">复制安装提示词</button>
         </div>
-        <textarea id="connection-prompt" readonly aria-label="可复制的 AI 连接测试提示词">请使用已连接的 Aa Browser 工具，不要使用你自己的内置浏览器。先调用 browser_tabs(action=list) 列出这个浏览器的标签页，再调用 browser_snapshot(full=true) 读取当前活动页面。告诉我你实际读到的页面标题和网址。如果没有 browser_* 工具或调用失败，请如实告诉我“尚未连接”，并说明卡在哪一步；不要假装调用成功。</textarea>
-        <p class="prompt-note" id="copy-status" role="status" aria-live="polite"><b>注意</b><span>如果状态停在「等待 AI 首次调用」，说明配置已被加载，但 AI 还没有成功调用浏览器工具。</span></p>
+        <textarea id="connection-prompt" readonly aria-label="可复制的 AI 安装与连接提示词">请在这台 Windows 电脑上安装并接入 Aa Browser，并在最后实际验证浏览器工具。不要把“安装完成”或“配置文件已写入”当成“已连接”。
+
+官方仓库：https://github.com/yuchen0x1/aa-browser
+官方安装脚本：https://raw.githubusercontent.com/yuchen0x1/aa-browser/main/install.mjs
+
+请按顺序执行：
+1. 检查当前是否为 Windows x64、Node.js 是否为 20+、是否能访问 GitHub。若你没有本机终端/文件操作权限，或缺少 Node.js 需要用户确认，请明确报告并停止，不要假装安装。
+2. 在临时目录下载并检查官方 install.mjs，然后执行下面的 Windows PowerShell 命令（仓库地址必须保持原样）：
+   $tmp = Join-Path $env:TEMP 'aa-browser-bootstrap'
+   New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+   Invoke-WebRequest https://raw.githubusercontent.com/yuchen0x1/aa-browser/main/install.mjs -OutFile (Join-Path $tmp 'install.mjs')
+   node (Join-Path $tmp 'install.mjs') --repo yuchen0x1/aa-browser
+   这会让安装器从 GitHub Releases 下载最新 Aa Browser 安装包、校验并安装/启动；它会备份并写入检测到的 AI 客户端 MCP 配置。若只配置当前客户端，给安装器加上对应的 --clients 参数，不要改写其他客户端。
+3. 安装完成后重启或重新加载当前 AI 客户端。若当前客户端要求在 UI 中导入/启用本地 Connector（例如 WorkBuddy 的“专家·技能·连接器”），请按官方流程完成；不要修改客户端数据库、缓存或内部运行时文件。
+4. 检查工具列表是否真的出现 browser_tabs、browser_navigate、browser_snapshot，然后实际调用 browser_tabs。不要用你自己的内置浏览器代替。
+5. 只有 browser_tabs 成功返回 Aa Browser 的标签信息，才报告“已连接”。否则如实报告：安装是否完成、配置路径、卡在哪一步，以及需要我手动做什么。
+
+最后汇报安装目录、配置/备份路径、实际 browser_tabs 返回结果。不要访问真实账号，不要输入密码、token、API key 或其他秘密。</textarea>
+        <p class="prompt-note" id="copy-status" role="status" aria-live="polite"><b>前提</b><span>这段提示词要求 AI 执行本机安装命令；没有终端、文件权限或用户授权时，它不能自动完成。配置写入后仍要实际调用 browser_tabs 才算连接。</span></p>
       </section>
 
       <div class="footer">
@@ -234,14 +251,14 @@
       button.addEventListener('click', async () => {
         try {
           await navigator.clipboard.writeText(prompt.value);
-          status.textContent = '提示词已复制。粘贴到你正在使用的 AI 客户端即可。';
+          status.textContent = '安装提示词已复制。粘贴到你正在使用的 AI 客户端即可。';
         } catch {
           prompt.focus();
           prompt.select();
           const copied = document.execCommand('copy');
           status.textContent = copied
-            ? '提示词已复制。粘贴到你正在使用的 AI 客户端即可。'
-            : '已选中提示词，请按 Ctrl+C 复制，再粘贴到 AI 客户端。';
+            ? '安装提示词已复制。粘贴到你正在使用的 AI 客户端即可。'
+            : '已选中安装提示词，请按 Ctrl+C 复制，再粘贴到 AI 客户端。';
         }
       });
     </script>

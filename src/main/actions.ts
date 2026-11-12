@@ -226,6 +226,8 @@ export async function doClick(
   // 视觉激光波纹投影（让用户直观看到 AI 点击位置）
   void wc.executeJavaScript(laserCursorScript(x, y, 'click'), false).catch(() => {})
 
+  const urlBefore = wc.getURL()
+  const probeArmed = button === 'left' && (await armClickProbe(wc, ref))
   if (loc.hitOk) {
     // 优先走真实输入事件（isTrusted=true，兼容防爬站点）
     wc.sendInputEvent({ type: 'mouseMove', x, y })
@@ -233,7 +235,24 @@ export async function doClick(
     wc.sendInputEvent({ type: 'mouseUp', x, y, button, clickCount })
   } else {
     // 元素被遮挡 → 页面内合成事件兜底
-    await wc.executeJavaScript(syntheticClickScript(ref, button), false)
+    if (button === 'left' && (loc.type === 'checkbox' || loc.type === 'radio')) {
+      // 合成 MouseEvent 不会执行 checkbox/radio 的默认切换行为。
+      await wc.executeJavaScript(`(() => { const el = (window.__aaRefs || {})[${JSON.stringify(ref)}]; if (el) el.click(); return !!el })()`, false)
+    } else {
+      await wc.executeJavaScript(syntheticClickScript(ref, button), false)
+    }
+  }
+
+  if (probeArmed) {
+    const delivered = await waitClickProbe(wc, urlBefore)
+    if (delivered !== true) {
+      // sendInputEvent 偶发静默丢失；补发页面点击，避免“调用成功但页面没动”。
+      if (loc.type === 'checkbox' || loc.type === 'radio') {
+        await wc.executeJavaScript(`(() => { const el = (window.__aaRefs || {})[${JSON.stringify(ref)}]; if (el) el.click(); return !!el })()`, false)
+      } else {
+        await wc.executeJavaScript(syntheticClickScript(ref, button), false)
+      }
+    }
   }
 
   await settle(wc)

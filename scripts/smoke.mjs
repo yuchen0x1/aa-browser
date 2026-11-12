@@ -227,20 +227,27 @@ async function main() {
     const startupPrompt = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.querySelector("#connection-prompt")?.value ?? ""' }))
     const startupBackground = mcp.text(await mcp.call('browser_evaluate', { expression: 'getComputedStyle(document.body).backgroundColor' }))
     const startupWidthOk = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.documentElement.scrollWidth <= window.innerWidth' }))
-    check('启动页向导与测试提示词正确渲染', startupInfo.includes('让 AI 直接使用') && startupInfo.includes('复制提示词') && startupPrompt.includes('browser_tabs(action=list)'), startupInfo.slice(0, 500))
+    check(
+      '启动页向导与安装提示词正确渲染',
+      startupInfo.includes('让 AI 直接使用') &&
+        startupInfo.includes('复制安装提示词') &&
+        startupPrompt.includes('https://raw.githubusercontent.com/yuchen0x1/aa-browser/main/install.mjs') &&
+        startupPrompt.includes('--repo yuchen0x1/aa-browser'),
+      startupInfo.slice(0, 500)
+    )
     check('启动页背景与窗口宽度正常', startupBackground.includes('rgb(17, 22, 25)') && startupWidthOk.includes('true'), `${startupBackground}; 横向无溢出=${startupWidthOk}`)
     const promptSnapshot = mcp.text(await mcp.call('browser_snapshot', { full: true }))
-    const copyPromptRef = findRef(promptSnapshot, /- button "复制提示词"/)
-    check('测试提示词提供可操作的复制按钮', !!copyPromptRef, promptSnapshot.slice(0, 400))
+    const copyPromptRef = findRef(promptSnapshot, /- button "复制安装提示词"/)
+    check('安装提示词提供可操作的复制按钮', !!copyPromptRef, promptSnapshot.slice(0, 400))
     if (copyPromptRef) {
       await mcp.call('browser_click', { ref: copyPromptRef, snapshot: false })
       const copyStatus = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.querySelector("#copy-status")?.innerText' }))
-      check('复制按钮给出成功或手动复制反馈', copyStatus.includes('提示词已复制') || copyStatus.includes('已选中提示词'), copyStatus)
+      check('复制按钮给出成功或手动复制反馈', copyStatus.includes('安装提示词已复制') || copyStatus.includes('已选中安装提示词'), copyStatus)
     }
     const localNewtabUrl = pathToFileURL(path.join(ROOT, 'out', 'renderer', 'newtab.html')).toString()
     await mcp.call('browser_navigate', { url: localNewtabUrl, snapshot: false })
     const manualNewtab = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.body.innerText' }))
-    check('手动加载新标签 HTML 正常', manualNewtab.includes('让 AI 直接使用') && manualNewtab.includes('复制提示词'), manualNewtab.slice(0, 400))
+    check('手动加载新标签 HTML 正常', manualNewtab.includes('让 AI 直接使用') && manualNewtab.includes('复制安装提示词'), manualNewtab.slice(0, 400))
 
     console.log('\n[2] 导航到本地测试页（内嵌完整快照）')
     const fileUrl = 'file:///' + TEST_PAGE.replace(/\\/g, '/')

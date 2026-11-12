@@ -21,7 +21,7 @@ import { UpdateManager } from './updater'
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const VERSION = app.getVersion()
 
-const CHROME_HEIGHT = 78
+const CHROME_HEIGHT = 84
 
 /** 默认搜索引擎基址：优先读取用户设置 */
 function searchUrlBase(): string {
@@ -44,6 +44,7 @@ let agentCount = 0
 let agentVerifiedCount = 0
 let bridgeState: UiState['bridgeState'] = 'waiting'
 let connectionMessage = '等待 MCP 桥启动并连接'
+let settingsOpen = false
 const approvals = new ApprovalManager()
 let updater: UpdateManager | null = null
 const recentActions: import('@shared/types').ActionLogItem[] = []
@@ -83,7 +84,7 @@ function layout(): void {
   if (!win || !chromeView) return
   const { width, height } = win.getContentBounds()
   const panelHeight = approvals?.list().length ? 132 : 0
-  chromeView.setBounds({ x: 0, y: 0, width, height: CHROME_HEIGHT + panelHeight })
+  chromeView.setBounds({ x: 0, y: 0, width, height: settingsOpen ? height : CHROME_HEIGHT + panelHeight })
   const active = tabManager?.active()
   if (active) {
     active.view.setBounds({ x: 0, y: CHROME_HEIGHT + panelHeight, width, height: Math.max(0, height - CHROME_HEIGHT - panelHeight) })
@@ -425,6 +426,12 @@ function registerIpc(): void {
       const result = getSettingsStore().set((patch ?? {}) as Record<string, unknown>)
       updater?.refreshSettings()
       return result
+    })
+  })
+  ipcMain.handle('aa:settings-open', (event, open: boolean) => {
+    return guard(event, undefined, () => {
+      settingsOpen = open === true
+      layout()
     })
   })
   ipcMain.handle('aa:agent-info', (event) => {

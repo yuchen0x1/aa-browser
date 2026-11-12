@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('aa', {
   historySuggest: (query: string, limit?: number): Promise<HistoryEntry[]> => ipcRenderer.invoke('aa:history-suggest', query, limit),
   settingsGet: (): Promise<SettingsView | null> => ipcRenderer.invoke('aa:settings-get'),
   settingsSet: (patch: Partial<AppSettings>): Promise<AppSettings | null> => ipcRenderer.invoke('aa:settings-set', patch),
+  settingsOpen: (open: boolean): Promise<void> => ipcRenderer.invoke('aa:settings-open', open),
   agentInfo: (): Promise<AgentInfo | null> => ipcRenderer.invoke('aa:agent-info'),
   clientsDetect: (): Promise<unknown> => ipcRenderer.invoke('aa:clients-detect'),
   clientsSetup: (ids: string[]): Promise<unknown> => ipcRenderer.invoke('aa:clients-setup', ids),

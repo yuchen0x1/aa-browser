@@ -38,6 +38,7 @@ declare global {
       historySuggest: (query: string, limit?: number) => Promise<HistoryEntry[]>
       settingsGet: () => Promise<SettingsView | null>
       settingsSet: (patch: Partial<AppSettings>) => Promise<AppSettings | null>
+      settingsOpen: (open: boolean) => Promise<void>
       agentInfo: () => Promise<AgentInfo | null>
       clientsDetect: () => Promise<ClientDetectResult[]>
       clientsSetup: (ids: string[]) => Promise<ClientSetupResult[]>
@@ -54,7 +55,7 @@ let state: UiState = { tabs: [], activeId: null, agentCount: 0, agentVerifiedCou
 
 const tabsEl = document.getElementById('tabs') as HTMLDivElement
 const omnibox = document.getElementById('omnibox') as HTMLInputElement
-const agentPill = document.getElementById('agent-pill') as HTMLDivElement
+const agentPill = document.getElementById('agent-pill') as HTMLButtonElement
 const btnBack = document.getElementById('btn-back') as HTMLButtonElement
 const btnForward = document.getElementById('btn-forward') as HTMLButtonElement
 const btnReload = document.getElementById('btn-reload') as HTMLButtonElement
@@ -216,18 +217,19 @@ function renderToolbar(): void {
     btnBack.disabled = true
     btnForward.disabled = true
   }
-  agentPill.title = state.connectionMessage
-  agentPill.classList.toggle('connected', state.agentVerifiedCount > 0)
-  agentPill.classList.toggle('waiting', state.bridgeState === 'waiting' || (state.agentCount > 0 && state.agentVerifiedCount === 0))
-  if (state.agentVerifiedCount > 0) {
-    agentPill.textContent = `● AI 已连接 ×${state.agentVerifiedCount}`
-  } else if (state.agentCount > 0) {
-    agentPill.textContent = '◌ 等待 AI 首次调用'
-  } else if (state.bridgeState === 'waiting') {
-    agentPill.textContent = '◌ 等待 AI 连接'
-  } else {
-    agentPill.textContent = '○ AI 桥未连接'
-  }
+  const connected = state.agentVerifiedCount > 0
+  const waiting = !connected && (state.bridgeState === 'waiting' || state.agentCount > 0)
+  const statusText = connected
+    ? `AI 已连接 ×${state.agentVerifiedCount}`
+    : waiting
+      ? state.agentCount > 0 ? '等待 AI 首次调用' : '等待 AI 连接'
+      : 'AI 桥未连接'
+  agentPill.classList.toggle('connected', connected)
+  agentPill.classList.toggle('waiting', waiting)
+  agentPill.classList.toggle('disconnected', !connected && !waiting)
+  agentPill.textContent = statusText
+  agentPill.title = `${state.connectionMessage}。点击打开“连接 AI 客户端”设置。`
+  agentPill.setAttribute('aria-label', `${statusText}。点击打开连接设置`)
   agentStop.textContent = state.agentInterrupted ? '恢复' : '中断'
   agentStop.classList.toggle('active', state.agentInterrupted)
   agentStop.title = state.agentInterrupted ? '恢复 Agent 浏览器操作' : '中断 Agent 的后续浏览器操作'
@@ -451,6 +453,13 @@ function applyState(next: UiState): void {
 btnBack.addEventListener('click', () => void window.aa.back())
 btnForward.addEventListener('click', () => void window.aa.forward())
 btnReload.addEventListener('click', () => void window.aa.reload())
+agentPill.addEventListener('click', () => {
+  if (settingsModal?.hidden) {
+    void openSettings().then(() => {
+      setClientList?.closest('.settings-group')?.scrollIntoView({ block: 'center' })
+    })
+  }
+})
 agentStop.addEventListener('click', () => void (state.agentInterrupted ? window.aa.resumeAgent() : window.aa.interruptAgent()))
 document.getElementById('btn-newtab')?.addEventListener('click', () => void window.aa.tabNew())
 
@@ -590,6 +599,7 @@ btnUpdateAction?.addEventListener('click', () => {
 /* ── 设置面板 ─────────────────────── */
 async function openSettings(): Promise<void> {
   if (!settingsModal) return
+  await window.aa.settingsOpen(true)
   settingsModal.hidden = false
   if (settingsStatus) settingsStatus.textContent = ''
   const view = await window.aa.settingsGet().catch(() => null)
@@ -623,11 +633,16 @@ async function openSettings(): Promise<void> {
   void refreshClients()
   renderUpdate(state.update)
 }
+function closeSettings(): void {
+  if (!settingsModal) return
+  settingsModal.hidden = true
+  void window.aa.settingsOpen(false)
+}
 btnSettings?.addEventListener('click', () => {
   if (settingsModal?.hidden) void openSettings()
 })
 document.getElementById('btn-close-settings')?.addEventListener('click', () => {
-  if (settingsModal) settingsModal.hidden = true
+  closeSettings()
 })
 document.getElementById('btn-save-settings')?.addEventListener('click', async () => {
   const patch: Partial<AppSettings> = {}

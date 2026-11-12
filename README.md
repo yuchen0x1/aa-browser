@@ -9,13 +9,14 @@
 
 ## 最新更新
 
-### v0.0.1
+### v0.0.2 — 2026-11-13
 
-Aa Browser 以重新整理后的代码重新开始发布；此前的 GitHub Releases 已撤下。
+Aa Browser 的首个补丁版本，聚焦首次接入可见性、安装引导和真实点击可靠性。
 
-- 提供基于 MCP 的浏览器控制，包括页面导航、交互、下载、对话框和网络记录。
-- 新增首次启动 AI 接入向导，并支持配置 Codex 桌面端、CLI 和 IDE；修改前自动备份并保留其他设置。
-- 提供 Windows 安装包和应用内更新检查。
+- 新标签页提示词改为完整的安装与连接提示词，包含官方仓库、安装脚本和 Windows 命令。
+- AI 连接状态移到工具栏左侧的高可见位置，点击即可打开连接设置；设置面板打开时扩展到完整窗口。
+- 修复部分真实点击事件偶发丢失导致的复选框、对话框和下载操作不生效。
+- 保留 Windows 安装包、应用内更新和基于 MCP 的浏览器控制能力。
 
 完整版本历史见[发布说明](./docs/releases/release-notes.md)。
 
@@ -134,7 +135,7 @@ WorkBuddy 路径尝试写入用户级 `~/.workbuddy/mcp.json` 并生成本地 Co
 npm run dist       # 产出 release/Aa Browser-Setup-<版本>.exe（NSIS 安装器）
 ```
 
-双击安装（未做代码签名，Windows SmartScreen 会提示"更多信息 → 仍要运行"）。首次打开后，新标签页会引导你完成接入：点工具栏「设置」→「连接 AI 客户端」写入配置，重启 AI 客户端，再把页面上的测试提示词发给 AI。只有 AI 实际调用 `browser_tabs` 后，工具栏才显示「AI 已连接」；配置写入成功本身不代表接通。
+双击安装（未做代码签名，Windows SmartScreen 会提示"更多信息 → 仍要运行"）。首次打开后，新标签页会提供安装与连接提示词：具备本机终端和文件操作能力的 AI 可按提示从官方仓库下载安装、写入客户端配置，并在重启/重新加载后实际调用 `browser_tabs` 验证。只有 AI 实际调用 `browser_tabs` 后，工具栏才显示「AI 已连接」；配置写入成功本身不代表接通。
 
 ### 方式二：源码运行（开发者）
 
@@ -155,7 +156,7 @@ npm run dev
 
 ## 接入你的 Agent
 
-**方式 A · 一键接入（推荐）**：Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写入，然后重启 AI 客户端并按新标签页给出的测试提示词实际调用 `browser_tabs`。工具栏显示「AI 已连接」才算验证通过；MCP 桥连上但尚未成功调用工具时会显示「等待 AI 首次调用」。
+**方式 A · 一键接入（推荐）**：Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写入，然后重启 AI 客户端并按新标签页给出的安装与连接提示词实际调用 `browser_tabs`。工具栏显示「AI 已连接」才算验证通过；MCP 桥连上但尚未成功调用工具时会显示「等待 AI 首次调用」。
 命令行等效：`node cli/setup.mjs --yes`（`--list` 查看，`--client zcode,cursor` 指定目标）。
 支持传统配置式 MCP 客户端：**Codex（桌面端 / CLI / IDE）/ ZCode / Claude Code / Cursor / Windsurf / Cline / VS Code / Gemini CLI / Qwen Code**。Codex 配置写入用户级 `~/.codex/config.toml`；其他客户端写入各自 MCP 配置。写入前自动备份原配置为 `<file>.aa-backup-<时间戳>`，幂等可重复执行。保存后需重启客户端，并让它实际调用 `browser_tabs` 验证。
 
