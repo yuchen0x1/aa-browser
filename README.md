@@ -250,18 +250,6 @@ npm run validate:codex # 验证 Codex TOML 接入、保留其他配置、备份�
 node scripts/live-test.mjs   # 实战示例：MCP 驱动必应搜索全流程
 ```
 
-## Roadmap
-
-- [x] ~~操作确认弹窗：Agent 点击/提交前可选人工确认~~（v0.6.0 已完成）
-- [x] ~~站点白名单 / 会话隔离分区~~（v0.6.0 已完成）
-- [x] ~~快照增量更新与缓存（进一步降 token）~~（v0.2.0 已完成）
-- [x] ~~一键接入各大 AI 客户端 + 网络抓包工具集 + Windows 安装包~~（v0.3.0 已完成）
-- [x] ~~请求拦截与 Mock（Agent 修改/重放请求）~~（v0.6.0 已完成）
-- [ ] npm 发布 `aa-browser-mcp`，支持 `npx` 一行接入
-- [ ] macOS / Linux 打包分发、代码签名
-
-## License
-
 [MIT](./LICENSE)
 
 ## 致谢
