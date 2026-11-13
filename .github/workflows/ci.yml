@@ -41,6 +41,9 @@ jobs:
       - name: Native desktop regression test
         run: npm run test:desktop
 
+      - name: Update notification UI regression test
+        run: npm run test:update-ui
+
       - name: Persistence regression test
         run: npm run test:stores
 

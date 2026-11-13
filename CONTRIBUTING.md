@@ -12,6 +12,7 @@ npm run build
 npm run dev        # 开发模式（渲染层热更新）
 npm run smoke      # MCP 端到端冒烟测试，本地测试页面
 npm run test:desktop # 原生 Electron 界面、查找、恢复与隐私回归
+npm run test:update-ui # 更新提示/后台下载/重试交互（模拟 provider，不运行安装器）
 npm run test:stores  # 设置/历史容错、原子写入与异常备份
 npm run test:updater # 更新器调度/状态测试（模拟更新源，不访问网络）
 npm run test:release # 发布标签/草稿/资产回归（模拟 GitHub API）

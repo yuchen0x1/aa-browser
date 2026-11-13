@@ -50,6 +50,9 @@ declare global {
       updateCheck: () => Promise<UpdateState>
       updateDownload: () => Promise<UpdateState>
       updateInstall: () => Promise<boolean>
+      updateDismiss: () => Promise<void>
+      updateRetry: () => Promise<UpdateState>
+      updateWake: () => Promise<UpdateState>
       onState: (cb: (state: UiState) => void) => void
       onFocusOmnibox: (cb: () => void) => void
       onFocusFind: (cb: () => void) => void
@@ -97,6 +100,11 @@ const setUpdateChannel = document.getElementById('set-update-channel') as HTMLSe
 const updateStatus = document.getElementById('update-status') as HTMLDivElement | null
 const btnUpdateCheck = document.getElementById('btn-update-check') as HTMLButtonElement | null
 const btnUpdateAction = document.getElementById('btn-update-action') as HTMLButtonElement | null
+const updatePill = document.getElementById('btn-update-notice') as HTMLButtonElement
+const updateNotice = document.getElementById('update-notice') as HTMLDivElement
+const updateNoticeText = document.getElementById('update-notice-text') as HTMLSpanElement
+const updateNoticeProgress = document.getElementById('update-notice-progress') as HTMLProgressElement
+const updateNoticeAction = document.getElementById('update-notice-action') as HTMLButtonElement
 const btnReopen = document.getElementById('btn-reopen') as HTMLButtonElement
 const findBar = document.getElementById('find-bar') as HTMLDivElement
 const findQuery = document.getElementById('find-query') as HTMLInputElement
@@ -108,7 +116,7 @@ function renderFind(): void {
   findBar.hidden = !find?.open
   btnReopen.disabled = !state.canReopenClosed
   document.documentElement.style.setProperty('--find-height', find?.open ? '48px' : '0px')
-  document.documentElement.style.setProperty('--page-top', `${84 + (find?.open ? 48 : 0) + (state.pendingApprovals.length ? 180 : 0)}px`)
+  document.documentElement.style.setProperty('--page-top', `${84 + (state.update?.noticeVisible ? 44 : 0) + (find?.open ? 48 : 0) + (state.pendingApprovals.length ? 180 : 0)}px`)
   if (!find?.open) return
   if (wasHidden) {
     findQuery.value = find.query
@@ -181,13 +189,25 @@ function renderUpdate(update?: UpdateState): void {
     downloaded: `已下载 ${update.version ?? ''}，可以重启安装`, error: `更新失败：${update.error ?? '未知错误'}`
   }
   updateStatus.textContent = labels[update.status]
-  updateStatus.title = [update.releaseDate ? `发布时间：${update.releaseDate}` : '', update.size ? `大小：${formatUpdateBytes(update.size)}` : '', update.releaseNotes ?? ''].filter(Boolean).join('\n')
+  updateStatus.title = [update.checkedAt ? `上次检查：${new Date(update.checkedAt).toLocaleString()}` : '', update.retryAt ? `自动重试：${new Date(update.retryAt).toLocaleTimeString()}` : '', update.releaseDate ? `发布时间：${update.releaseDate}` : '', update.size ? `大小：${formatUpdateBytes(update.size)}` : '', update.releaseNotes ?? ''].filter(Boolean).join('\n')
   if (btnUpdateCheck) btnUpdateCheck.disabled = ['checking', 'downloading', 'downloaded'].includes(update.status)
   if (btnUpdateAction) {
-    btnUpdateAction.hidden = !['available', 'downloaded'].includes(update.status)
+    btnUpdateAction.hidden = !['available', 'downloaded', 'error'].includes(update.status)
     btnUpdateAction.disabled = update.status === 'downloading'
-    btnUpdateAction.textContent = update.status === 'downloaded' ? '重启并安装' : '下载更新'
+    btnUpdateAction.textContent = update.status === 'downloaded' ? '重启并安装' : update.status === 'error' ? '重试更新' : '下载更新'
   }
+  updatePill.hidden = !['available', 'downloading', 'downloaded', 'error'].includes(update.status)
+  updatePill.textContent = update.status === 'downloaded' ? '重启更新' : update.status === 'downloading' ? `更新 ${Math.max(0, Math.min(100, Math.round(update.progress ?? 0)))}%` : update.status === 'error' ? '更新失败' : '发现更新'
+  updatePill.title = labels[update.status]
+  updatePill.classList.toggle('error', update.status === 'error')
+  updateNotice.hidden = !update.noticeVisible
+  document.documentElement.style.setProperty('--notice-height', update.noticeVisible ? '44px' : '0px')
+  updateNotice.classList.toggle('error', update.status === 'error')
+  updateNoticeText.textContent = update.status === 'downloaded' ? `新版 ${update.version} 已下载完成，重启即可安装。` : update.status === 'available' ? `发现新版本 ${update.version}，当前为 ${update.currentVersion}。` : update.status === 'error' ? `更新${update.failedOperation === 'download' ? '下载' : '检查'}失败，${update.retryAt ? '将自动重试，也可立即重试。' : '点击重试或在设置中查看原因。'}` : labels[update.status]
+  updateNoticeProgress.hidden = update.status !== 'downloading'
+  updateNoticeProgress.value = Math.max(0, Math.min(100, update.progress ?? 0))
+  updateNoticeAction.hidden = !['available', 'downloaded', 'error'].includes(update.status)
+  updateNoticeAction.textContent = update.status === 'downloaded' ? '重启安装' : update.status === 'error' ? '立即重试' : '下载更新'
 }
 
 function activeTab(): TabInfo | null {
@@ -670,8 +690,19 @@ btnClientSetup?.addEventListener('click', async () => {
 btnUpdateCheck?.addEventListener('click', () => { void window.aa.updateCheck() })
 btnUpdateAction?.addEventListener('click', () => {
   if (state.update?.status === 'downloaded') void window.aa.updateInstall()
+  else if (state.update?.status === 'error') void window.aa.updateRetry()
   else void window.aa.updateDownload()
 })
+updateNoticeAction.addEventListener('click', () => {
+  if (state.update?.status === 'downloaded') void window.aa.updateInstall()
+  else if (state.update?.status === 'error') void window.aa.updateRetry()
+  else void window.aa.updateDownload()
+})
+document.getElementById('update-notice-dismiss')?.addEventListener('click', () => void window.aa.updateDismiss())
+updatePill.addEventListener('click', () => {
+  void openSettings().then(() => document.getElementById('software-update-settings')?.scrollIntoView({ block: 'center' }))
+})
+window.addEventListener('online', () => { void window.aa.updateWake() })
 
 /* ── 设置面板 ─────────────────────── */
 async function openSettings(): Promise<void> {

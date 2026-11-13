@@ -73,6 +73,9 @@ export interface UpdateState {
   bytesPerSecond?: number
   error?: string
   checkedAt?: number
+  noticeVisible?: boolean
+  retryAt?: number
+  failedOperation?: 'check' | 'download'
 }
 
 /** chrome UI 展示的下载条目（精简自主进程 DownloadRecord，避免前端依赖主进程类型） */

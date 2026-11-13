@@ -4,7 +4,8 @@ import path from 'node:path'
 import http from 'node:http'
 import assert from 'node:assert/strict'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { createRequire } from 'node:module'
+import Module, { createRequire } from 'node:module'
+import { EventEmitter } from 'node:events'
 import { spawn } from 'node:child_process'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -23,7 +24,7 @@ if (!process.versions.electron) {
     AA_DESKTOP_TEST_DIR: runDir
   }
   delete env.ELECTRON_RUN_AS_NODE
-  const child = spawn(require('electron'), [fileURLToPath(import.meta.url)], { cwd: ROOT, env, stdio: 'inherit' })
+  const child = spawn(require('electron'), [fileURLToPath(import.meta.url), ...process.argv.slice(2)], { cwd: ROOT, env, stdio: 'inherit' })
   const timer = setTimeout(() => { console.error('FAIL: desktop suite timed out'); child.kill() }, 120_000)
   child.once('error', (error) => { clearTimeout(timer); console.error(error); process.exitCode = 1 })
   child.once('exit', (code) => {
@@ -39,6 +40,29 @@ if (!process.versions.electron) {
   // ESM entry to finish evaluating before it can emit ready.
   void (async () => {
   const { app, webContents, BaseWindow, Menu } = await import('electron')
+  const updateUi = process.argv.includes('--update-ui')
+  let updateProvider
+  if (updateUi) {
+    // Only this isolated test instance acts packaged; the provider never uses a network or installer.
+    app.setPath('userData', process.env.AA_BROWSER_USER_DATA_DIR)
+    Object.defineProperty(app, 'isPackaged', { value: true })
+    app.getVersion = () => '0.0.3'
+    updateProvider = new EventEmitter()
+    updateProvider.downloads = 0
+    updateProvider.installs = 0
+    const info = { version: '0.0.4', releaseDate: '2026-11-13', files: [{ size: 100 }] }
+    updateProvider.checkForUpdates = async () => {
+      updateProvider.emit('checking-for-update')
+      updateProvider.emit('update-available', info)
+      return { downloadPromise: updateProvider.autoDownload ? updateProvider.downloadUpdate() : null }
+    }
+    updateProvider.downloadUpdate = async () => {
+      updateProvider.downloads++
+      updateProvider.emit('download-progress', { percent: 40, transferred: 40, total: 100, bytesPerSecond: 10 })
+      return new Promise((resolve) => { updateProvider.finish = () => { updateProvider.emit('update-downloaded', info); resolve([]) } })
+    }
+    updateProvider.quitAndInstall = () => { updateProvider.installs++ }
+  }
   const { WebSocket } = await import('ws')
   const runDir = process.env.AA_DESKTOP_TEST_DIR
   const results = []
@@ -90,7 +114,10 @@ if (!process.versions.electron) {
   }
   try {
     app.setAppPath(ROOT)
-    await import(pathToFileURL(path.join(ROOT, 'out/main/index.js')).href)
+    const load = Module._load
+    if (updateUi) Module._load = function (name, ...args) { return name === 'electron-updater' ? { autoUpdater: updateProvider } : load.call(this, name, ...args) }
+    try { await import(pathToFileURL(path.join(ROOT, 'out/main/index.js')).href) }
+    finally { Module._load = load }
     await app.whenReady()
     chrome = await until(() => webContents.getAllWebContents().find((wc) => wc.getURL().endsWith('/renderer/index.html')), 'chrome view')
     await until(() => ui('!!window.aa && !!document.querySelector("#btn-find")'), 'preload + renderer')
@@ -114,6 +141,44 @@ if (!process.versions.electron) {
       else item.reject(new Error(response.error))
     })
     const initial = await state()
+    if (updateUi) {
+      await until(async () => (await state()).update?.status === 'downloading', 'automatic update on startup/focus')
+      await until(() => ui('!document.querySelector("#update-notice").hidden && document.querySelector("#btn-update-notice").textContent.includes("40%")'), 'visible download notice')
+      assert.equal(await ui('document.querySelector("#settings-modal").hidden'), true)
+      const window = BaseWindow.getAllWindows()[0]
+      const shellView = window.contentView.children.find((view) => view.webContents === chrome)
+      await until(() => shellView.getBounds().height === 128, 'update banner native bounds')
+      assert.equal(updateProvider.downloads, 1)
+      pass('automatic download is visible on the main window without opening settings')
+      await click('#btn-find')
+      await until(() => shellView.getBounds().height === 176, 'find plus update banner native bounds')
+      assert.ok(await ui('document.querySelector("#find-bar").getBoundingClientRect().top >= 128'))
+      await click('#find-close')
+      pass('find toolbar and page layout reserve separate space for the update banner')
+      updateProvider.emit('error', new Error('simulated download interruption'))
+      await until(() => ui('document.querySelector("#update-notice-action").textContent === "立即重试"'), 'download error action')
+      await click('#update-notice-action')
+      await until(() => updateProvider.downloads === 2, 'actual retry IPC')
+      pass('visible retry action resumes a failed download')
+      await click('#update-notice-dismiss')
+      await until(() => shellView.getBounds().height === 84, 'dismiss update banner')
+      assert.equal(await ui('document.querySelector("#btn-update-notice").hidden'), false)
+      updateProvider.finish()
+      await until(() => ui('!document.querySelector("#update-notice").hidden && document.querySelector("#update-notice-action").textContent === "重启安装"'), 'download completion notice')
+      assert.equal(updateProvider.installs, 0)
+      pass('later keeps the toolbar entry and completion shows a fresh prompt without forcing restart')
+      await click('#btn-update-notice')
+      assert.equal(await ui('document.querySelector("#settings-modal").hidden'), false)
+      assert.ok(await ui('document.querySelector("#update-status").textContent.includes("已下载")'))
+      await click('#btn-close-settings')
+      await click('#update-notice-action')
+      assert.equal(updateProvider.installs, 1)
+      pass('toolbar opens update settings and explicit restart action reaches the installer API')
+      fs.writeFileSync(path.join(runDir, 'result.json'), JSON.stringify({ status: 'PASS', simulatedProvider: true, checks: results }, null, 2))
+      console.log(`PASS: all ${results.length} update UI checks (simulated provider; no real installer)`)
+      ws.close(); server.close(); app.quit()
+      return
+    }
     assert.ok(initial.update)
     assert.equal(initial.canReopenClosed, false)
     pass('initial UI state includes updater, finder and restore availability')

@@ -34,6 +34,9 @@ contextBridge.exposeInMainWorld('aa', {
   updateCheck: (): Promise<UpdateState> => ipcRenderer.invoke('aa:update-check'),
   updateDownload: (): Promise<UpdateState> => ipcRenderer.invoke('aa:update-download'),
   updateInstall: (): Promise<boolean> => ipcRenderer.invoke('aa:update-install'),
+  updateDismiss: (): Promise<void> => ipcRenderer.invoke('aa:update-dismiss'),
+  updateRetry: (): Promise<UpdateState> => ipcRenderer.invoke('aa:update-retry'),
+  updateWake: (): Promise<UpdateState> => ipcRenderer.invoke('aa:update-wake'),
   onState: (cb: (state: unknown) => void): void => {
     ipcRenderer.on('aa:state', (_e, state) => cb(state))
   },

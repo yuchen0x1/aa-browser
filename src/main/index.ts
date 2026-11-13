@@ -1,4 +1,4 @@
-import { app, BaseWindow, WebContentsView, ipcMain, Menu, MenuItem, shell, clipboard } from 'electron'
+import { app, BaseWindow, WebContentsView, ipcMain, Menu, MenuItem, shell, clipboard, powerMonitor } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -86,7 +86,7 @@ function rendererAssets(): { preload: string; index: string } {
 function layout(): void {
   if (!win || !chromeView) return
   const { width, height } = win.getContentBounds()
-  const panelHeight = (approvals.list().length ? 180 : 0) + (finder?.getState().open ? 48 : 0)
+  const panelHeight = (approvals.list().length ? 180 : 0) + (finder?.getState().open ? 48 : 0) + (updater?.getState().noticeVisible ? 44 : 0)
   const chromeHeight = Math.min(height, Math.max(CHROME_HEIGHT + panelHeight, overlayHeight))
   chromeView.setBounds({ x: 0, y: 0, width, height: settingsOpen ? height : chromeHeight })
   const active = tabManager?.active()
@@ -277,6 +277,7 @@ function createWindow(): void {
 
   // chrome UI 加载完成后再显示窗口，避免白闪（见下方 chromeView 创建处）
   win.on('resize', layout)
+  win.on('focus', () => { void updater?.checkIfDue() })
   win.on('closed', () => {
     win = null
     const cv = chromeView
@@ -499,6 +500,9 @@ function registerIpc(): void {
     return updater?.download() ?? null
   })
   ipcMain.handle('aa:update-install', (event) => guard(event, false, () => updater?.install() ?? false))
+  ipcMain.handle('aa:update-dismiss', (event) => guard(event, undefined, () => updater?.dismissNotice()))
+  ipcMain.handle('aa:update-retry', (event) => guard(event, null, () => updater?.retry() ?? null))
+  ipcMain.handle('aa:update-wake', (event) => guard(event, null, () => updater?.checkIfDue() ?? null))
   getDownloadTracker().onChange = pushState
 }
 
@@ -526,6 +530,7 @@ app.whenReady().then(() => {
     return { autoUpdate: settings.autoUpdate, updateChannel: settings.updateChannel }
   }, app.isPackaged)
   updater.init(pushState)
+  powerMonitor.on('resume', () => { void updater?.checkIfDue() })
 
   registerIpc()
 

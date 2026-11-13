@@ -528,7 +528,7 @@ textarea:focus-visible {
   position: absolute;
   z-index: 50;
   right: 16px;
-  top: calc(84px + var(--find-height, 0px));
+  top: calc(84px + var(--notice-height, 0px) + var(--find-height, 0px));
   max-height: 176px;
   overflow-y: auto;
   width: min(440px, calc(100vw - 32px));
@@ -1045,7 +1045,7 @@ textarea:focus-visible {
 /* 原生查找条占用独立工具带，网页保持可见、可交互。 */
 .find-bar {
   position: absolute;
-  top: 84px;
+  top: calc(84px + var(--notice-height, 0px));
   left: 0;
   right: 0;
   height: 48px;
@@ -1069,6 +1069,36 @@ textarea:focus-visible {
   font: inherit;
 }
 .find-bar input[aria-invalid="true"] { border-color: var(--accent-red); }
+.update-pill {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--accent-cyan);
+  border-radius: 6px;
+  background: #20372d;
+  color: #b4e2c3;
+  white-space: nowrap;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+}
+.update-pill.error { color: #f0b4ae; border-color: var(--accent-red); background: #392827; }
+.update-notice {
+  position: absolute;
+  top: 84px;
+  left: 0;
+  right: 0;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 5px 16px;
+  border-bottom: 1px solid var(--accent-cyan);
+  background: #20372d;
+  color: #d9eee0;
+  -webkit-app-region: no-drag;
+}
+.update-notice.error { background: #392827; border-color: var(--accent-red); }
+#update-notice-text { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+#update-notice-progress { width: min(240px, 22vw); height: 7px; accent-color: var(--accent-cyan); }
 #find-status { min-width: 90px; color: var(--text-muted); }
 button:focus-visible, input:focus-visible, [role="tab"]:focus-visible {
   outline: 2px solid var(--accent-cyan);
