@@ -37,6 +37,14 @@ npm run test:release # 发布标签/草稿/资产回归（模拟 GitHub API）
 
 请附：Aa Browser 版本、复现步骤、Electron userData 目录中的 `error.log`（如有）、以及 Agent 侧收到的错误文本。
 
+## 仓库文件管理
+
+- 源码、测试、图标、客户端配置模板和 `package-lock.json` 需要提交；`node_modules/`、`out/`、`release/` 等生成目录不入库。
+- 临时审计报告、调试输出、测试 profile 和下载产物统一放在 `.local-verification/`；测试退出后可删除该目录。
+- `.env`、本机 MCP 配置、浏览器用户数据和签名私钥不入库；环境示例文件只能包含占位符。
+- `docs/releases/release-notes.md` 保留正式版本历史，根目录保留当前版本的 `release-notes-v<版本>.md` 供发布流程读取。旧版独立说明可从对应 Git 标签查看。
+- 推送前检查 `git status --short` 和 `git diff --cached --stat`；忽略规则不会自动移除已经被 Git 跟踪的文件。
+
 ## 测试数据与界面截图
 
 两套端到端测试都在仓库 `.local-verification/` 下使用独立 profile、服务发现文件、设置、历史和下载目录，不连接日常使用的 Aa Browser。桌面测试保留各次运行的 `result.json` 便于定位问题；此目录不会入库。

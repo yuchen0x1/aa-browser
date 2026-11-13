@@ -18,7 +18,7 @@
 
 旧版用户首次请在「设置 → 软件更新」检查、下载并重启安装，或安装最新 Windows 安装包；新逻辑需升级后才会生效。
 
-完整版本历史见[发布说明](./docs/releases/release-notes.md)。本轮分析、开源参考、验证结果与剩余工作见[升级报告](./docs/EVOLUTION-2026-11-13.md)。
+完整版本历史见[发布说明](./docs/releases/release-notes.md)。
 
 传统浏览器是为"人眼看像素"设计的；而 AI Agent 需要的是**结构化页面数据**。Aa Browser 是一个完整的 Chromium 浏览器，任何人都可以正常使用它上网；同时，任何支持 MCP（Model Context Protocol）的 AI Agent 都可以连接进来，读取页面的**结构化快照**（可访问性树 + 元素 ref 编号），并执行点击、输入、选择、滚动、提取等操作——不看截图、不猜坐标。
 
@@ -223,7 +223,7 @@ npm run dev
 - 一键接入写入其他客户端配置前**自动备份**、只改 `aa-browser` 一个键、幂等可重复
 - **注意**：Agent 能看到页面内容与网络流量，包括可能含秘密的 Cookie、Storage、请求头和响应体。敏感输入审批是基于页面字段特征的保护，不是通用 DLP；不要让不可信 Agent 访问高敏站点。
 - **站点白名单**：在设置中每行填写一个 `https://example.com` 或 `https://*.example.com` 规则；填写后仅允许匹配的 HTTP/HTTPS 站点导航，留空表示关闭白名单。
-- **会话隔离**：每个标签页使用独立的持久化 Electron session 分区，Cookie、Storage、缓存和请求拦截规则不会在标签页之间共享。
+- **会话隔离**：普通标签默认共享登录态；可在设置中启用隔离会话。隔离标签使用独立的 Electron session 分区，关闭后清理会话数据。
 
 ## 项目结构
 

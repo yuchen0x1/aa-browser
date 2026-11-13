@@ -11,5 +11,40 @@ Thumbs.db
 # 一次性调试脚本（下划线前缀）与本地审计/会话草稿，不入库
 scripts/_*
 .autonomous-upgrade/
+.evolution/
 PROJECT_AUDIT_REPORT.md
 .local-verification/
+
+# 本机环境、凭据与签名材料；可提交不含秘密的示例文件
+.env
+.env.*
+!.env.example
+!.env.sample
+/.npmrc
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+
+# 本机工具配置和运行数据；workbuddy/mcp.json 是产品模板，继续跟踪
+/.mcp.json
+/mcp.local.json
+/.zcode/
+/.codex/
+/.claude/settings.local.json
+/.aabrowser/
+/userData/
+/profiles/
+/logs/
+/coverage/
+*.tmp
+*.pid
+*.aa-backup-*
+*.invalid-*.bak
+
+# 一次性分析与验收报告保存在 .local-verification/，正式发布说明另行维护
+/docs/EVOLUTION-*.md
+/docs/BUG_RECHECK-*.md
+/docs/RELEASE_AUDIT-*.md
