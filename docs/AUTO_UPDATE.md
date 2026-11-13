@@ -34,7 +34,7 @@ Aa Browser 使用 `electron-updater` 配合 `electron-builder` 的 GitHub Releas
 
 4. `.github/workflows/ci.yml` 先运行类型与工具合约检查、客户端配置验证、构建、MCP 冒烟、原生桌面、持久化及更新状态回归。
 5. 标签构建通过后，Windows Release job 使用 `npm run dist -- --publish never` 生成 NSIS 安装包、`latest.yml` 和 blockmap，再生成 `release/SHA256SUMS.txt`。
-6. 同一 job 通过 GitHub API 创建草稿 Release，使用对应的 `release-notes-v<版本>.md` 设置正文，核对并上传完整资产集后再公开发布。遇到同名已有资产会比较摘要，相同则跳过；不同则替换该版本的资产。
+6. 同一 job 通过 GitHub API 创建草稿 Release，使用对应的 `release-notes-v<版本>.md` 设置正文，核对并上传完整资产集后再公开发布。更新元数据及公开草稿时显式携带版本标签，发布后按标签重新查询并核对 ID、标签和草稿状态；遇到提供方误关联临时标签时使任务失败。遇到同名已有资产会比较摘要，相同则跳过；不同则替换该版本的资产。
 
 工作流只在 `v*` 标签触发发布，使用 GitHub Actions 内置 `GITHUB_TOKEN`，权限为 `contents: write`。不会把 Token 写入源码。
 
@@ -53,12 +53,15 @@ npm run check
 npm run build
 npm run smoke
 npm run test:updater
+npm run test:release
 npm run dist
 ```
 
 自动更新的在线验证需要一个已发布的、版本高于本地安装版本的 GitHub Release。没有该外部条件时，只能验证构建配置、工作流语法和本地状态处理，不能声称线上更新已验证。
 
 `test:updater` 使用模拟 provider 和定时器验证状态与调度，不下载真实版本，不验证签名、安装或重启。
+
+`test:release` 执行实际工作流中的发布脚本，使用模拟 GitHub API 覆盖新发布、已有草稿、已发布版本的资产修复及标签错配，不写入远程仓库。
 
 ## 失败处理
 

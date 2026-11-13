@@ -14,13 +14,14 @@ npm run smoke      # MCP 端到端冒烟测试，本地测试页面
 npm run test:desktop # 原生 Electron 界面、查找、恢复与隐私回归
 npm run test:stores  # 设置/历史容错、原子写入与异常备份
 npm run test:updater # 更新器调度/状态测试（模拟更新源，不访问网络）
+npm run test:release # 发布标签/草稿/资产回归（模拟 GitHub API）
 ```
 
 要求：Node.js ≥ 20，Windows（macOS/Linux 可开发但安装包尚未支持）。
 
 ## 提交 PR 前
 
-- `npm run check`、`npm run build`、`npm run smoke`、`npm run test:desktop`、`npm run test:stores` 与 `npm run test:updater` 必须通过（CI 会自动跑）
+- `npm run check`、`npm run build`、`npm run smoke`、`npm run test:desktop`、`npm run test:stores`、`npm run test:updater` 与 `npm run test:release` 必须通过（CI 会自动跑）
 - 新增 MCP 工具时同步更新：`src/main/tools.ts`、`cli/mcp.mjs` 工具定义、README 工具表
 - 修改注入引擎（`src/snapshot/engine.js`）时注意保持**自包含**：函数体不得引用外部变量/import，主进程靠 `Function.prototype.toString()` 注入
 - 动作/配置类改动请附带 smoke 断言

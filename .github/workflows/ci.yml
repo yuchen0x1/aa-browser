@@ -47,6 +47,9 @@ jobs:
       - name: Updater state regression test
         run: npm run test:updater
 
+      - name: Release metadata regression test
+        run: npm run test:release
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: test
@@ -145,7 +148,8 @@ jobs:
             if (release.immutable) throw new Error(`Release ${tag} is immutable and cannot be updated`)
             if (created) {
               await github.rest.repos.updateRelease({
-                owner, repo, release_id: release.id, name, body,
+                owner, repo, release_id: release.id, tag_name: tag,
+                target_commitish: context.sha, name, body,
                 draft: true, prerelease: false,
               })
             }
@@ -182,7 +186,16 @@ jobs:
             const missing = assetNames.filter(file => !uploadedNames.has(file))
             if (missing.length) throw new Error(`Release is missing assets: ${missing.join(', ')}`)
 
-            if (created && release.draft) {
-              await github.rest.repos.updateRelease({ owner, repo, release_id: release.id, draft: false })
+            if (release.draft) {
+              await github.rest.repos.updateRelease({
+                owner, repo, release_id: release.id, tag_name: tag,
+                target_commitish: context.sha, draft: false, make_latest: 'true',
+              })
+            }
+            // Verify the public lookup: a successful PATCH alone does not prove
+            // the provider kept the requested tag or published the draft.
+            const { data: verifiedRelease } = await github.rest.repos.getReleaseByTag({ owner, repo, tag })
+            if (verifiedRelease.id !== release.id || verifiedRelease.tag_name !== tag || verifiedRelease.draft) {
+              throw new Error(`Release verification failed for ${tag}: id=${verifiedRelease.id}, tag=${verifiedRelease.tag_name}, draft=${verifiedRelease.draft}`)
             }
             core.info(`${created ? 'Published' : 'Repaired'} ${tag}: ${assetNames.join(', ')}`)
