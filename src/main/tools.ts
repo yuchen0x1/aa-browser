@@ -66,7 +66,7 @@ export function buildTools(
   downloads: DownloadTracker,
   approvals?: ApprovalManager,
   onAction?: (item: import('@shared/types').ActionLogItem) => void,
-  getSettings?: () => { requireOperationApproval: boolean; fullSnapshot?: boolean }
+  getSettings?: () => { requireOperationApproval: boolean; fullSnapshot?: boolean; searchEngine?: string }
 ): McpToolDef[] {
   const tools: McpToolDef[] = []
 
@@ -104,7 +104,7 @@ export function buildTools(
       approvals?.assertRunning()
       const url = String(args['url'] ?? '')
       if (!url) throw new ActionError('url 不能为空')
-      const target = normalizeUrl(url, searchUrl, newtabUrl)
+      const target = normalizeUrl(url, getSettings?.().searchEngine || searchUrl, newtabUrl)
       const r = await doNavigate(tabs, target, { newTab: !!args['newTab'], tabId: args['tabId'] as string | undefined })
       let body = `已导航: ${r.url}\ntitle: ${r.title}`
       if (args['snapshot'] !== false) {
@@ -970,7 +970,7 @@ export function buildTools(
       }
       if (action === 'new') {
         const url = String(args['url'] ?? '')
-        const target = url ? normalizeUrl(url, searchUrl, newtabUrl) : newtabUrl
+        const target = url ? normalizeUrl(url, getSettings?.().searchEngine || searchUrl, newtabUrl) : newtabUrl
         const isolated = typeof args['isolated'] === 'boolean' ? args['isolated'] : undefined
         const tab = tabs.createTab(target, true, isolated)
         const note = tab.isolated ? '（隔离会话，关闭时清除数据）' : '（共享会话）'

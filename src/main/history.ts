@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { writeJsonAtomic } from './atomic-json'
 
 export interface HistoryEntry {
   url: string
@@ -16,6 +17,7 @@ const MAX_ENTRIES = 1000
 export class HistoryStore {
   private entries: HistoryEntry[] = []
   private loaded = false
+  private backupInvalid = false
 
   get dir(): string {
     return process.env['AA_BROWSER_HISTORY_DIR'] || path.join(os.homedir(), '.aabrowser', 'history')
@@ -30,31 +32,48 @@ export class HistoryStore {
     this.loaded = true
     try {
       const raw = fs.readFileSync(this.file(), 'utf8')
-      const arr = JSON.parse(raw) as HistoryEntry[]
-      if (Array.isArray(arr)) this.entries = arr
-    } catch {
+      const arr: unknown = JSON.parse(raw)
+      if (Array.isArray(arr)) {
+        for (const item of arr) {
+          if (!item || typeof item !== 'object' || typeof item.url !== 'string' || !isHistoryUrl(item.url)) {
+            this.backupInvalid = true
+            continue
+          }
+          const entry: HistoryEntry = {
+            url: item.url,
+            title: typeof item.title === 'string' ? item.title : item.url,
+            ts: typeof item.ts === 'number' && Number.isFinite(item.ts) && item.ts >= 0 ? item.ts : 0,
+            count: typeof item.count === 'number' && Number.isFinite(item.count) && item.count > 0 ? Math.min(Number.MAX_SAFE_INTEGER, Math.floor(item.count)) : 1
+          }
+          if (JSON.stringify(item) !== JSON.stringify(entry)) this.backupInvalid = true
+          this.entries.push(entry)
+        }
+        this.entries = this.entries.slice(-MAX_ENTRIES)
+      } else this.backupInvalid = true
+    } catch (error) {
       this.entries = []
+      this.backupInvalid = error instanceof SyntaxError
     }
   }
 
   private persist(): void {
     try {
-      fs.mkdirSync(this.dir, { recursive: true })
-      fs.writeFileSync(this.file(), JSON.stringify(this.entries.slice(-MAX_ENTRIES)))
+      writeJsonAtomic(this.file(), this.entries.slice(-MAX_ENTRIES), this.backupInvalid)
+      this.backupInvalid = false
     } catch {
-      /* 忽略写入失败 */
+      console.warn('[aa-browser] 历史记录保存失败，原文件保留，当前记录暂存在内存中。')
     }
   }
 
   /** 记录一次访问（忽略新标签页/内部页） */
   add(url: string, title: string): void {
-    if (!url || /^(about:|chrome:|devtools:|view-source:|data:|blob:|file:)/i.test(url)) return
+    if (!isHistoryUrl(url)) return
     this.ensureLoaded()
     const idx = this.entries.findIndex((e) => e.url === url)
     if (idx >= 0) {
       const e = this.entries[idx]
       e.title = title || e.title
-      e.count += 1
+      e.count = Math.min(Number.MAX_SAFE_INTEGER, e.count + 1)
       e.ts = Date.now()
       this.entries.splice(idx, 1)
       this.entries.push(e)
@@ -83,13 +102,22 @@ export class HistoryStore {
       if (s > 0) scored.push({ e, s: s + Math.min(20, e.count) + (e.ts > Date.now() - 3600e3 ? 10 : 0) })
     }
     scored.sort((a, b) => b.s - a.s)
-    return scored.slice(0, Math.min(limit, scored.length)).map((x) => x.e)
+    return scored.slice(0, boundedLimit(limit, MAX_ENTRIES)).map((x) => ({ ...x.e }))
   }
 
   list(limit = 50): HistoryEntry[] {
     this.ensureLoaded()
-    return this.entries.slice(-Math.min(limit, this.entries.length)).reverse()
+    const count = boundedLimit(limit, MAX_ENTRIES)
+    return count ? this.entries.slice(-count).reverse().map((entry) => ({ ...entry })) : []
   }
+}
+
+function boundedLimit(value: number, maximum: number): number {
+  return Number.isFinite(value) ? Math.max(0, Math.min(maximum, Math.floor(value))) : 0
+}
+
+function isHistoryUrl(value: string): boolean {
+  try { return ['http:', 'https:'].includes(new URL(value).protocol) } catch { return false }
 }
 
 function safeHost(u: string): string {

@@ -12,3 +12,4 @@ Thumbs.db
 scripts/_*
 .autonomous-upgrade/
 PROJECT_AUDIT_REPORT.md
+.local-verification/

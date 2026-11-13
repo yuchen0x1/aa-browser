@@ -17,6 +17,7 @@ import { applyPermissionPolicy, clearIsolatedPartition, sweepStalePartitions } f
 import { session } from 'electron'
 import type { UiState } from '@shared/types'
 import { UpdateManager } from './updater'
+import { PageFinder } from './page-finder'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const VERSION = app.getVersion()
@@ -45,6 +46,8 @@ let agentVerifiedCount = 0
 let bridgeState: UiState['bridgeState'] = 'waiting'
 let connectionMessage = '等待 MCP 桥启动并连接'
 let settingsOpen = false
+let overlayHeight = 0
+let finder: PageFinder | null = null
 const approvals = new ApprovalManager()
 let updater: UpdateManager | null = null
 const recentActions: import('@shared/types').ActionLogItem[] = []
@@ -83,8 +86,9 @@ function rendererAssets(): { preload: string; index: string } {
 function layout(): void {
   if (!win || !chromeView) return
   const { width, height } = win.getContentBounds()
-  const panelHeight = approvals?.list().length ? 132 : 0
-  chromeView.setBounds({ x: 0, y: 0, width, height: settingsOpen ? height : CHROME_HEIGHT + panelHeight })
+  const panelHeight = (approvals.list().length ? 180 : 0) + (finder?.getState().open ? 48 : 0)
+  const chromeHeight = Math.min(height, Math.max(CHROME_HEIGHT + panelHeight, overlayHeight))
+  chromeView.setBounds({ x: 0, y: 0, width, height: settingsOpen ? height : chromeHeight })
   const active = tabManager?.active()
   if (active) {
     active.view.setBounds({ x: 0, y: CHROME_HEIGHT + panelHeight, width, height: Math.max(0, height - CHROME_HEIGHT - panelHeight) })
@@ -104,6 +108,7 @@ function detachTabView(tabView: WebContentsView): void {
 
 function pushState(): void {
   if (!chromeView) return
+  layout()
   const state: UiState = {
     tabs: tabManager?.infos() ?? [],
     activeId: tabManager?.activeId ?? null,
@@ -115,7 +120,9 @@ function pushState(): void {
     agentInterrupted: approvals.isInterrupted(),
     recentActions: [...recentActions],
     downloads: getDownloadTracker().list(20),
-    update: updater?.getState()
+    update: updater?.getState(),
+    find: finder?.getState(),
+    canReopenClosed: tabManager?.canReopenClosed ?? false
   }
   chromeView.webContents.send('aa:state', state)
 }
@@ -124,6 +131,23 @@ function handleBeforeInput(wc: Electron.WebContents): void {
   wc.on('before-input-event', (event, input) => {
     const ctrl = input.control || input.meta
     if (input.type !== 'keyDown') return
+    if (ctrl && input.shift && input.key.toLowerCase() === 't') {
+      event.preventDefault()
+      tabManager?.reopenClosed()
+      return
+    }
+    if (ctrl && input.key.toLowerCase() === 'f') {
+      event.preventDefault()
+      finder?.open()
+      chromeView?.webContents.focus()
+      chromeView?.webContents.send('aa:focus-find')
+      return
+    }
+    if (input.key === 'Escape' && wc !== chromeView?.webContents && finder?.getState().open) {
+      event.preventDefault()
+      finder.close()
+      return
+    }
     if (ctrl && input.key.toLowerCase() === 't') {
       event.preventDefault()
       tabManager?.createTab()
@@ -197,7 +221,10 @@ function installPageContextMenu(wc: Electron.WebContents): void {
 
     if (hasLink) {
       push({ label: '打开链接', enabled: linkAllowed, click: () => { if (linkAllowed) void wc.loadURL(params.linkURL) } })
-      push({ label: '在新标签页打开链接', enabled: linkAllowed, click: () => { if (linkAllowed) tabManager?.createTab(params.linkURL) } })
+      push({ label: '在新标签页打开链接', enabled: linkAllowed, click: () => {
+        const source = tabManager?.tabs.find((t) => t.view.webContents === wc)
+        if (linkAllowed) tabManager?.createTab(params.linkURL, true, source?.isolated)
+      } })
       push({ label: '复制链接地址', click: () => { clipboard.writeText(params.linkURL) } })
       push({ type: 'separator' })
     }
@@ -252,6 +279,11 @@ function createWindow(): void {
   win.on('resize', layout)
   win.on('closed', () => {
     win = null
+    const cv = chromeView
+    chromeView = null
+    tabManager?.closeAll()
+    // BaseWindow 不负责销毁 WebContentsView 的 WebContents。
+    if (cv && !cv.webContents.isDestroyed()) cv.webContents.close()
   })
 
   const assets = rendererAssets()
@@ -266,6 +298,7 @@ function createWindow(): void {
   })
   win.contentView.addChildView(chromeView)
   const cv = chromeView
+  cv.setBackgroundColor('#00000000')
   // chrome UI 加载完成后再显示窗口，避免白闪
   cv.webContents.once('did-finish-load', () => win?.show())
   setTimeout(() => win?.show(), 2500) // 兜底：加载卡住也要出窗口
@@ -308,7 +341,11 @@ function registerIpc(): void {
       connectionMessage,
       pendingApprovals: approvals.list(),
       agentInterrupted: approvals.isInterrupted(),
-      downloads: getDownloadTracker().list(20)
+      downloads: getDownloadTracker().list(20),
+      recentActions: [...recentActions],
+      update: updater?.getState(),
+      find: finder?.getState(),
+      canReopenClosed: tabManager?.canReopenClosed ?? false
     } satisfies UiState))
   })
   ipcMain.handle('aa:tab-new', (event, url?: string) => {
@@ -320,6 +357,21 @@ function registerIpc(): void {
         return false
       }
       return true
+    })
+  })
+  ipcMain.handle('aa:tab-reopen', (event) => guard(event, false, () => !!tabManager?.reopenClosed()))
+  ipcMain.handle('aa:find-open', (event) => guard(event, undefined, () => finder?.open()))
+  ipcMain.handle('aa:find', (event, query: unknown, forward: unknown, next: unknown) => {
+    return guard(event, undefined, () => {
+      if (typeof query === 'string') finder?.search(query, forward !== false, next === true)
+    })
+  })
+  ipcMain.handle('aa:find-close', (event) => guard(event, undefined, () => finder?.close()))
+  ipcMain.handle('aa:overlay-height', (event, value: unknown) => {
+    return guard(event, undefined, () => {
+      if (typeof value !== 'number' || !Number.isFinite(value)) return
+      overlayHeight = Math.max(0, Math.ceil(value))
+      layout()
     })
   })
   ipcMain.handle('aa:tab-close', (event, id: string) => {
@@ -425,6 +477,7 @@ function registerIpc(): void {
     return guard(event, null, () => {
       const result = getSettingsStore().set((patch ?? {}) as Record<string, unknown>)
       updater?.refreshSettings()
+      pushState()
       return result
     })
   })
@@ -451,6 +504,7 @@ function registerIpc(): void {
 
 function onTabChange(): void {
   if (!win || !tabManager) return
+  finder?.syncActive()
   // 活动标签挂载/卸载
   const active = tabManager.active()
   for (const t of tabManager.tabs) {
@@ -487,8 +541,12 @@ app.whenReady().then(() => {
   }
 
   tabManager = new TabManager(newtabUrl(), searchUrlBase())
+  finder = new PageFinder(tabManager, pushState)
   tabManager.onChange = onTabChange
-  tabManager.onContextMenu = installPageContextMenu
+  tabManager.onContextMenu = (wc) => {
+    handleBeforeInput(wc)
+    installPageContextMenu(wc)
+  }
   tabManager.onNavigate = (url, title) => getHistoryStore().add(url, title)
   tabManager.getAllowedSites = () => getSettingsStore().get().allowedSites
   tabManager.getDefaultIsolated = () => getSettingsStore().get().isolatedSessions
@@ -528,7 +586,10 @@ app.whenReady().then(() => {
     getDownloadTracker(),
     approvals,
     logAgentAction,
-    () => ({ requireOperationApproval: getSettingsStore().get().requireOperationApproval, fullSnapshot: getSettingsStore().get().fullSnapshot })
+    () => {
+      const settings = getSettingsStore().get()
+      return { requireOperationApproval: settings.requireOperationApproval, fullSnapshot: settings.fullSnapshot, searchEngine: settings.searchEngine }
+    }
   )
   agentServer = new AgentServer(
     tools,
@@ -562,8 +623,10 @@ app.whenReady().then(() => {
 })
 
 app.on('before-quit', () => {
+  updater?.dispose()
   approvals.cancelAll()
   agentServer?.stop()
+  tabManager?.closeAll()
 })
 
 app.on('window-all-closed', () => {
@@ -587,7 +650,7 @@ if (!gotLock) {
 // 未捕获异常写日志，避免静默崩溃
 process.on('uncaughtException', (err) => {
   try {
-    fs.appendFileSync(path.join(app.getPath('home'), '.aabrowser', 'error.log'), `${new Date().toISOString()} ${err.stack ?? err}\n`)
+    fs.appendFileSync(path.join(app.getPath('userData'), 'error.log'), `${new Date().toISOString()} ${err.stack ?? err}\n`)
   } catch {
     /* 忽略 */
   }

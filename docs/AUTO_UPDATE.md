@@ -13,6 +13,8 @@ Aa Browser 使用 `electron-updater` 配合 `electron-builder` 的 GitHub Releas
 - 下载完成后的重启安装。
 - Release 日期、大小和更新日志（状态提示的悬停信息）。
 
+重复保存设置会替换现有启动检查定时器，不会叠加检查任务；关闭自动检查也会取消尚未执行的启动检查。已有检查或下载进行时不会重复发起检查，下载完成后保留待安装状态，直到用户选择重启安装。
+
 下载由 `electron-updater` 处理。更新包在安装前会按 `latest.yml` 中的 SHA-512 元数据验证，校验失败或网络失败会保留当前版本并显示错误。
 
 ## 发布流程
@@ -30,9 +32,9 @@ Aa Browser 使用 `electron-updater` 配合 `electron-builder` 的 GitHub Releas
    git push origin "v$version"
    ```
 
-4. `.github/workflows/ci.yml` 先运行类型检查、工具合约检查、构建和冒烟测试。
-5. 标签构建通过后，Windows Release job 使用 `electron-builder --publish always` 创建 GitHub Release，并上传 NSIS 安装包、`latest.yml` 和 blockmap。
-6. 同一 job 使用对应的 `release-notes-v<版本>.md` 设置 Release 标题和正文，并上传 `release/SHA256SUMS.txt`。
+4. `.github/workflows/ci.yml` 先运行类型与工具合约检查、客户端配置验证、构建、MCP 冒烟、原生桌面、持久化及更新状态回归。
+5. 标签构建通过后，Windows Release job 使用 `npm run dist -- --publish never` 生成 NSIS 安装包、`latest.yml` 和 blockmap，再生成 `release/SHA256SUMS.txt`。
+6. 同一 job 通过 GitHub API 创建草稿 Release，使用对应的 `release-notes-v<版本>.md` 设置正文，核对并上传完整资产集后再公开发布。遇到同名已有资产会比较摘要，相同则跳过；不同则替换该版本的资产。
 
 工作流只在 `v*` 标签触发发布，使用 GitHub Actions 内置 `GITHUB_TOKEN`，权限为 `contents: write`。不会把 Token 写入源码。
 
@@ -50,10 +52,13 @@ Aa Browser 使用 `electron-updater` 配合 `electron-builder` 的 GitHub Releas
 npm run check
 npm run build
 npm run smoke
+npm run test:updater
 npm run dist
 ```
 
 自动更新的在线验证需要一个已发布的、版本高于本地安装版本的 GitHub Release。没有该外部条件时，只能验证构建配置、工作流语法和本地状态处理，不能声称线上更新已验证。
+
+`test:updater` 使用模拟 provider 和定时器验证状态与调度，不下载真实版本，不验证签名、安装或重启。
 
 ## 失败处理
 

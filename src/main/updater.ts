@@ -33,6 +33,7 @@ function sizeOf(info: UpdateInfo): number | undefined {
 export class UpdateManager {
   private state: UpdateState
   private timer: ReturnType<typeof setInterval> | null = null
+  private startupTimer: ReturnType<typeof setTimeout> | null = null
   private initialized = false
   private onChange: () => void = () => {}
 
@@ -72,7 +73,7 @@ export class UpdateManager {
   getState(): UpdateState { return { ...this.state } }
 
   async check(): Promise<UpdateState> {
-    if (this.state.status === 'disabled') return this.getState()
+    if (['disabled', 'checking', 'downloading', 'downloaded'].includes(this.state.status)) return this.getState()
     autoUpdater.allowPrerelease = this.getSettings().updateChannel === 'beta'
     autoUpdater.allowDowngrade = false
     this.patch({ status: 'checking', error: undefined })
@@ -101,10 +102,20 @@ export class UpdateManager {
   }
 
   private schedule(): void {
-    if (this.timer) clearInterval(this.timer)
+    this.dispose()
     if (!this.getSettings().autoUpdate) return
-    setTimeout(() => { if (this.getSettings().autoUpdate) void this.check() }, 15000)
+    this.startupTimer = setTimeout(() => {
+      this.startupTimer = null
+      if (this.getSettings().autoUpdate) void this.check()
+    }, 15000)
     this.timer = setInterval(() => { if (this.getSettings().autoUpdate) void this.check() }, 6 * 60 * 60 * 1000)
+  }
+
+  dispose(): void {
+    if (this.timer !== null) clearInterval(this.timer)
+    if (this.startupTimer !== null) clearTimeout(this.startupTimer)
+    this.timer = null
+    this.startupTimer = null
   }
 
   private applyInfo(status: UpdateStatus, info: UpdateInfo): void {

@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { writeJsonAtomic } from './atomic-json'
 
 export interface AppSettings {
   /** 默认搜索引擎基址（以 = 结尾，查询词直接拼接） */
@@ -40,33 +41,67 @@ const PRESETS: { label: string; url: string }[] = [
   { label: 'GitHub', url: 'https://github.com/search?q=' }
 ]
 
+function validSearchEngine(value: unknown): value is string {
+  if (typeof value !== 'string' || !value.trim()) return false
+  try {
+    const url = new URL(value.trim())
+    return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password
+  } catch { return false }
+}
+
+function normalizeSettings(value: unknown): AppSettings {
+  const raw = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+  return {
+    searchEngine: validSearchEngine(raw.searchEngine) ? raw.searchEngine.trim() : DEFAULTS.searchEngine,
+    fullSnapshot: typeof raw.fullSnapshot === 'boolean' ? raw.fullSnapshot : DEFAULTS.fullSnapshot,
+    downloadDir: typeof raw.downloadDir === 'string' ? raw.downloadDir.trim() : DEFAULTS.downloadDir,
+    requireOperationApproval: typeof raw.requireOperationApproval === 'boolean' ? raw.requireOperationApproval : DEFAULTS.requireOperationApproval,
+    isolatedSessions: typeof raw.isolatedSessions === 'boolean' ? raw.isolatedSessions : DEFAULTS.isolatedSessions,
+    autoUpdate: typeof raw.autoUpdate === 'boolean' ? raw.autoUpdate : DEFAULTS.autoUpdate,
+    updateChannel: raw.updateChannel === 'beta' ? 'beta' : 'stable',
+    allowedSites: Array.isArray(raw.allowedSites) ? raw.allowedSites.filter((site): site is string => typeof site === 'string').map((site) => site.trim()).filter(Boolean) : []
+  }
+}
+
 /** 用户设置：持久化到 ~/.aabrowser/settings.json，内存缓存，进程内生效 */
 export class SettingsStore {
-  private settings: AppSettings = { ...DEFAULTS }
+  private settings: AppSettings = normalizeSettings({})
   private loaded = false
+  private backupInvalid = false
   private filePath = process.env['AA_BROWSER_SETTINGS_FILE'] || path.join(os.homedir(), '.aabrowser', 'settings.json')
 
   get(): AppSettings {
     this.ensureLoaded()
-    return { ...this.settings }
+    return { ...this.settings, allowedSites: [...this.settings.allowedSites] }
   }
 
   set(patch: Partial<AppSettings>): AppSettings {
     this.ensureLoaded()
-    if (typeof patch.searchEngine === 'string' && patch.searchEngine.trim()) this.settings.searchEngine = patch.searchEngine.trim()
-    if (typeof patch.fullSnapshot === 'boolean') this.settings.fullSnapshot = patch.fullSnapshot
-    if (typeof patch.downloadDir === 'string') this.settings.downloadDir = patch.downloadDir.trim()
-    if (typeof patch.requireOperationApproval === 'boolean') this.settings.requireOperationApproval = patch.requireOperationApproval
-    if (typeof patch.isolatedSessions === 'boolean') this.settings.isolatedSessions = patch.isolatedSessions
-    if (typeof patch.autoUpdate === 'boolean') this.settings.autoUpdate = patch.autoUpdate
-    if (patch.updateChannel === 'stable' || patch.updateChannel === 'beta') this.settings.updateChannel = patch.updateChannel
+    if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('设置必须是有效对象。')
+    const next = this.get()
+    if (patch.searchEngine !== undefined) {
+      if (!validSearchEngine(patch.searchEngine)) throw new Error('搜索引擎必须是有效的 HTTP 或 HTTPS 地址，且不能包含账号密码。')
+      next.searchEngine = patch.searchEngine.trim()
+    }
+    if (typeof patch.fullSnapshot === 'boolean') next.fullSnapshot = patch.fullSnapshot
+    if (typeof patch.downloadDir === 'string') next.downloadDir = patch.downloadDir.trim()
+    if (typeof patch.requireOperationApproval === 'boolean') next.requireOperationApproval = patch.requireOperationApproval
+    if (typeof patch.isolatedSessions === 'boolean') next.isolatedSessions = patch.isolatedSessions
+    if (typeof patch.autoUpdate === 'boolean') next.autoUpdate = patch.autoUpdate
+    if (patch.updateChannel === 'stable' || patch.updateChannel === 'beta') next.updateChannel = patch.updateChannel
     if (Array.isArray(patch.allowedSites)) {
-      this.settings.allowedSites = patch.allowedSites
+      next.allowedSites = patch.allowedSites
         .filter((site): site is string => typeof site === 'string')
         .map((site) => site.trim())
         .filter(Boolean)
     }
-    this.persist()
+    try {
+      writeJsonAtomic(this.filePath, next, this.backupInvalid)
+    } catch (error) {
+      throw new Error('设置保存失败，请检查文件或目录的写入权限。', { cause: error })
+    }
+    this.settings = next
+    this.backupInvalid = false
     return this.get()
   }
 
@@ -79,27 +114,13 @@ export class SettingsStore {
     this.loaded = true
     try {
       const raw = fs.readFileSync(this.filePath, 'utf8')
-      const parsed = JSON.parse(raw) as Partial<AppSettings>
-      this.settings = {
-        ...DEFAULTS,
-        ...parsed,
-        autoUpdate: parsed.autoUpdate !== false,
-        updateChannel: parsed.updateChannel === 'beta' ? 'beta' : 'stable',
-        allowedSites: Array.isArray(parsed.allowedSites)
-          ? parsed.allowedSites.filter((site): site is string => typeof site === 'string').map((site) => site.trim()).filter(Boolean)
-          : [...DEFAULTS.allowedSites]
-      }
-    } catch {
-      this.settings = { ...DEFAULTS }
-    }
-  }
-
-  private persist(): void {
-    try {
-      fs.mkdirSync(path.dirname(this.filePath), { recursive: true })
-      fs.writeFileSync(this.filePath, JSON.stringify(this.settings, null, 2))
-    } catch {
-      /* 忽略写入失败 */
+      const parsed: unknown = JSON.parse(raw)
+      this.settings = normalizeSettings(parsed)
+      this.backupInvalid = !parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+        || Object.entries(parsed).some(([key, value]) => key in DEFAULTS && JSON.stringify(value) !== JSON.stringify(this.settings[key as keyof AppSettings]))
+    } catch (error) {
+      this.settings = normalizeSettings({})
+      this.backupInvalid = error instanceof SyntaxError
     }
   }
 }

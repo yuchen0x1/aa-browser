@@ -121,6 +121,8 @@ function readConsoleMessage(args: unknown[]): { level: string; text: string } | 
 
 export class TabManager {
   tabs: Tab[] = []
+  /** 仅当前进程内保存普通标签 URL；隔离标签和退出清理不进入恢复记录。 */
+  private recentlyClosed: string[] = []
   activeId: string | null = null
   onChange: () => void = () => {}
   /** 由主进程注入：为页面 WebContents 注册右键菜单（需访问 owner window） */
@@ -209,18 +211,21 @@ export class TabManager {
     // 再装守卫——守卫对之后的首屏导航依然生效，因为注入的是"新文档"脚本。
     void (async () => {
       const wc = view.webContents
+      const closed = (): boolean => wc.isDestroyed() || !this.tabs.includes(tab)
       try {
         await withTimeout(wc.loadURL('about:blank'), 3000, 'about:blank 初始化')
       } catch (error) {
         console.warn(`[aa-browser] 标签 ${id} 空白上下文初始化失败，继续加载目标页: ${error instanceof Error ? error.message : String(error)}`)
       }
       try {
+        if (closed()) return
         // CDP attach/enable 在部分打包运行时可能不返回；它是弹窗保护，
         // 不应让主页面永远卡在 about:blank。
         await withTimeout(installDialogGuard(wc), 2500, '页面对话框守卫初始化')
       } catch (error) {
         console.warn(`[aa-browser] 标签 ${id} 对话框守卫未就绪，继续加载目标页: ${error instanceof Error ? error.message : String(error)}`)
       }
+      if (closed()) return
       try {
         // Network.enable and the dialog guard share one CDP debugger. Serialize
         // initialization so the first document navigation cannot race the CDP commands.
@@ -228,6 +233,7 @@ export class TabManager {
       } catch (error) {
         console.warn(`[aa-browser] 标签 ${id} 抓包初始化失败，继续加载目标页: ${error instanceof Error ? error.message : String(error)}`)
       }
+      if (closed()) return
       try {
         // The about:blank did-stop-loading event updates tab.url. Use the
         // immutable requested target captured before initialization instead.
@@ -240,11 +246,28 @@ export class TabManager {
     return tab
   }
 
-  closeTab(id: string): void {
+  get canReopenClosed(): boolean {
+    return this.recentlyClosed.some((url) => this.isUrlAllowed(url))
+  }
+
+  reopenClosed(): Tab | null {
+    while (this.recentlyClosed.length) {
+      const url = this.recentlyClosed.pop()!
+      if (this.isUrlAllowed(url)) return this.createTab(url, true, false)
+    }
+    return null
+  }
+
+  closeTab(id: string, remember = true): void {
     const idx = this.tabs.findIndex((t) => t.id === id)
     if (idx === -1) return
     const [tab] = this.tabs.splice(idx, 1)
-    tab.net.dispose()
+    if (remember && !tab.isolated && tab.url !== this.newtabUrl && /^(https?|file):/i.test(tab.url)) {
+      this.recentlyClosed.push(tab.url)
+      if (this.recentlyClosed.length > 20) this.recentlyClosed.shift()
+    }
+    // 标签已关闭，无须保留对话框守卫；先释放 CDP 再关闭页面，避免退出时悬挂命令。
+    tab.net.releaseDebugger()
     // 先摘下视图再销毁：否则关闭的视图会一直挂在窗口上（资源泄漏 + 文件句柄不释放）
     try {
       this.onViewDetach?.(tab.view)
@@ -278,7 +301,7 @@ export class TabManager {
   }
 
   closeAll(): void {
-    for (const t of [...this.tabs]) this.closeTab(t.id)
+    for (const t of [...this.tabs]) this.closeTab(t.id, false)
   }
 
   private attachEvents(tab: Tab): void {
@@ -308,12 +331,13 @@ export class TabManager {
     wc.on('did-navigate', (_e, url) => {
       tab.url = url
       this.onChange()
-      this.onNavigate?.(url, tab.title)
+      if (!tab.isolated) this.onNavigate?.(url, tab.title)
     })
-    wc.on('did-navigate-in-page', (_e, url) => {
+    wc.on('did-navigate-in-page', (_e, url, isMainFrame) => {
+      if (!isMainFrame) return
       if (url) tab.url = url
       this.onChange()
-      this.onNavigate?.(url, tab.title)
+      if (!tab.isolated) this.onNavigate?.(url, tab.title)
     })
     wc.on('render-process-gone', () => {
       tab.title = '页面已崩溃'
@@ -337,7 +361,7 @@ export class TabManager {
     wc.setWindowOpenHandler(({ url }) => {
       if (url && this.isUrlAllowed(url)) {
         try {
-          this.createTab(url)
+          this.createTab(url, true, tab.isolated)
         } catch {
           /* 白名单拒绝 */
         }

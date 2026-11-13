@@ -52,7 +52,7 @@ html,
 body {
   height: 100%;
   overflow: hidden;
-  background: var(--bg-primary);
+  background: transparent;
   font-family: var(--font-sans);
   color: var(--text-main);
   font-size: 13px;
@@ -65,8 +65,7 @@ body {
   flex-direction: column;
   height: 100vh;
   position: relative;
-  background: radial-gradient(circle at 50% 0%, rgba(0, 242, 254, 0.05), transparent 45%),
-              linear-gradient(180deg, #0d0f17 0%, var(--bg-primary) 100%);
+  background: transparent;
 }
 
 /* ── 标签栏 (TabStrip) ─────────────────────────── */
@@ -529,7 +528,9 @@ textarea:focus-visible {
   position: absolute;
   z-index: 50;
   right: 16px;
-  top: 86px;
+  top: calc(84px + var(--find-height, 0px));
+  max-height: 176px;
+  overflow-y: auto;
   width: min(440px, calc(100vw - 32px));
   padding: 16px 18px;
   background: rgba(22, 24, 34, 0.94);
@@ -612,7 +613,7 @@ textarea:focus-visible {
   position: absolute;
   z-index: 60;
   right: 14px;
-  top: 84px;
+  top: var(--page-top, 84px);
   width: 360px;
   max-height: 520px;
   background: rgba(18, 20, 29, 0.94);
@@ -699,7 +700,7 @@ textarea:focus-visible {
   position: absolute;
   z-index: 60;
   right: 14px;
-  top: 84px;
+  top: var(--page-top, 84px);
   width: 400px;
   max-height: 520px;
   background: rgba(18, 20, 29, 0.94);
@@ -1039,4 +1040,42 @@ textarea:focus-visible {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* 原生查找条占用独立工具带，网页保持可见、可交互。 */
+.find-bar {
+  position: absolute;
+  top: 84px;
+  left: 0;
+  right: 0;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 7px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-subtle);
+  -webkit-app-region: no-drag;
+}
+.find-bar input {
+  width: min(320px, 34vw);
+  height: 32px;
+  padding: 0 10px;
+  color: var(--text-main);
+  background: var(--bg-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  font: inherit;
+}
+.find-bar input[aria-invalid="true"] { border-color: var(--accent-red); }
+#find-status { min-width: 90px; color: var(--text-muted); }
+button:focus-visible, input:focus-visible, [role="tab"]:focus-visible {
+  outline: 2px solid var(--accent-cyan);
+  outline-offset: 2px;
+}
+.action-feed-drawer, .download-panel { max-height: 360px; }
+.drawer-content { min-height: 0; overflow-y: auto; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
 }

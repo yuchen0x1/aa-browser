@@ -48,6 +48,15 @@ export interface UiState {
   recentActions?: ActionLogItem[]
   downloads?: DownloadInfo[]
   update?: UpdateState
+  find?: FindState
+  canReopenClosed?: boolean
+}
+
+export interface FindState {
+  open: boolean
+  query: string
+  matches: number
+  activeMatch: number
 }
 
 export type UpdateStatus = 'disabled' | 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'downloaded' | 'error'

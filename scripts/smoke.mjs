@@ -22,7 +22,7 @@ import readline from 'node:readline'
 const require = createRequire(import.meta.url)
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkgVersion = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8')).version
-const SMOKE_DIR = path.join(os.tmpdir(), `aa-browser-smoke-${process.pid}`)
+const SMOKE_DIR = path.join(ROOT, '.local-verification', `smoke-${process.pid}-${Date.now()}`)
 const SMOKE_CONNECT_FILE = path.join(SMOKE_DIR, 'connection.json')
 const SMOKE_DOWNLOAD_DIR = path.join(SMOKE_DIR, 'downloads')
 const SMOKE_SCREENSHOT_DIR = path.join(SMOKE_DIR, 'screenshots')
@@ -69,7 +69,7 @@ async function ensureAppRunning() {
   let info = null
   console.log('正在启动隔离的测试实例…')
   const electronPath = require('electron')
-  fs.mkdirSync(SMOKE_DIR, { recursive: false })
+  fs.mkdirSync(SMOKE_DIR, { recursive: true })
   // 在应用启动前布置"上次异常退出遗留"的分区目录，
   // 用于验证启动阶段的分区清理（见 [18]）。
   const partsDir = path.join(SMOKE_DIR, 'profile', 'Partitions')
@@ -88,7 +88,9 @@ async function ensureAppRunning() {
       AA_BROWSER_CONNECTION_FILE: SMOKE_CONNECT_FILE,
       AA_BROWSER_USER_DATA_DIR: path.join(SMOKE_DIR, 'profile'),
       AA_BROWSER_DOWNLOAD_DIR: SMOKE_DOWNLOAD_DIR,
-      AA_BROWSER_SCREENSHOT_DIR: SMOKE_SCREENSHOT_DIR
+      AA_BROWSER_SCREENSHOT_DIR: SMOKE_SCREENSHOT_DIR,
+      AA_BROWSER_HISTORY_DIR: path.join(SMOKE_DIR, 'history'),
+      AA_BROWSER_SETTINGS_FILE: path.join(SMOKE_DIR, 'settings.json')
     },
     stdio: 'inherit'
   })
@@ -643,7 +645,6 @@ async function main() {
     await sleep(800)
     try { fs.rmSync(SMOKE_DIR, { recursive: true, force: true }) } catch {}
   }
-  try { fs.rmSync(path.join(os.homedir(), '.aabrowser', 'downloads', `aa-smoke-${process.pid}`), { recursive: true, force: true }) } catch {}
 
   if (failures > 0) {
     console.error(`\n🚨 冒烟测试失败：${failures} 项未通过`)

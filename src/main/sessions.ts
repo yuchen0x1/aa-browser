@@ -13,11 +13,14 @@ import { ISOLATED_PARTITION_PREFIX, SHARED_PARTITION } from './tabs'
 
 /**
  * 默认拒绝的权限。Agent 驱动的浏览器不需要摄像头/麦克风/定位等能力，
- * 而网页一旦拿到这些权限就可能静默采集环境信息；全部拒绝并由用户显式开启。
+ * 而网页一旦拿到这些权限就可能静默采集环境信息；当前策略直接拒绝这些权限。
  */
 const DENIED_PERMISSIONS = new Set([
   'media',
   'geolocation',
+  'geolocation-approximate',
+  'clipboard-read',
+  'deprecated-sync-clipboard-read',
   'notifications',
   'midi',
   'midiSysex',
@@ -35,7 +38,7 @@ const DENIED_PERMISSIONS = new Set([
 const configuredSessions = new WeakSet<Electron.Session>()
 
 /**
- * 为会话安装权限策略：默认拒绝，只放行剪贴板读写这类正常浏览必需的能力。
+ * 拒绝敏感设备能力和网页脚本读取剪贴板；保留正常复制和用户主动粘贴。
  * 幂等：同一 Session 只安装一次。
  */
 export function applyPermissionPolicy(ses: Electron.Session): void {

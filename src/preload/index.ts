@@ -6,6 +6,11 @@ contextBridge.exposeInMainWorld('aa', {
   getState: (): Promise<unknown> => ipcRenderer.invoke('aa:get-state'),
   tabNew: (url?: string): Promise<void> => ipcRenderer.invoke('aa:tab-new', url),
   tabClose: (id: string): Promise<void> => ipcRenderer.invoke('aa:tab-close', id),
+  tabReopen: (): Promise<boolean> => ipcRenderer.invoke('aa:tab-reopen'),
+  findOpen: (): Promise<void> => ipcRenderer.invoke('aa:find-open'),
+  find: (query: string, forward = true, next = false): Promise<void> => ipcRenderer.invoke('aa:find', query, forward, next),
+  findClose: (): Promise<void> => ipcRenderer.invoke('aa:find-close'),
+  overlayHeight: (height: number): Promise<void> => ipcRenderer.invoke('aa:overlay-height', height),
   tabSelect: (id: string): Promise<void> => ipcRenderer.invoke('aa:tab-select', id),
   back: (): Promise<void> => ipcRenderer.invoke('aa:back'),
   forward: (): Promise<void> => ipcRenderer.invoke('aa:forward'),
@@ -34,5 +39,8 @@ contextBridge.exposeInMainWorld('aa', {
   },
   onFocusOmnibox: (cb: () => void): void => {
     ipcRenderer.on('aa:focus-omnibox', () => cb())
+  },
+  onFocusFind: (cb: () => void): void => {
+    ipcRenderer.on('aa:focus-find', () => cb())
   }
 })

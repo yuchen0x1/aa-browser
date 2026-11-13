@@ -38,6 +38,15 @@ jobs:
         env:
           ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
+      - name: Native desktop regression test
+        run: npm run test:desktop
+
+      - name: Persistence regression test
+        run: npm run test:stores
+
+      - name: Updater state regression test
+        run: npm run test:updater
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: test

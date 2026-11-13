@@ -22,6 +22,11 @@ declare global {
       getState: () => Promise<UiState>
       tabNew: (url?: string) => Promise<void>
       tabClose: (id: string) => Promise<void>
+      tabReopen: () => Promise<boolean>
+      findOpen: () => Promise<void>
+      find: (query: string, forward?: boolean, next?: boolean) => Promise<void>
+      findClose: () => Promise<void>
+      overlayHeight: (height: number) => Promise<void>
       tabSelect: (id: string) => Promise<void>
       back: () => Promise<void>
       forward: () => Promise<void>
@@ -47,6 +52,7 @@ declare global {
       updateInstall: () => Promise<boolean>
       onState: (cb: (state: UiState) => void) => void
       onFocusOmnibox: (cb: () => void) => void
+      onFocusFind: (cb: () => void) => void
     }
   }
 }
@@ -81,6 +87,7 @@ const setDownloadDir = document.getElementById('set-download-dir') as HTMLInputE
 const setAllowedSites = document.getElementById('set-allowed-sites') as HTMLTextAreaElement | null
 const setAgentInfo = document.getElementById('set-agent-info') as HTMLDivElement | null
 const settingsStatus = document.getElementById('settings-status') as HTMLSpanElement | null
+let settingsStatusTimer: ReturnType<typeof setTimeout> | undefined
 const setClientList = document.getElementById('set-client-list') as HTMLDivElement | null
 const btnClientScan = document.getElementById('btn-client-scan') as HTMLButtonElement | null
 const btnClientSetup = document.getElementById('btn-client-setup') as HTMLButtonElement | null
@@ -90,6 +97,71 @@ const setUpdateChannel = document.getElementById('set-update-channel') as HTMLSe
 const updateStatus = document.getElementById('update-status') as HTMLDivElement | null
 const btnUpdateCheck = document.getElementById('btn-update-check') as HTMLButtonElement | null
 const btnUpdateAction = document.getElementById('btn-update-action') as HTMLButtonElement | null
+const btnReopen = document.getElementById('btn-reopen') as HTMLButtonElement
+const findBar = document.getElementById('find-bar') as HTMLDivElement
+const findQuery = document.getElementById('find-query') as HTMLInputElement
+const findStatus = document.getElementById('find-status') as HTMLSpanElement
+
+function renderFind(): void {
+  const find = state.find
+  const wasHidden = findBar.hidden
+  findBar.hidden = !find?.open
+  btnReopen.disabled = !state.canReopenClosed
+  document.documentElement.style.setProperty('--find-height', find?.open ? '48px' : '0px')
+  document.documentElement.style.setProperty('--page-top', `${84 + (find?.open ? 48 : 0) + (state.pendingApprovals.length ? 180 : 0)}px`)
+  if (!find?.open) return
+  if (wasHidden) {
+    findQuery.value = find.query
+    findQuery.focus()
+  }
+  findStatus.textContent = !find.query ? '输入查找内容' : find.matches ? `${find.activeMatch} / ${find.matches}` : '未找到匹配'
+  findQuery.setAttribute('aria-invalid', String(!!find.query && !find.matches))
+}
+
+async function openFind(): Promise<void> {
+  await window.aa.findOpen()
+  findQuery.focus()
+  findQuery.select()
+}
+
+document.getElementById('btn-find')?.addEventListener('click', () => void openFind())
+btnReopen.addEventListener('click', () => void window.aa.tabReopen())
+findQuery.addEventListener('input', () => void window.aa.find(findQuery.value))
+findQuery.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    void window.aa.find(findQuery.value, !event.shiftKey, true)
+  }
+})
+document.getElementById('find-prev')?.addEventListener('click', () => void window.aa.find(findQuery.value, false, true))
+document.getElementById('find-next')?.addEventListener('click', () => void window.aa.find(findQuery.value, true, true))
+document.getElementById('find-close')?.addEventListener('click', () => void window.aa.findClose())
+window.aa.onFocusFind(() => { findQuery.focus(); findQuery.select() })
+
+/** DOM 浮层的实际高度同步给原生视图，避免被 84px 工具栏裁切。 */
+let extentFrame = 0
+let previousExtent = -1
+function syncOverlayExtent(): void {
+  cancelAnimationFrame(extentFrame)
+  extentFrame = requestAnimationFrame(() => {
+    const panels = [suggestPanel, dlPanel, feedDrawer]
+    const extent = Math.ceil(Math.max(0, ...panels.filter((el) => el && !el.hidden).map((el) => el!.getBoundingClientRect().bottom + 8)))
+    if (extent !== previousExtent) {
+      previousExtent = extent
+      void window.aa.overlayHeight(extent)
+    }
+    btnDownloads?.setAttribute('aria-expanded', String(!dlPanel?.hidden))
+    btnFeed?.setAttribute('aria-expanded', String(!feedDrawer?.hidden))
+  })
+}
+const overlayObserver = new MutationObserver(syncOverlayExtent)
+const overlayResize = new ResizeObserver(syncOverlayExtent)
+for (const panel of [suggestPanel, dlPanel, feedDrawer]) {
+  if (!panel) continue
+  overlayObserver.observe(panel, { attributes: true, attributeFilter: ['hidden'], childList: true, subtree: true })
+  overlayResize.observe(panel)
+}
+window.addEventListener('resize', syncOverlayExtent)
 
 function formatUpdateBytes(value?: number): string {
   if (!value || value < 1024) return value ? `${value} B` : '未知大小'
@@ -110,7 +182,7 @@ function renderUpdate(update?: UpdateState): void {
   }
   updateStatus.textContent = labels[update.status]
   updateStatus.title = [update.releaseDate ? `发布时间：${update.releaseDate}` : '', update.size ? `大小：${formatUpdateBytes(update.size)}` : '', update.releaseNotes ?? ''].filter(Boolean).join('\n')
-  if (btnUpdateCheck) btnUpdateCheck.disabled = update.status === 'checking' || update.status === 'downloading'
+  if (btnUpdateCheck) btnUpdateCheck.disabled = ['checking', 'downloading', 'downloaded'].includes(update.status)
   if (btnUpdateAction) {
     btnUpdateAction.hidden = !['available', 'downloaded'].includes(update.status)
     btnUpdateAction.disabled = update.status === 'downloading'
@@ -425,13 +497,14 @@ let suggestTimer: ReturnType<typeof setTimeout> | undefined
 function onOmniboxInput(): void {
   const q = omnibox.value.trim()
   if (!q) {
+    clearTimeout(suggestTimer)
     hideSuggest()
     return
   }
   clearTimeout(suggestTimer)
   suggestTimer = setTimeout(() => {
     void window.aa.historySuggest(q).then((items) => {
-      if (document.activeElement === omnibox) renderSuggest(items)
+      if (document.activeElement === omnibox && omnibox.value.trim() === q) renderSuggest(items)
     })
   }, 140)
 }
@@ -445,6 +518,8 @@ function applyState(next: UiState): void {
   renderFeed()
   renderDownloads()
   renderUpdate(next.update)
+  renderFind()
+  syncOverlayExtent()
   if (document.activeElement !== omnibox) hideSuggest()
 }
 
@@ -485,6 +560,7 @@ document.getElementById('btn-close-dl')?.addEventListener('click', () => {
   if (dlPanel) dlPanel.hidden = true
 })
 document.addEventListener('click', (e) => {
+  if (feedDrawer && !feedDrawer.hidden && !btnFeed?.contains(e.target as Node) && !feedDrawer.contains(e.target as Node)) feedDrawer.hidden = true
   if (!dlPanel || dlPanel.hidden) return
   if (btnDownloads?.contains(e.target as Node) || dlPanel.contains(e.target as Node)) return
   dlPanel.hidden = true
@@ -493,6 +569,7 @@ document.addEventListener('click', (e) => {
 btnFeed?.addEventListener('click', () => {
   if (!feedDrawer) return
   feedDrawer.hidden = !feedDrawer.hidden
+  if (dlPanel) dlPanel.hidden = true
 })
 btnCloseFeed?.addEventListener('click', () => {
   if (feedDrawer) feedDrawer.hidden = true
@@ -599,6 +676,9 @@ btnUpdateAction?.addEventListener('click', () => {
 /* ── 设置面板 ─────────────────────── */
 async function openSettings(): Promise<void> {
   if (!settingsModal) return
+  hideSuggest()
+  if (dlPanel) dlPanel.hidden = true
+  if (feedDrawer) feedDrawer.hidden = true
   await window.aa.settingsOpen(true)
   settingsModal.hidden = false
   if (settingsStatus) settingsStatus.textContent = ''
@@ -612,7 +692,11 @@ async function openSettings(): Promise<void> {
       opt.textContent = p.label
       setEngine.appendChild(opt)
     }
-    setEngine.value = view.settings.searchEngine
+    const custom = document.createElement('option')
+    custom.value = ''
+    custom.textContent = '自定义地址'
+    setEngine.appendChild(custom)
+    setEngine.value = view.presets.some((preset) => preset.url === view.settings.searchEngine) ? view.settings.searchEngine : ''
     if (setEngineUrl) setEngineUrl.value = view.settings.searchEngine
     if (setFullSnapshot) setFullSnapshot.checked = view.settings.fullSnapshot
     if (setOpApproval) setOpApproval.checked = !!view.settings.requireOperationApproval
@@ -644,7 +728,21 @@ btnSettings?.addEventListener('click', () => {
 document.getElementById('btn-close-settings')?.addEventListener('click', () => {
   closeSettings()
 })
+setEngine?.addEventListener('change', () => {
+  if (setEngineUrl && setEngine.value) setEngineUrl.value = setEngine.value
+  else setEngineUrl?.focus()
+})
+setEngineUrl?.addEventListener('input', () => {
+  if (!setEngine) return
+  const value = setEngineUrl.value.trim()
+  setEngine.value = Array.from(setEngine.options).some((option) => option.value === value) ? value : ''
+})
 document.getElementById('btn-save-settings')?.addEventListener('click', async () => {
+  const button = document.getElementById('btn-save-settings') as HTMLButtonElement
+  if (button.disabled) return
+  button.disabled = true
+  clearTimeout(settingsStatusTimer)
+  if (settingsStatus) settingsStatus.textContent = '正在保存…'
   const patch: Partial<AppSettings> = {}
   if (setEngine) patch.searchEngine = setEngine.value || 'https://www.bing.com/search?q='
   if (setEngineUrl) patch.searchEngine = setEngineUrl.value.trim() || patch.searchEngine
@@ -655,10 +753,17 @@ document.getElementById('btn-save-settings')?.addEventListener('click', async ()
   if (setUpdateChannel) patch.updateChannel = setUpdateChannel.value === 'beta' ? 'beta' : 'stable'
   if (setDownloadDir) patch.downloadDir = setDownloadDir.value
   if (setAllowedSites) patch.allowedSites = setAllowedSites.value.split(/\r?\n/).map((site) => site.trim()).filter(Boolean)
-  await window.aa.settingsSet(patch).catch(() => null)
-  if (settingsStatus) {
-    settingsStatus.textContent = '已保存'
-    setTimeout(() => { if (settingsStatus) settingsStatus.textContent = '' }, 1800)
+  try {
+    const saved = await window.aa.settingsSet(patch)
+    if (!saved) throw new Error('设置未保存，请重试。')
+    if (settingsStatus) {
+      settingsStatus.textContent = '已保存'
+      settingsStatusTimer = setTimeout(() => { if (settingsStatus) settingsStatus.textContent = '' }, 1800)
+    }
+  } catch (error) {
+    if (settingsStatus) settingsStatus.textContent = `保存失败：${error instanceof Error ? error.message : String(error)}`
+  } finally {
+    button.disabled = false
   }
 })
 
@@ -708,7 +813,19 @@ window.aa.onFocusOmnibox(() => {
 /* 键盘快捷键（chrome UI 焦点时） */
 window.addEventListener('keydown', (e) => {
   const ctrl = e.ctrlKey || e.metaKey
-  if (ctrl && e.key.toLowerCase() === 't') {
+  if (e.key === 'Escape') {
+    hideSuggest()
+    if (dlPanel) dlPanel.hidden = true
+    if (feedDrawer) feedDrawer.hidden = true
+    if (!settingsModal?.hidden) closeSettings()
+    else if (state.find?.open) void window.aa.findClose()
+  } else if (ctrl && e.shiftKey && e.key.toLowerCase() === 't') {
+    e.preventDefault()
+    void window.aa.tabReopen()
+  } else if (ctrl && e.key.toLowerCase() === 'f') {
+    e.preventDefault()
+    void openFind()
+  } else if (ctrl && e.key.toLowerCase() === 't') {
     e.preventDefault()
     void window.aa.tabNew()
   } else if (ctrl && e.key.toLowerCase() === 'w') {
