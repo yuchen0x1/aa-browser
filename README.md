@@ -2,7 +2,7 @@
 
 **为 AI Agent 而生的开源桌面浏览器。**
 
-![License](https://img.shields.io/badge/license-MIT-blue) ![CI](https://github.com/yuchen0x1/aa-browser/actions/workflows/ci.yml/badge.svg) ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey) ![MCP](https://img.shields.io/badge/protocol-MCP-purple)
+![License](https://img.shields.io/badge/license-MIT-blue) ![CI](https://github.com/yuchen0x1/aa-browser/actions/workflows/ci.yml/badge.svg) ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey) ![MCP](https://img.shields.io/badge/protocol-MCP-purple) [![M8ven Score](https://m8ven.ai/badge/mcp/yuchen0x1-aa-browser-135ffo?v=5eaaa577bc85b8b59b5e327efd51d38c)](https://m8ven.ai/mcp/yuchen0x1-aa-browser-135ffo?s=readme)
 
 > 人像人一样浏览网页，Agent 像工程师一样驱动它。
 > **The Agent-Native Browser** — snapshots, actions, and packet capture over MCP.
