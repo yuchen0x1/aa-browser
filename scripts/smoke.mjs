@@ -210,6 +210,10 @@ async function main() {
     check('tools/list ≥ 12 个工具', toolNames.length >= 12, `实际 ${toolNames.length}`)
     // 工具定义漂移回归：v0.6.0 曾出现桥少 3 个 mock 工具、客户端完全调不到
     check('tools/list 与主进程一致（33 个）', toolNames.length === 33, `实际 ${toolNames.length}: ${toolNames.join(',')}`)
+    const missingHints = (list?.result?.tools ?? [])
+      .filter((tool) => ['readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint'].some((key) => typeof tool?.annotations?.[key] !== 'boolean'))
+      .map((tool) => tool.name)
+    check('每个工具都声明四个 MCP 提示', missingHints.length === 0, missingHints.join(', ') || '全部存在')
     check(
       'mock 三件套在桥中可见',
       ['browser_mock_requests', 'browser_list_mocks', 'browser_clear_mocks'].every((n) => toolNames.includes(n)),
@@ -277,6 +281,11 @@ async function main() {
     console.log('\n[4] 输入文本')
     const typed = await mcp.call('browser_type', { ref: inputRef, text: '你好 Aa' })
     check('输入成功', !typed.isError, mcp.text(typed).slice(0, 120))
+
+    const pressed = await mcp.call('browser_press_key', { key: 'End' })
+    check('按键工具成功', !pressed.isError && mcp.text(pressed).includes('已按下'), mcp.text(pressed).slice(0, 200))
+    const consoleLogs = await mcp.call('browser_console', { limit: 50 })
+    check('控制台日志工具成功', !consoleLogs.isError && /共 \d+ 条：|无控制台日志/.test(mcp.text(consoleLogs)), mcp.text(consoleLogs).slice(0, 300))
 
     console.log('\n[5] 点击搜索按钮')
     const clicked = await mcp.call('browser_click', { ref: buttonRef })

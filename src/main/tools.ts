@@ -36,7 +36,7 @@ import {
   resolveWebContents
 } from './actions'
 
-export interface McpToolDef {
+interface McpToolDefBase {
   name: string
   title: string
   description: string
@@ -46,6 +46,58 @@ export interface McpToolDef {
     required?: string[]
   }
   handler: (args: Record<string, unknown>) => Promise<{ content: ToolContent[]; isError?: boolean }>
+}
+
+/** MCP tool annotations exposed to hosts before a tool is called. */
+export interface McpToolAnnotations {
+  readOnlyHint: boolean
+  destructiveHint: boolean
+  idempotentHint: boolean
+  openWorldHint: boolean
+}
+
+export interface McpToolDef extends McpToolDefBase {
+  annotations: McpToolAnnotations
+}
+
+/**
+ * Keep these values explicit for every tool. Dynamic tools (cookies, storage,
+ * tabs, dialogs, and evaluate) use the safest value for any supported action.
+ */
+export const TOOL_ANNOTATIONS: Record<string, McpToolAnnotations> = {
+  browser_navigate: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  browser_snapshot: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  browser_click: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  browser_drag: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  browser_type: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  browser_select_option: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  browser_scroll: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  browser_extract: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  browser_wait: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  browser_press_key: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  browser_screenshot: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  browser_hover: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  browser_navigate_back: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  browser_navigate_forward: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  browser_resize: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  browser_get_selector: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  browser_find: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  browser_cookies: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  browser_storage: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  browser_downloads: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  browser_pdf: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  browser_upload_file: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  browser_console: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  browser_network_requests: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  browser_network_detail: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  browser_har: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  browser_mock_requests: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  browser_list_mocks: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  browser_clear_mocks: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+  browser_tabs: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  browser_fill_form: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  browser_dialogs: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  browser_evaluate: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
 }
 
 /** 工具结果：文本内容 */
@@ -68,7 +120,7 @@ export function buildTools(
   onAction?: (item: import('@shared/types').ActionLogItem) => void,
   getSettings?: () => { requireOperationApproval: boolean; fullSnapshot?: boolean; searchEngine?: string }
 ): McpToolDef[] {
-  const tools: McpToolDef[] = []
+  const tools: McpToolDefBase[] = []
 
   /** 若开启"高危操作人工确认"，请求一次人工批准；未开启直接放行。 */
   async function opGate(desc: { site: string; tabTitle: string; action: string; detail?: string }, signal?: unknown): Promise<void> {
@@ -1162,40 +1214,45 @@ tools.push({
 
   // Interrupt is a central admission gate: no MCP operation starts while paused.
   // Individual handlers retain their own checks around multi-step actions.
-  return tools.map((tool) => ({
-    ...tool,
-    handler: async (args: Record<string, unknown>) => {
-      approvals?.assertRunning()
-      const startTime = Date.now()
-      try {
-        const result = await tool.handler(args)
+  return tools.map((tool) => {
+    const annotations = TOOL_ANNOTATIONS[tool.name]
+    if (!annotations) throw new Error(`工具缺少 MCP annotations：${tool.name}`)
+    return {
+      ...tool,
+      annotations,
+      handler: async (args: Record<string, unknown>) => {
         approvals?.assertRunning()
-        if (args['__aaSignal'] instanceof AbortSignal && args['__aaSignal'].aborted) throw new ActionError('工具调用已取消。')
-        let summary = ''
-        const first = result.content?.[0]
-        if (first?.type === 'text' && first.text) {
-          summary = first.text.split('\n')[0].slice(0, 100)
-        } else if (first?.type === 'image') {
-          summary = '已捕获截图'
+        const startTime = Date.now()
+        try {
+          const result = await tool.handler(args)
+          approvals?.assertRunning()
+          if (args['__aaSignal'] instanceof AbortSignal && args['__aaSignal'].aborted) throw new ActionError('工具调用已取消。')
+          let summary = ''
+          const first = result.content?.[0]
+          if (first?.type === 'text' && first.text) {
+            summary = first.text.split('\n')[0].slice(0, 100)
+          } else if (first?.type === 'image') {
+            summary = '已捕获截图'
+          }
+          onAction?.({
+            id: Math.random().toString(36).slice(2, 9),
+            tool: tool.name,
+            summary: summary || `${tool.title || tool.name} 成功 (${Date.now() - startTime}ms)`,
+            ts: Date.now(),
+            isError: !!result.isError
+          })
+          return result
+        } catch (err) {
+          onAction?.({
+            id: Math.random().toString(36).slice(2, 9),
+            tool: tool.name,
+            summary: `错误: ${err instanceof Error ? err.message : String(err)}`,
+            ts: Date.now(),
+            isError: true
+          })
+          throw err
         }
-        onAction?.({
-          id: Math.random().toString(36).slice(2, 9),
-          tool: tool.name,
-          summary: summary || `${tool.title || tool.name} 成功 (${Date.now() - startTime}ms)`,
-          ts: Date.now(),
-          isError: !!result.isError
-        })
-        return result
-      } catch (err) {
-        onAction?.({
-          id: Math.random().toString(36).slice(2, 9),
-          tool: tool.name,
-          summary: `错误: ${err instanceof Error ? err.message : String(err)}`,
-          ts: Date.now(),
-          isError: true
-        })
-        throw err
       }
     }
-  }))
+  })
 }

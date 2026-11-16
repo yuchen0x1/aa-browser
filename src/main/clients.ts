@@ -1,5 +1,4 @@
 import { app } from 'electron'
-import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -49,6 +48,23 @@ const home = (): string => os.homedir()
 const appData = (): string => process.env['APPDATA'] || path.join(home(), 'AppData', 'Roaming')
 
 const joinHome = (...p: string[]): string => path.join(home(), ...p)
+
+/** Find a system Node executable without invoking a shell or spawning a probe process. */
+function findSystemNode(): string | undefined {
+  const names = process.platform === 'win32' ? ['node.exe'] : ['node']
+  const pathValue = [process.env['PATH'], process.env['Path']].filter(Boolean).join(path.delimiter)
+  for (const directory of pathValue.split(path.delimiter).filter(Boolean)) {
+    for (const name of names) {
+      const candidate = path.join(directory, name)
+      try {
+        if (fs.statSync(candidate).isFile()) return candidate
+      } catch {
+        /* Keep looking; a stale PATH entry is harmless. */
+      }
+    }
+  }
+  return undefined
+}
 
 export const CLIENT_DEFS: ClientDef[] = [
   {
@@ -155,14 +171,8 @@ export function bridgeEntry(): { command: string; args: string[]; env?: Record<s
       ? path.join(home(), '.aabrowser', 'connection.json')
       : path.join(app.getPath('userData'), 'connection.json')
   }
-  try {
-    const r = spawnSync('node', ['--version'], { encoding: 'utf-8', shell: false, timeout: 5000 })
-    if (r.status === 0 && /^v\d/.test((r.stdout || '').trim())) {
-      return { command: 'node', args: [mcp], env }
-    }
-  } catch {
-    /* 无系统 node */
-  }
+  const systemNode = findSystemNode()
+  if (systemNode) return { command: systemNode, args: [mcp], env }
   env['ELECTRON_RUN_AS_NODE'] = '1'
   return { command: process.execPath, args: [mcp], env }
 }

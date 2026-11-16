@@ -1,7 +1,7 @@
 {
   "name": "aa-browser",
   "productName": "Aa Browser",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "description": "AI-native browser — browse like a human, drive like an agent (为 Agent 而生的浏览器)",
   "license": "MIT",
   "author": {
@@ -17,6 +17,7 @@
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit",
     "check:tools": "node scripts/check-tools.mjs",
+    "test:tools": "node scripts/test-tool-contract.mjs",
     "check": "npm run typecheck && npm run check:tools",
     "smoke": "node scripts/smoke.mjs",
     "test:desktop": "node scripts/test-desktop.mjs",

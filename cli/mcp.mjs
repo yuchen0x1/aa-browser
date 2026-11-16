@@ -562,6 +562,51 @@ const TOOL_DEFS = [
   }
 ]
 
+// Keep every MCP hint explicit. Values are conservative for tools whose
+// action can either read or mutate browser/page state.
+const TOOL_ANNOTATIONS = Object.freeze({
+  browser_navigate: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  browser_snapshot: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  browser_click: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  browser_drag: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  browser_type: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  browser_select_option: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  browser_scroll: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  browser_extract: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  browser_wait: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  browser_press_key: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  browser_screenshot: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  browser_hover: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  browser_navigate_back: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  browser_navigate_forward: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  browser_resize: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  browser_get_selector: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  browser_find: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  browser_cookies: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  browser_storage: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  browser_downloads: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  browser_pdf: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  browser_upload_file: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  browser_console: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  browser_network_requests: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  browser_network_detail: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  browser_har: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  browser_mock_requests: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  browser_list_mocks: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  browser_clear_mocks: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
+  browser_tabs: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  browser_fill_form: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  browser_dialogs: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  browser_evaluate: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
+})
+
+for (const tool of TOOL_DEFS) {
+  const annotations = TOOL_ANNOTATIONS[tool.name]
+  if (!annotations || Object.keys(annotations).length !== 4 || Object.values(annotations).some((value) => typeof value !== 'boolean')) {
+    throw new Error(`工具缺少完整 MCP annotations：${tool.name}`)
+  }
+}
+
 /* ──────────────────── WS 连接管理 ──────────────────── */
 
 let ws = null
@@ -763,7 +808,7 @@ rl.on('line', (line) => {
           title: t.title,
           description: t.description,
           inputSchema: t.inputSchema,
-          annotations: { title: t.title }
+          annotations: { title: t.title, ...TOOL_ANNOTATIONS[t.name] }
         }))
       })
       break
