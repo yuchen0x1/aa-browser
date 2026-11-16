@@ -47,6 +47,7 @@ Aa Browser 使用 `electron-updater` 配合 `electron-builder` 的 GitHub Releas
 ## 配置与限制
 
 - GitHub 仓库必须能公开访问 Release 资产；没有可用 Release 时客户端会显示检查失败。
+- 通用 `install.mjs --repo` 安装器要求 GitHub Release 资产提供有效的 `sha256:<64 hex>` digest；缺失或格式错误会中止安装。直接 URL/本地路径仍可通过 `--sha256` 启用严格校验。
 - 当前打包目标是 Windows NSIS；macOS/Linux 尚未配置构建矩阵和签名资产。
 - 代码签名证书尚未配置，Windows SmartScreen 仍可能提示未签名。
 - Release 资产由 GitHub Actions 生成；本地 `npm run dist` 只生成安装包，不会发布。

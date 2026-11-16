@@ -107,6 +107,7 @@ if (!process.versions.electron) {
       ws.send(JSON.stringify({ id, tool: toolName, args }))
     })
   }
+  const toolText = (result) => (result?.content ?? []).filter((item) => item?.type === 'text').map((item) => item.text).join('\n')
   const activePage = async () => {
     const s = await state()
     const tab = s.tabs.find((t) => t.active)
@@ -195,6 +196,21 @@ if (!process.versions.electron) {
     const normalId = (await state()).activeId
     const page = await activePage()
     await until(() => page.executeJavaScript('document.body.innerText.includes("needle")'), 'fixture DOM')
+    await ui('window.aa.settingsSet({requireOperationApproval:true})')
+    const captured = await tool('browser_network_requests', { tabId: normalId })
+    const capturedId = /\[([^\]]+)\]/.exec(toolText(captured))?.[1]
+    assert.ok(capturedId, 'desktop fixture should have a captured request')
+    const sensitiveCall = tool('browser_network_detail', { tabId: normalId, requestId: capturedId, includeSensitive: true }).then(
+      () => null,
+      (error) => error
+    )
+    await until(async () => (await state()).pendingApprovals.length === 1, 'sensitive network approval')
+    const approvalId = (await state()).pendingApprovals[0].id
+    await ui(`window.aa.decideApproval(${JSON.stringify(approvalId)}, false)`)
+    const denied = await sensitiveCall
+    assert.match(denied?.message ?? '', /高危操作已取消/)
+    await ui('window.aa.settingsSet({requireOperationApproval:false})')
+    pass('sensitive network disclosure is blocked until the user approves it')
     page.focus()
     page.sendInputEvent({ type: 'keyDown', keyCode: 'F', modifiers: ['control'] })
     page.sendInputEvent({ type: 'keyUp', keyCode: 'F', modifiers: ['control'] })
@@ -325,6 +341,10 @@ if (!process.versions.electron) {
     assert.equal(await ui('window.aa.tabReopen()'), false)
     await ui('window.aa.settingsSet({allowedSites:[]})')
     pass('reopen applies current site allowlist')
+    for (const unsafeUrl of ['file:///C:/Windows/win.ini', 'data:text/html,<h1>unsafe</h1>', `view-source:${base}/blocked-source`]) {
+      assert.equal(await ui(`window.aa.tabNew(${JSON.stringify(unsafeUrl)})`), false, `rejects non-web navigation: ${unsafeUrl}`)
+    }
+    pass('navigation rejects local, data and view-source schemes while preserving the internal new-tab page')
     await click('#btn-settings')
     await until(() => ui('document.querySelector("#set-engine").options.length > 0'), 'settings reopen')
     await ui('document.querySelector("#set-engine-url").value="javascript:alert(1)"')

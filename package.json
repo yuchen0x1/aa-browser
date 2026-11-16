@@ -1,7 +1,7 @@
 {
   "name": "aa-browser",
   "productName": "Aa Browser",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "description": "AI-native browser — browse like a human, drive like an agent (为 Agent 而生的浏览器)",
   "license": "MIT",
   "author": {
@@ -23,6 +23,7 @@
     "test:desktop": "node scripts/test-desktop.mjs",
     "test:update-ui": "node scripts/test-desktop.mjs --update-ui",
     "test:stores": "node scripts/test-stores.mjs",
+    "test:security": "node scripts/test-security.mjs",
     "test:updater": "node scripts/test-updater.mjs",
     "test:release": "node scripts/test-release.mjs",
     "validate:workbuddy": "node scripts/validate-workbuddy.mjs",

@@ -837,7 +837,7 @@ export function buildTools(
     name: 'browser_network_detail',
     title: '网络请求详情',
     description:
-      'Inspect one captured network request: headers, status, size, duration, and (with body:true) the response body text. Authentication headers and credential-like URL parameters are redacted by default; pass includeSensitive:true only when needed.',
+      'Inspect one captured network request: headers, status, size, duration, and (with body:true) the response body text. Authentication headers and credential-like URL parameters are redacted by default; pass includeSensitive:true only when needed. When high-risk approvals are enabled, sensitive disclosure requires user approval.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -850,19 +850,28 @@ export function buildTools(
     },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      const includeSensitive = args['includeSensitive'] === true
+      if (includeSensitive) {
+        await opGate({
+          site: tab.url,
+          tabTitle: tab.title,
+          action: '查看敏感网络数据',
+          detail: '将把认证头、凭据参数或其他可能包含秘密的网络数据返回给 Agent。'
+        }, args['__aaSignal'])
+      }
       await tab.net.ensure()
       const entry = tab.net.find(String(args['requestId'] ?? ''))
       if (!entry) throw new ActionError(`找不到请求 ${args['requestId']}（用 browser_network_requests 查看当前抓到的请求）`)
       const parts: string[] = [
-        `${entry.method} ${safeNetworkUrl(entry.url, args['includeSensitive'] === true)}`,
+        `${entry.method} ${safeNetworkUrl(entry.url, includeSensitive)}`,
         `状态: ${entry.status} ${entry.statusText}${entry.error ? '（失败: ' + entry.error + '）' : ''}`,
         `类型: ${entry.resourceType} | 大小: ${(entry.size / 1024).toFixed(1)}KB | 耗时: ${entry.durationMs ?? '…'}ms`,
         '',
         '请求头:',
-        ...Object.entries(safeNetworkHeaders(entry.requestHeaders, args['includeSensitive'] === true)).map(([k, v]) => `  ${k}: ${v}`),
+        ...Object.entries(safeNetworkHeaders(entry.requestHeaders, includeSensitive)).map(([k, v]) => `  ${k}: ${v}`),
         '',
         '响应头:',
-        ...Object.entries(safeNetworkHeaders(entry.responseHeaders, args['includeSensitive'] === true)).map(([k, v]) => `  ${k}: ${v}`)
+        ...Object.entries(safeNetworkHeaders(entry.responseHeaders, includeSensitive)).map(([k, v]) => `  ${k}: ${v}`)
       ]
       if (args['body'] === true) {
         const body = await tab.net.getResponseBody(entry.requestId)
@@ -876,7 +885,7 @@ export function buildTools(
     name: 'browser_har',
     title: '导出 HAR',
     description:
-      'Export captured network traffic as HAR 1.2 (no response bodies). Authentication headers and credential-like URL parameters are redacted by default; pass includeSensitive:true only when needed.',
+      'Export captured network traffic as HAR 1.2 (no response bodies). Authentication headers and credential-like URL parameters are redacted by default; pass includeSensitive:true only when needed. When high-risk approvals are enabled, sensitive export requires user approval.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -887,6 +896,15 @@ export function buildTools(
     },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      const includeSensitive = args['includeSensitive'] === true
+      if (includeSensitive) {
+        await opGate({
+          site: tab.url,
+          tabTitle: tab.title,
+          action: '导出敏感网络数据',
+          detail: '将把认证头、凭据参数或其他可能包含秘密的网络数据写入本地 HAR 文件。'
+        }, args['__aaSignal'])
+      }
       await tab.net.ensure()
       const { app } = await import('electron')
       const fs = await import('node:fs')
@@ -896,7 +914,7 @@ export function buildTools(
         (args['path'] as string | undefined) ||
         path.join(os.homedir(), '.aabrowser', 'har', `aa-${Date.now()}.har`)
       fs.mkdirSync(path.dirname(file), { recursive: true })
-        fs.writeFileSync(file, JSON.stringify(tab.net.toHar(app.getVersion(), args['includeSensitive'] === true), null, 2), 'utf-8')
+        fs.writeFileSync(file, JSON.stringify(tab.net.toHar(app.getVersion(), includeSensitive), null, 2), 'utf-8')
       return { content: [text(`HAR 已导出: ${file}\n共 ${fs.statSync(file).size} 字节`)] }
     }
   })

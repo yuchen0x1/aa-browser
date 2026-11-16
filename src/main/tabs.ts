@@ -83,7 +83,10 @@ export function isUrlAllowed(url: string, rules: string[], newtabUrl: string): b
   } catch {
     return false
   }
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return !rules.length
+  // Only regular web pages are eligible for navigation.  In particular, an
+  // empty allowlist must not turn file:, data:, devtools:, or other internal
+  // schemes into an implicit allow rule.
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
   if (!rules.length) return true
   return rules.some((rule) => siteRuleMatches(parsed, rule))
 }

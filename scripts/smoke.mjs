@@ -31,6 +31,7 @@ const TEST_PAGE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'te
 let appChild = null
 let mcpClient = null
 let testServer = null
+let testPageServer = null
 let testTmpFiles = []
 
 let failures = 0
@@ -255,9 +256,19 @@ async function main() {
     const manualNewtab = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.body.innerText' }))
     check('手动加载新标签 HTML 正常', manualNewtab.includes('让 AI 直接使用') && manualNewtab.includes('复制安装提示词'), manualNewtab.slice(0, 400))
 
-    console.log('\n[2] 导航到本地测试页（内嵌完整快照）')
-    const fileUrl = 'file:///' + TEST_PAGE.replace(/\\/g, '/')
-    const nav = await mcp.call('browser_navigate', { url: fileUrl })
+    console.log('\n[2] 导航到本地 HTTP 测试页（内嵌完整快照）')
+    testPageServer = http.createServer((req, res) => {
+      if (req.url === '/test-page.html' || req.url === '/') {
+        res.setHeader('Content-Type', 'text/html; charset=utf-8')
+        res.end(fs.readFileSync(TEST_PAGE))
+        return
+      }
+      res.statusCode = 404
+      res.end('Not found')
+    })
+    await new Promise((resolve) => testPageServer.listen(0, '127.0.0.1', resolve))
+    const testPageUrl = `http://127.0.0.1:${testPageServer.address().port}/test-page.html`
+    const nav = await mcp.call('browser_navigate', { url: testPageUrl })
     check('导航成功', !nav.isError, mcp.text(nav).slice(0, 200))
     const navText = mcp.text(nav)
     check('导航结果内嵌完整快照', navText.includes('页面快照（完整）') && navText.includes('Aa 快照引擎测试页'), navText.slice(0, 200))
@@ -646,6 +657,7 @@ async function main() {
     mcp.stop()
     mcpClient = null
     if (testServer) { testServer.close(); testServer = null }
+    if (testPageServer) { testPageServer.close(); testPageServer = null }
   }
 
   // 只关闭由本脚本启动的隔离实例，并清理专属临时目录。
@@ -667,6 +679,7 @@ main().catch(async (err) => {
   console.error('🚨 冒烟测试异常:', err.message)
   try { mcpClient?.stop() } catch {}
   try { testServer?.close() } catch {}
+  try { testPageServer?.close() } catch {}
   for (const file of testTmpFiles) { try { fs.rmSync(file, { force: true }) } catch {} }
   if (appChild) {
     try { appChild.kill() } catch {}

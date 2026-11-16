@@ -128,10 +128,11 @@ async function resolveFromRepo(repo) {
  *
  * 安装器会被 AI Agent 逐字执行，而包体来自网络：没有校验就无法区分
  * "官方资产"和"被替换/被中间人篡改的 exe"。GitHub Release API 会给出
- * 形如 `sha256:<hex>` 的 digest，有则必须匹配；没有 digest 时至少
- * 校验文件非空且是 PE 可执行文件头，并明确告警。
+ * 形如 `sha256:<hex>` 的 digest 必须匹配。GitHub Release (`--repo`) 下载
+ * 没有可验证的 digest 时直接中止；本地文件或显式 URL 仍允许仅做格式检查，
+ * 除非用户通过 `--sha256` 要求严格校验。
  */
-async function verifyArtifact(file, expectedDigest, label) {
+async function verifyArtifact(file, expectedDigest, label, { requireDigest = false } = {}) {
   const size = fs.statSync(file).size
   if (!size) die(`安装包为空：${file}`)
   const head = Buffer.alloc(2)
@@ -144,14 +145,12 @@ async function verifyArtifact(file, expectedDigest, label) {
   if (head.toString('latin1') !== 'MZ') die(`安装包不是有效的 Windows 可执行文件（缺少 MZ 头）：${file}`)
 
   if (!expectedDigest) {
-    log('⚠️  Release 未提供 digest，仅完成格式与大小校验；如需严格校验请用 --sha256 指定预期值。')
+    if (requireDigest) die(`GitHub Release 未提供可验证的 SHA-256 digest，已中止安装：${label}\n请使用显式 --sha256 指定预期值。`)
+    log('⚠️  未提供 digest，仅完成格式与大小校验；如需严格校验请用 --sha256 指定预期值。')
     return
   }
   const m = /^(sha256):([0-9a-f]{64})$/i.exec(String(expectedDigest).trim())
-  if (!m) {
-    log(`⚠️  无法识别的 digest 格式（${expectedDigest}），跳过哈希校验。`)
-    return
-  }
+  if (!m) die(`无法识别的 SHA-256 digest 格式（${expectedDigest}），已中止安装：${label}`)
   const { createHash } = await import('node:crypto')
   const hash = createHash('sha256')
   await new Promise((resolve, reject) => {
@@ -238,7 +237,7 @@ async function main() {
   // 仍会校验 PE 头与非空，给了 --sha256 时再做哈希比对。
   const digestToUse = SHA256_ARG ? `sha256:${String(SHA256_ARG).trim()}` : expectedDigest
   if (!fs.statSync(artifact).isDirectory()) {
-    await verifyArtifact(artifact, digestToUse, artifact)
+    await verifyArtifact(artifact, digestToUse, artifact, { requireDigest: Boolean(REPO && !SHA256_ARG) })
   }
 
   // 2. 安装：exe → NSIS 静默安装；目录 → 便携模式就地使用

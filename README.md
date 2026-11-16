@@ -9,6 +9,13 @@
 
 ## 最新更新
 
+### v0.0.6 — 2026-11-16
+
+- 导航策略现在拒绝 `file:`、`data:`、`devtools:`、`view-source:` 等非网页协议，仅保留应用内部新标签页。
+- GitHub Release 安装器现在要求可验证的 SHA-256 digest；缺失、格式错误或不匹配都会中止安装。
+- 开启高危操作审批后，导出或查看未脱敏网络数据需要用户确认。
+- 新增项目审计、19 个开源项目对标和 40 项升级路线图，详见 [`PROJECT_AUDIT.md`](./PROJECT_AUDIT.md)、[`COMPETITOR_ANALYSIS.md`](./COMPETITOR_ANALYSIS.md) 和 [`UPGRADE_ROADMAP.md`](./UPGRADE_ROADMAP.md)。
+
 ### v0.0.5 — 2026-11-16
 
 - MCP 工具列表现在为每个工具明确标注只读、破坏性、幂等性和开放世界提示，AI 客户端可以在调用前获得更准确的风险信息。
@@ -221,6 +228,7 @@ npm run dev
 - token 与端口写在用户目录 `~/.aabrowser/connection.json`（仅当前用户可读）
 - 一键接入写入其他客户端配置前**自动备份**、只改 `aa-browser` 一个键、幂等可重复
 - **注意**：Agent 能看到页面内容与网络流量，包括可能含秘密的 Cookie、Storage、请求头和响应体。敏感输入审批是基于页面字段特征的保护，不是通用 DLP；不要让不可信 Agent 访问高敏站点。
+- 网络详情和 HAR 默认脱敏；开启「高危操作人工确认」后，Agent 请求 `includeSensitive:true` 查看或导出未脱敏网络数据会先等待用户批准。
 - **站点白名单**：在设置中每行填写一个 `https://example.com` 或 `https://*.example.com` 规则；填写后仅允许匹配的 HTTP/HTTPS 站点导航，留空表示关闭白名单。
 - **会话隔离**：普通标签默认共享登录态；可在设置中启用隔离会话。隔离标签使用独立的 Electron session 分区，关闭后清理会话数据。
 

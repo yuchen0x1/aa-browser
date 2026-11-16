@@ -6,6 +6,13 @@ on:
     tags: ['v*']
   pull_request:
 
+concurrency:
+  group: aa-browser-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: windows-latest
@@ -49,6 +56,9 @@ jobs:
 
       - name: Persistence regression test
         run: npm run test:stores
+
+      - name: Security regression test
+        run: npm run test:security
 
       - name: Updater state regression test
         run: npm run test:updater
