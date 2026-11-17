@@ -240,7 +240,7 @@ if (!process.versions.electron) {
       fs.writeFileSync(path.join(ROOT, 'docs/screenshots/page-find-toolbar.png'), (await chrome.capturePage()).toPNG())
     }
     await ui('window.aa.find("definitely-absent")')
-    await until(() => ui('document.querySelector("#find-status").textContent === "未找到匹配"'), 'no results')
+    await until(() => ui('document.querySelector("#find-status").textContent === (document.documentElement.lang === "en-US" ? "No matches" : "未找到匹配")'), 'no results')
     await ui('window.aa.find("")')
     assert.equal((await state()).find.matches, 0)
     await click('#find-close')
