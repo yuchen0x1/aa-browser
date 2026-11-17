@@ -833,7 +833,7 @@ document.getElementById('btn-save-settings')?.addEventListener('click', async ()
   if (button.disabled) return
   button.disabled = true
   clearTimeout(settingsStatusTimer)
-  if (settingsStatus) settingsStatus.textContent = '正在保存…'
+  if (settingsStatus) settingsStatus.textContent = t('saving')
   const patch: Partial<AppSettings> = {}
   if (setEngine) patch.searchEngine = setEngine.value || 'https://www.bing.com/search?q='
   if (setEngineUrl) patch.searchEngine = setEngineUrl.value.trim() || patch.searchEngine
@@ -850,11 +850,11 @@ document.getElementById('btn-save-settings')?.addEventListener('click', async ()
     if (!saved) throw new Error('设置未保存，请重试。')
     applyLocale(resolveLocale(saved.locale, navigator.languages?.length ? navigator.languages : [navigator.language]))
     if (settingsStatus) {
-      settingsStatus.textContent = '已保存'
+      settingsStatus.textContent = t('saved')
       settingsStatusTimer = setTimeout(() => { if (settingsStatus) settingsStatus.textContent = '' }, 1800)
     }
   } catch (error) {
-    if (settingsStatus) settingsStatus.textContent = `保存失败：${error instanceof Error ? error.message : String(error)}`
+    if (settingsStatus) settingsStatus.textContent = `${t('saveFailed')}${error instanceof Error ? error.message : String(error)}`
   } finally {
     button.disabled = false
   }

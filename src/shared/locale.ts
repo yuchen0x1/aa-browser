@@ -22,7 +22,7 @@ export type LocaleKey =
   | 'fullSnapshot' | 'approval' | 'isolatedSessions' | 'downloadDir' | 'siteAllowlist'
   | 'softwareUpdate' | 'autoUpdate' | 'stable' | 'beta' | 'currentVersion' | 'checkUpdate'
   | 'downloadUpdate' | 'connectClient' | 'scanningClients' | 'rescan' | 'writeClients'
-  | 'agentService' | 'loading' | 'save' | 'saving' | 'saved' | 'autoLocale'
+  | 'agentService' | 'loading' | 'save' | 'saving' | 'saved' | 'saveFailed' | 'autoLocale'
 
 const catalogs: Record<Locale, Record<LocaleKey, string>> = {
   'zh-CN': {
@@ -38,7 +38,7 @@ const catalogs: Record<Locale, Record<LocaleKey, string>> = {
     stable: '稳定版', beta: 'Beta 测试版', currentVersion: '当前版本', checkUpdate: '检查更新', downloadUpdate: '下载更新',
     connectClient: '连接 AI 客户端', scanningClients: '正在扫描已安装的 AI 客户端…', rescan: '重新扫描',
     writeClients: '写入所选客户端', agentService: 'Agent 本地服务', loading: '加载中…', save: '保存设置',
-    saving: '正在保存…', saved: '已保存', autoLocale: '自动（跟随系统 / 浏览器）'
+    saving: '正在保存…', saved: '已保存', saveFailed: '保存失败：', autoLocale: '自动（跟随系统 / 浏览器）'
   },
   'en-US': {
     appTitle: 'aa-browser', tabs: 'Browser tabs', newTab: 'New tab (Ctrl+T)', back: 'Back (Alt+←)',
@@ -53,7 +53,7 @@ const catalogs: Record<Locale, Record<LocaleKey, string>> = {
     stable: 'Stable', beta: 'Beta', currentVersion: 'Current version', checkUpdate: 'Check for updates', downloadUpdate: 'Download update',
     connectClient: 'Connect AI clients', scanningClients: 'Scanning installed AI clients…', rescan: 'Rescan',
     writeClients: 'Write to selected clients', agentService: 'Agent local service', loading: 'Loading…', save: 'Save settings',
-    saving: 'Saving…', saved: 'Saved', autoLocale: 'Automatic (follow system / browser)'
+    saving: 'Saving…', saved: 'Saved', saveFailed: 'Save failed: ', autoLocale: 'Automatic (follow system / browser)'
   }
 }
 
