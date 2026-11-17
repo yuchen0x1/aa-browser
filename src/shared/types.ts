@@ -100,6 +100,7 @@ export interface HistoryEntry {
 
 /** 用户可调设置（渲染层视图，主进程持久化） */
 export interface AppSettings {
+  locale: 'auto' | 'zh-CN' | 'en-US'
   searchEngine: string
   fullSnapshot: boolean
   downloadDir: string

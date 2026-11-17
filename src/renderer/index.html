@@ -91,6 +91,14 @@
           </div>
           <div class="settings-body">
             <div class="settings-group">
+              <label class="settings-label" for="set-locale">语言 / Language</label>
+              <select id="set-locale" class="settings-select">
+                <option value="auto">自动（跟随系统 / 浏览器）</option>
+                <option value="zh-CN">简体中文</option>
+                <option value="en-US">English</option>
+              </select>
+            </div>
+            <div class="settings-group">
               <div class="settings-label">默认搜索引擎</div>
               <select id="set-engine" class="settings-select"></select>
               <input id="set-engine-url" class="settings-input" type="text" placeholder="自定义搜索基址（以 = 结尾）" />

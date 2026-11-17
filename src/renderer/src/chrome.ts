@@ -82,6 +82,7 @@ const suggestList = document.getElementById('suggest-list') as HTMLDivElement | 
 const btnSettings = document.getElementById('btn-settings') as HTMLButtonElement | null
 const settingsModal = document.getElementById('settings-modal') as HTMLDivElement | null
 const setEngine = document.getElementById('set-engine') as HTMLSelectElement | null
+const setLocale = document.getElementById('set-locale') as HTMLSelectElement | null
 const setEngineUrl = document.getElementById('set-engine-url') as HTMLInputElement | null
 const setFullSnapshot = document.getElementById('set-full-snapshot') as HTMLInputElement | null
 const setOpApproval = document.getElementById('set-op-approval') as HTMLInputElement | null
@@ -729,6 +730,7 @@ async function openSettings(): Promise<void> {
     setEngine.appendChild(custom)
     setEngine.value = view.presets.some((preset) => preset.url === view.settings.searchEngine) ? view.settings.searchEngine : ''
     if (setEngineUrl) setEngineUrl.value = view.settings.searchEngine
+    if (setLocale) setLocale.value = view.settings.locale || 'auto'
     if (setFullSnapshot) setFullSnapshot.checked = view.settings.fullSnapshot
     if (setOpApproval) setOpApproval.checked = !!view.settings.requireOperationApproval
     if (setIsolatedSessions) setIsolatedSessions.checked = !!view.settings.isolatedSessions
@@ -777,6 +779,7 @@ document.getElementById('btn-save-settings')?.addEventListener('click', async ()
   const patch: Partial<AppSettings> = {}
   if (setEngine) patch.searchEngine = setEngine.value || 'https://www.bing.com/search?q='
   if (setEngineUrl) patch.searchEngine = setEngineUrl.value.trim() || patch.searchEngine
+  if (setLocale) patch.locale = setLocale.value === 'zh-CN' || setLocale.value === 'en-US' ? setLocale.value : 'auto'
   if (setFullSnapshot) patch.fullSnapshot = setFullSnapshot.checked
   if (setOpApproval) patch.requireOperationApproval = setOpApproval.checked
   if (setIsolatedSessions) patch.isolatedSessions = setIsolatedSessions.checked
