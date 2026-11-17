@@ -1,4 +1,5 @@
 import type { TabInfo, UiState, DownloadInfo, HistoryEntry, AppSettings, SettingsView, AgentInfo, UpdateState } from '@shared/types'
+import { resolveLocale, translate, type Locale, type LocaleKey } from '@shared/locale'
 
 /** 与主进程 clients.ts 的 ClientDetectResult / ClientSetupResult 对应 */
 interface ClientDetectResult {
@@ -111,6 +112,59 @@ const findBar = document.getElementById('find-bar') as HTMLDivElement
 const findQuery = document.getElementById('find-query') as HTMLInputElement
 const findStatus = document.getElementById('find-status') as HTMLSpanElement
 
+let activeLocale: Locale = resolveLocale('auto', navigator.languages?.length ? navigator.languages : [navigator.language])
+const t = (key: LocaleKey): string => translate(activeLocale, key)
+
+function setText(id: string, key: LocaleKey): void {
+  const element = document.getElementById(id)
+  if (element) element.textContent = t(key)
+}
+
+function setAttr(id: string, name: string, key: LocaleKey): void {
+  const element = document.getElementById(id)
+  if (element) element.setAttribute(name, t(key))
+}
+
+function applyLocale(locale: Locale): void {
+  activeLocale = locale
+  document.documentElement.lang = locale
+  document.title = t('appTitle')
+  setAttr('tabs', 'aria-label', 'tabs')
+  setAttr('btn-newtab', 'title', 'newTab'); setAttr('btn-newtab', 'aria-label', 'newTab')
+  setAttr('btn-back', 'title', 'back'); setAttr('btn-back', 'aria-label', 'back')
+  setAttr('btn-forward', 'title', 'forward'); setAttr('btn-forward', 'aria-label', 'forward')
+  setAttr('btn-reload', 'title', 'reload'); setAttr('btn-reload', 'aria-label', 'reload')
+  setAttr('omnibox', 'aria-label', 'searchOrUrl'); setAttr('omnibox', 'placeholder', 'searchOrUrl')
+  setAttr('btn-reopen', 'title', 'reopenTab'); setAttr('btn-reopen', 'aria-label', 'reopenTab')
+  setAttr('btn-find', 'title', 'findInPage'); setAttr('btn-find', 'aria-label', 'findInPage')
+  setAttr('btn-feed', 'title', 'activity'); setAttr('btn-feed', 'aria-label', 'activity')
+  setAttr('btn-downloads', 'title', 'downloads'); setAttr('btn-downloads', 'aria-label', 'downloads')
+  setAttr('btn-settings', 'title', 'settings'); setAttr('btn-settings', 'aria-label', 'settings')
+  setText('agent-stop', state.agentInterrupted ? 'resume' : 'interrupt')
+  setText('settings-title', 'settingsTitle')
+  setAttr('btn-close-settings', 'aria-label', 'close')
+  setText('settings-engine-label', 'customSearch')
+  setText('settings-full-snapshot-label', 'fullSnapshot')
+  setText('settings-approval-label', 'approval')
+  setText('settings-isolated-label', 'isolatedSessions')
+  setText('settings-download-dir-label', 'downloadDir')
+  setText('settings-allowlist-label', 'siteAllowlist')
+  setText('software-update-settings', 'softwareUpdate')
+  setText('settings-client-label', 'connectClient')
+  setText('settings-agent-label', 'agentService')
+  setText('btn-save-settings', 'save')
+  setAttr('find-bar', 'aria-label', 'findInPage')
+  const findLabel = document.querySelector<HTMLLabelElement>('#find-bar label'); if (findLabel) findLabel.textContent = t('findLabel')
+  setAttr('find-query', 'placeholder', 'findPlaceholder')
+  setAttr('find-prev', 'aria-label', 'previousMatch'); setAttr('find-next', 'aria-label', 'nextMatch')
+  setAttr('find-close', 'aria-label', 'close')
+  const localeOption = setLocale?.querySelector<HTMLOptionElement>('option[value="auto"]'); if (localeOption) localeOption.textContent = t('autoLocale')
+  const engineUrl = document.getElementById('set-engine-url') as HTMLInputElement | null; if (engineUrl) engineUrl.placeholder = t('customSearch')
+  const updateCheck = document.getElementById('btn-update-check'); if (updateCheck) updateCheck.textContent = t('checkUpdate')
+  const updateAction = document.getElementById('btn-update-action'); if (updateAction && !updateAction.hidden) updateAction.textContent = t('downloadUpdate')
+  renderToolbar(); renderFind(); renderUpdate(state.update)
+}
+
 function renderFind(): void {
   const find = state.find
   const wasHidden = findBar.hidden
@@ -123,7 +177,7 @@ function renderFind(): void {
     findQuery.value = find.query
     findQuery.focus()
   }
-  findStatus.textContent = !find.query ? '输入查找内容' : find.matches ? `${find.activeMatch} / ${find.matches}` : '未找到匹配'
+  findStatus.textContent = !find.query ? t('findPlaceholder') : find.matches ? `${find.activeMatch} / ${find.matches}` : (activeLocale === 'en-US' ? 'No matches' : '未找到匹配')
   findQuery.setAttribute('aria-invalid', String(!!find.query && !find.matches))
 }
 
@@ -184,10 +238,10 @@ function formatUpdateBytes(value?: number): string {
 function renderUpdate(update?: UpdateState): void {
   if (!updateStatus || !update) return
   const labels: Record<UpdateState['status'], string> = {
-    disabled: '开发模式不检查更新', idle: `当前版本 ${update.currentVersion}`, checking: '正在检查更新…',
-    'up-to-date': `已是最新版本（${update.currentVersion}）`, available: `发现新版本 ${update.version ?? ''}`,
-    downloading: `正在下载 ${update.version ?? ''} · ${Math.max(0, Math.round(update.progress ?? 0))}%`,
-    downloaded: `已下载 ${update.version ?? ''}，可以重启安装`, error: `更新失败：${update.error ?? '未知错误'}`
+    disabled: activeLocale === 'en-US' ? 'Updates disabled in development' : '开发模式不检查更新', idle: `${t('currentVersion')} ${update.currentVersion}`, checking: activeLocale === 'en-US' ? 'Checking for updates…' : '正在检查更新…',
+    'up-to-date': activeLocale === 'en-US' ? `Already up to date (${update.currentVersion})` : `已是最新版本（${update.currentVersion}）`, available: activeLocale === 'en-US' ? `New version ${update.version ?? ''} found` : `发现新版本 ${update.version ?? ''}`,
+    downloading: activeLocale === 'en-US' ? `Downloading ${update.version ?? ''} · ${Math.max(0, Math.round(update.progress ?? 0))}%` : `正在下载 ${update.version ?? ''} · ${Math.max(0, Math.round(update.progress ?? 0))}%`,
+    downloaded: activeLocale === 'en-US' ? `${update.version ?? ''} downloaded; restart to install` : `已下载 ${update.version ?? ''}，可以重启安装`, error: activeLocale === 'en-US' ? `Update failed: ${update.error ?? 'Unknown error'}` : `更新失败：${update.error ?? '未知错误'}`
   }
   updateStatus.textContent = labels[update.status]
   updateStatus.title = [update.checkedAt ? `上次检查：${new Date(update.checkedAt).toLocaleString()}` : '', update.retryAt ? `自动重试：${new Date(update.retryAt).toLocaleTimeString()}` : '', update.releaseDate ? `发布时间：${update.releaseDate}` : '', update.size ? `大小：${formatUpdateBytes(update.size)}` : '', update.releaseNotes ?? ''].filter(Boolean).join('\n')
@@ -195,20 +249,20 @@ function renderUpdate(update?: UpdateState): void {
   if (btnUpdateAction) {
     btnUpdateAction.hidden = !['available', 'downloaded', 'error'].includes(update.status)
     btnUpdateAction.disabled = update.status === 'downloading'
-    btnUpdateAction.textContent = update.status === 'downloaded' ? '重启并安装' : update.status === 'error' ? '重试更新' : '下载更新'
+    btnUpdateAction.textContent = update.status === 'downloaded' ? (activeLocale === 'en-US' ? 'Restart and install' : '重启并安装') : update.status === 'error' ? (activeLocale === 'en-US' ? 'Retry update' : '重试更新') : t('downloadUpdate')
   }
   updatePill.hidden = !['available', 'downloading', 'downloaded', 'error'].includes(update.status)
-  updatePill.textContent = update.status === 'downloaded' ? '重启更新' : update.status === 'downloading' ? `更新 ${Math.max(0, Math.min(100, Math.round(update.progress ?? 0)))}%` : update.status === 'error' ? '更新失败' : '发现更新'
+  updatePill.textContent = update.status === 'downloaded' ? (activeLocale === 'en-US' ? 'Restart update' : '重启更新') : update.status === 'downloading' ? `${activeLocale === 'en-US' ? 'Update' : '更新'} ${Math.max(0, Math.min(100, Math.round(update.progress ?? 0)))}%` : update.status === 'error' ? (activeLocale === 'en-US' ? 'Update failed' : '更新失败') : (activeLocale === 'en-US' ? 'Update available' : '发现更新')
   updatePill.title = labels[update.status]
   updatePill.classList.toggle('error', update.status === 'error')
   updateNotice.hidden = !update.noticeVisible
   document.documentElement.style.setProperty('--notice-height', update.noticeVisible ? '44px' : '0px')
   updateNotice.classList.toggle('error', update.status === 'error')
-  updateNoticeText.textContent = update.status === 'downloaded' ? `新版 ${update.version} 已下载完成，重启即可安装。` : update.status === 'available' ? `发现新版本 ${update.version}，当前为 ${update.currentVersion}。` : update.status === 'error' ? `更新${update.failedOperation === 'download' ? '下载' : '检查'}失败，${update.retryAt ? '将自动重试，也可立即重试。' : '点击重试或在设置中查看原因。'}` : labels[update.status]
+  updateNoticeText.textContent = update.status === 'downloaded' ? (activeLocale === 'en-US' ? `${update.version} downloaded. Restart to install.` : `新版 ${update.version} 已下载完成，重启即可安装。`) : update.status === 'available' ? (activeLocale === 'en-US' ? `Version ${update.version} is available; current version is ${update.currentVersion}.` : `发现新版本 ${update.version}，当前为 ${update.currentVersion}。`) : update.status === 'error' ? (activeLocale === 'en-US' ? `Update ${update.failedOperation === 'download' ? 'download' : 'check'} failed. ${update.retryAt ? 'It will retry automatically.' : 'Retry now or review settings.'}` : `更新${update.failedOperation === 'download' ? '下载' : '检查'}失败，${update.retryAt ? '将自动重试，也可立即重试。' : '点击重试或在设置中查看原因。'}`) : labels[update.status]
   updateNoticeProgress.hidden = update.status !== 'downloading'
   updateNoticeProgress.value = Math.max(0, Math.min(100, update.progress ?? 0))
   updateNoticeAction.hidden = !['available', 'downloaded', 'error'].includes(update.status)
-  updateNoticeAction.textContent = update.status === 'downloaded' ? '重启安装' : update.status === 'error' ? '立即重试' : '下载更新'
+  updateNoticeAction.textContent = update.status === 'downloaded' ? (activeLocale === 'en-US' ? 'Restart and install' : '重启安装') : update.status === 'error' ? (activeLocale === 'en-US' ? 'Retry now' : '立即重试') : t('downloadUpdate')
 }
 
 function activeTab(): TabInfo | null {
@@ -313,19 +367,19 @@ function renderToolbar(): void {
   const connected = state.agentVerifiedCount > 0
   const waiting = !connected && (state.bridgeState === 'waiting' || state.agentCount > 0)
   const statusText = connected
-    ? `AI 已连接 ×${state.agentVerifiedCount}`
+    ? (activeLocale === 'en-US' ? `AI connected ×${state.agentVerifiedCount}` : `AI 已连接 ×${state.agentVerifiedCount}`)
     : waiting
-      ? state.agentCount > 0 ? '等待 AI 首次调用' : '等待 AI 连接'
-      : 'AI 桥未连接'
+      ? state.agentCount > 0 ? (activeLocale === 'en-US' ? 'Waiting for first AI call' : '等待 AI 首次调用') : t('agentWaiting')
+      : (activeLocale === 'en-US' ? 'AI bridge disconnected' : 'AI 桥未连接')
   agentPill.classList.toggle('connected', connected)
   agentPill.classList.toggle('waiting', waiting)
   agentPill.classList.toggle('disconnected', !connected && !waiting)
   agentPill.textContent = statusText
   agentPill.title = `${state.connectionMessage}。点击打开“连接 AI 客户端”设置。`
   agentPill.setAttribute('aria-label', `${statusText}。点击打开连接设置`)
-  agentStop.textContent = state.agentInterrupted ? '恢复' : '中断'
+  agentStop.textContent = state.agentInterrupted ? t('resume') : t('interrupt')
   agentStop.classList.toggle('active', state.agentInterrupted)
-  agentStop.title = state.agentInterrupted ? '恢复 Agent 浏览器操作' : '中断 Agent 的后续浏览器操作'
+  agentStop.title = state.agentInterrupted ? (activeLocale === 'en-US' ? 'Resume Agent browser actions' : '恢复 Agent 浏览器操作') : (activeLocale === 'en-US' ? 'Interrupt further Agent browser actions' : '中断 Agent 的后续浏览器操作')
   renderApprovals()
 }
 
@@ -770,6 +824,10 @@ setEngineUrl?.addEventListener('input', () => {
   const value = setEngineUrl.value.trim()
   setEngine.value = Array.from(setEngine.options).some((option) => option.value === value) ? value : ''
 })
+setLocale?.addEventListener('change', () => {
+  const setting = setLocale.value === 'zh-CN' || setLocale.value === 'en-US' ? setLocale.value : 'auto'
+  applyLocale(resolveLocale(setting, navigator.languages?.length ? navigator.languages : [navigator.language]))
+})
 document.getElementById('btn-save-settings')?.addEventListener('click', async () => {
   const button = document.getElementById('btn-save-settings') as HTMLButtonElement
   if (button.disabled) return
@@ -790,6 +848,7 @@ document.getElementById('btn-save-settings')?.addEventListener('click', async ()
   try {
     const saved = await window.aa.settingsSet(patch)
     if (!saved) throw new Error('设置未保存，请重试。')
+    applyLocale(resolveLocale(saved.locale, navigator.languages?.length ? navigator.languages : [navigator.language]))
     if (settingsStatus) {
       settingsStatus.textContent = '已保存'
       settingsStatusTimer = setTimeout(() => { if (settingsStatus) settingsStatus.textContent = '' }, 1800)
@@ -879,4 +938,7 @@ window.addEventListener('keydown', (e) => {
 })
 
 /* 初始化拉取一次状态 */
+void window.aa.settingsGet().then((view) => {
+  applyLocale(resolveLocale(view?.settings.locale, navigator.languages?.length ? navigator.languages : [navigator.language]))
+}).catch(() => applyLocale(activeLocale))
 void window.aa.getState().then(applyState)

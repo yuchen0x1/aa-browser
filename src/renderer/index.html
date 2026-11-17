@@ -86,7 +86,7 @@
       <div id="settings-modal" class="settings-modal" hidden>
         <div class="settings-card">
           <div class="drawer-header">
-            <span>设置</span>
+            <span id="settings-title">设置</span>
             <button id="btn-close-settings" type="button" class="drawer-close" aria-label="关闭设置">×</button>
           </div>
           <div class="settings-body">
@@ -99,35 +99,35 @@
               </select>
             </div>
             <div class="settings-group">
-              <div class="settings-label">默认搜索引擎</div>
+                <div id="settings-engine-label" class="settings-label">默认搜索引擎</div>
               <select id="set-engine" class="settings-select"></select>
               <input id="set-engine-url" class="settings-input" type="text" placeholder="自定义搜索基址（以 = 结尾）" />
             </div>
             <div class="settings-group">
               <label class="settings-check">
                 <input type="checkbox" id="set-full-snapshot" />
-                <span>快照默认全量输出（关闭=增量省 token）</span>
+                <span id="settings-full-snapshot-label">快照默认全量输出（关闭=增量省 token）</span>
               </label>
             </div>
             <div class="settings-group">
               <label class="settings-check">
                 <input type="checkbox" id="set-op-approval" />
-                <span>提交表单或输入后回车前弹人工确认</span>
+                <span id="settings-approval-label">提交表单或输入后回车前弹人工确认</span>
               </label>
             </div>
             <div class="settings-group">
               <label class="settings-check">
                 <input type="checkbox" id="set-isolated-sessions" />
-                <span>新建标签默认使用隔离会话（不共享登录态，关闭即清除）</span>
+                <span id="settings-isolated-label">新建标签默认使用隔离会话（不共享登录态，关闭即清除）</span>
               </label>
               <div class="settings-hint">关闭时所有标签共享 Cookie / 登录态，与普通浏览器一致；需要测试脏数据时打开此项，或让 Agent 用 <code>browser_tabs new isolated:true</code> 单独开隔离标签。</div>
             </div>
             <div class="settings-group">
-              <div class="settings-label">下载保存目录</div>
+                <div id="settings-download-dir-label" class="settings-label">下载保存目录</div>
               <input id="set-download-dir" class="settings-input" type="text" placeholder="留空=默认 ~/.aabrowser/downloads" />
             </div>
             <div class="settings-group">
-              <div class="settings-label">站点白名单</div>
+                <div id="settings-allowlist-label" class="settings-label">站点白名单</div>
               <textarea id="set-allowed-sites" class="settings-input settings-textarea" rows="4" placeholder="每行一个规则，例如：&#10;https://example.com&#10;https://*.example.org:8443"></textarea>
               <div class="settings-hint">填写后仅允许匹配的 HTTP/HTTPS 站点；留空表示不启用白名单。支持 *.example.com 子域名匹配。</div>
             </div>
@@ -149,7 +149,7 @@
               <div class="settings-hint">更新来自 GitHub Releases；下载完成并通过 electron-updater 校验后才会安装。</div>
             </div>
             <div class="settings-group">
-              <div class="settings-label">连接 AI 客户端</div>
+                <div id="settings-client-label" class="settings-label">连接 AI 客户端</div>
               <div id="set-client-list" class="client-list" aria-live="polite" aria-busy="true">正在扫描已安装的 AI 客户端…</div>
               <div class="settings-actions">
                 <button id="btn-client-scan" type="button" class="settings-btn">重新扫描</button>
@@ -159,7 +159,7 @@
               <div class="settings-hint">写入前自动备份，只改 aa-browser 一个键；写入成功不等于客户端已加载工具，仍需在客户端内确认。</div>
             </div>
             <div class="settings-group">
-              <div class="settings-label">Agent 本地服务</div>
+                <div id="settings-agent-label" class="settings-label">Agent 本地服务</div>
               <div id="set-agent-info" class="settings-info">加载中…</div>
             </div>
             <div class="settings-save">
