@@ -11,9 +11,9 @@
 
 <!-- github-release:start -->
 
-**[v0.0.8](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.0.8)** · 2026-11-18
+**[v0.0.7](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.0.7)** · 2026-11-17
 
-本版修复 MCP 对跳转和加载失败的误判、新标签后退时打开空白页，以及关闭设置后未保存的语言预览仍然生效的问题。英文设置补齐了自定义搜索地址和自动更新等控件与提示。
+本版为 AI Agent 浏览器的应用壳层新增界面语言设置：可自动跟随系统或浏览器语言，也可手动选择简体中文或 English 并持久化。核心浏览器壳层即时更新语言；网页内容、导航协议策略、MCP 快照行为和安全边界保持原样。
 
 [全部发行记录](https://github.com/yuchen0x1/aa-browser/releases)
 
