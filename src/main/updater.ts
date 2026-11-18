@@ -1,5 +1,8 @@
 import { autoUpdater } from 'electron-updater'
 import type { ProgressInfo, UpdateInfo } from 'electron-updater'
+import { randomUUID } from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
 import type { UpdateState, UpdateStatus } from '../shared/types'
 export type { UpdateState, UpdateStatus } from '../shared/types'
 
@@ -10,6 +13,7 @@ const RETRY_DELAYS = [60_000, 5 * 60_000, 15 * 60_000]
 
 type SettingsSnapshot = { autoUpdate: boolean; updateChannel: 'stable' | 'beta' }
 type UpdateEvent = Parameters<typeof autoUpdater.on>[0]
+type UpdateOperation = NonNullable<UpdateState['failedOperation']>
 
 function notesText(notes: UpdateInfo['releaseNotes']): string | undefined {
   if (!notes) return undefined
@@ -32,12 +36,14 @@ export class UpdateManager {
   private stopped = false
   private listeners: { event: UpdateEvent; handler: (...args: any[]) => void }[] = []
   private initialized = false
+  private installing = false
   private onChange: () => void = () => {}
 
   constructor(
     private readonly currentVersion: string,
     private readonly getSettings: () => SettingsSnapshot,
-    private readonly enabled = true
+    private readonly enabled = true,
+    private readonly appImageRecovery?: { source: string; directory: string }
   ) {
     this.state = { status: 'disabled', currentVersion }
   }
@@ -60,7 +66,7 @@ export class UpdateManager {
       this.listen('download-progress', (progress: ProgressInfo) => this.applyProgress(progress))
       this.listen('update-downloaded', (info: UpdateInfo) => this.applyInfo('downloaded', info))
       this.listen('update-cancelled', (info: UpdateInfo) => this.applyInfo('available', info))
-      this.listen('error', (error: Error) => this.fail(error, this.state.status === 'downloading' ? 'download' : this.state.failedOperation ?? 'check'))
+      this.listen('error', (error: Error) => this.fail(error, this.installing ? 'install' : this.state.status === 'downloading' ? 'download' : this.state.failedOperation ?? 'check'))
       this.state = { status: 'idle', currentVersion: this.currentVersion }
       this.schedule()
     }
@@ -74,7 +80,7 @@ export class UpdateManager {
 
   dismissNotice(): void { this.dismissedNotice = this.noticeKey(); this.emit() }
 
-  private noticeKey(): string { return `${this.state.status}:${this.state.version ?? ''}` }
+  private noticeKey(): string { return `${this.state.status}:${this.state.version ?? ''}:${this.state.failedOperation ?? ''}` }
 
   private listen(event: UpdateEvent, handler: (...args: any[]) => void): void {
     this.listeners.push({ event, handler })
@@ -82,7 +88,7 @@ export class UpdateManager {
   }
 
   async check(): Promise<UpdateState> {
-    if (this.stopped || ['disabled', 'checking', 'downloading', 'downloaded'].includes(this.state.status)) return this.getState()
+    if (this.stopped || this.installing || this.state.failedOperation === 'install' || ['disabled', 'checking', 'downloading', 'downloaded'].includes(this.state.status)) return this.getState()
     this.clearRetry()
     autoUpdater.autoDownload = this.getSettings().autoUpdate
     autoUpdater.allowPrerelease = this.getSettings().updateChannel === 'beta'
@@ -104,17 +110,42 @@ export class UpdateManager {
   }
 
   install(): boolean {
-    if (this.state.status !== 'downloaded') return false
-    autoUpdater.quitAndInstall(false, true)
-    return true
+    if (this.stopped || this.installing || !(this.state.status === 'downloaded' || this.state.failedOperation === 'install')) return false
+    this.installing = true
+    try {
+      if (this.appImageRecovery) this.backupAppImage(this.appImageRecovery)
+      autoUpdater.quitAndInstall(false, true)
+      return this.installing
+    } catch (error) {
+      this.fail(error, 'install')
+      return false
+    }
+  }
+
+  private backupAppImage(recovery: { source: string; directory: string }): void {
+    const { source, directory } = recovery
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 })
+    const backup = path.join(directory, `${this.currentVersion}.AppImage`)
+    const temporary = `${backup}.${randomUUID()}.tmp`
+    try {
+      fs.copyFileSync(source, temporary, fs.constants.COPYFILE_FICLONE)
+      fs.renameSync(temporary, backup)
+    } finally {
+      fs.rmSync(temporary, { force: true })
+    }
   }
 
   async retry(): Promise<UpdateState> {
+    if (this.state.failedOperation === 'install') {
+      this.install()
+      return this.getState()
+    }
     return this.state.failedOperation === 'download' ? this.download() : this.check()
   }
 
   async checkIfDue(): Promise<UpdateState> {
     if (!this.getSettings().autoUpdate) return this.getState()
+    if (this.state.failedOperation === 'install') return this.getState()
     if (this.state.status !== 'error' && this.state.checkedAt && Date.now() - this.state.checkedAt < UPDATE_WAKE_COOLDOWN_MS) return this.getState()
     return this.state.status === 'error' ? this.retry() : this.check()
   }
@@ -157,12 +188,13 @@ export class UpdateManager {
     this.clearRetry()
   }
 
-  private fail(error: unknown, operation: 'check' | 'download'): void {
+  private fail(error: unknown, operation: UpdateOperation): void {
     if (this.stopped) return
+    if (operation === 'install') this.installing = false
     const message = (error instanceof Error ? error.message : String(error)).slice(0, 1500)
     if (this.state.status === 'error' && this.state.error === message && this.state.failedOperation === operation) return
     this.clearRetry()
-    const delay = this.getSettings().autoUpdate ? RETRY_DELAYS[this.retryCount++] : undefined
+    const delay = operation !== 'install' && this.getSettings().autoUpdate ? RETRY_DELAYS[this.retryCount++] : undefined
     if (delay) {
       this.retryTimer = setTimeout(() => { this.retryTimer = null; void this.retry() }, delay)
     }

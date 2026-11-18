@@ -148,6 +148,24 @@ try {
     await manager.checkIfDue(); await manager.checkIfDue()
     assert.equal(providerCalls, 1)
   })
+  await test('failed installation stays ready for an explicit retry without another download', async () => {
+    const manager = new UpdateManager('0.0.2', () => ({ autoUpdate: true, updateChannel: 'stable' }))
+    let installerCalls = 0
+    provider.quitAndInstall = () => {
+      if (++installerCalls === 1) provider.emit('error', new Error('installer could not start'))
+    }
+    manager.init(() => {})
+    provider.emit('update-downloaded', { version: '0.0.3', files: [] })
+    assert.equal(manager.install(), false)
+    assert.equal(manager.getState().failedOperation, 'install')
+    assert.equal(manager.getState().retryAt, undefined)
+    await manager.checkIfDue()
+    await manager.check()
+    assert.equal(providerCalls, 0)
+    assert.equal(installerCalls, 1)
+    await manager.retry()
+    assert.equal(installerCalls, 2)
+  })
   await test('development mode stays inert and shutdown rejects further checks', async () => {
     const development = new UpdateManager('0.0.2', () => ({ autoUpdate: true, updateChannel: 'stable' }), false)
     development.init(() => {})

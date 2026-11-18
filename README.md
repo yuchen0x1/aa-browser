@@ -2,7 +2,7 @@
 
 **为 AI Agent 而生的开源桌面浏览器。**
 
-![License](https://img.shields.io/badge/license-MIT-blue) ![CI](https://github.com/yuchen0x1/aa-browser/actions/workflows/ci.yml/badge.svg) ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey) ![MCP](https://img.shields.io/badge/protocol-MCP-purple) [![M8ven Score](https://m8ven.ai/badge/mcp/yuchen0x1-aa-browser-135ffo?v=5eaaa577bc85b8b59b5e327efd51d38c)](https://m8ven.ai/mcp/yuchen0x1-aa-browser-135ffo?s=readme)
+![License](https://img.shields.io/badge/license-MIT-blue) ![CI](https://github.com/yuchen0x1/aa-browser/actions/workflows/ci.yml/badge.svg) ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey) ![MCP](https://img.shields.io/badge/protocol-MCP-purple) [![M8ven Score](https://m8ven.ai/badge/mcp/yuchen0x1-aa-browser-135ffo?v=5eaaa577bc85b8b59b5e327efd51d38c)](https://m8ven.ai/mcp/yuchen0x1-aa-browser-135ffo?s=readme)
 
 > 人像人一样浏览网页，Agent 像工程师一样驱动它。
 > **The Agent-Native Browser** — snapshots, actions, and packet capture over MCP.
@@ -11,9 +11,9 @@
 
 <!-- github-release:start -->
 
-**[v0.0.8](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.0.8)** · 2026-11-18
+**[v0.1.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.1.0)** · 2026-11-18
 
-本版修复 MCP 对跳转和加载失败的误判、新标签后退时打开空白页，以及关闭设置后未保存的语言预览仍然生效的问题。英文设置补齐了自定义搜索地址和自动更新等控件与提示。
+新增 Linux x86_64 AppImage，支持桌面浏览和 MCP 接入。安装 AppImage 更新前会保留当前版本，供需要时手动恢复。
 
 [全部发行记录](https://github.com/yuchen0x1/aa-browser/releases)
 
@@ -104,7 +104,7 @@ title: Aa Browser - 搜索
 
 ## 快速开始
 
-### ⚡ WorkBuddy：一条消息安装并接入
+### ⚡ Windows WorkBuddy 安装和接入
 
 把 [PROMPT.md](./PROMPT.md) 中的 WorkBuddy 提示词整段发给 WorkBuddy。它会尝试下载并运行安装器，准备 `~/.workbuddy/mcp.json` 和本地 Connector 文件；这不保证 WorkBuddy 自动加载。需要时须通过 WorkBuddy 5.9.3 支持的“专家·技能·连接器”流程导入/启用，然后由当前会话实际调用 `browser_tabs` 验证。若产品不支持本地 Connector 导入或工具未出现，报告具体阻塞；不得以安装或配置文件生成声称已接通。
 
@@ -115,7 +115,7 @@ Invoke-WebRequest https://raw.githubusercontent.com/yuchen0x1/aa-browser/main/in
 node .\\install.mjs --repo yuchen0x1/aa-browser --clients workbuddy
 ```
 
-### 其他 MCP 客户端
+### Windows 其他 MCP 客户端
 
 ```bash
 node install.mjs --repo yuchen0x1/aa-browser                 # 自动拉 GitHub Releases 最新版
@@ -124,28 +124,30 @@ node install.mjs --repo yuchen0x1/aa-browser --clients zcode,cursor
 
 WorkBuddy 路径尝试写入用户级 `~/.workbuddy/mcp.json` 并生成本地 Connector 包。配置写入、Connector 导入/启用、bridge 鉴权、工具调用成功是不同状态，必须分别确认；不能推断 WorkBuddy 会自动发现该 JSON，也不要改写 WorkBuddy 数据库、缓存或内部运行时文件。
 
-### 其他方式
-
-要求：Node.js ≥ 20，Windows / macOS / Linux。
-
 ### 自动更新
 
-正式 Windows 安装版使用 GitHub Releases 和 `electron-updater` 检查更新。打开「设置 → 软件更新」可以手动检查、选择稳定版/Beta 通道、查看状态并在下载完成后重启安装。发布和配置说明见 [docs/AUTO_UPDATE.md](./docs/AUTO_UPDATE.md)。
+Windows NSIS 安装版与 Linux AppImage 从 GitHub Releases 检查更新。打开「设置 → 软件更新」可检查、查看下载状态和确认重启安装。安装流程与恢复方法见 [自动更新](./docs/AUTO_UPDATE.md)。
 
 ### 方式一：Windows 安装包（推荐给普通用户）
 
 ```bash
-npm run dist       # 产出 release/Aa Browser-Setup-<版本>.exe（NSIS 安装器）
+npm run dist -- --publish never  # 产出 release/aa-browser-setup-<版本>.exe
 ```
 
 双击安装（未做代码签名，Windows SmartScreen 会提示"更多信息 → 仍要运行"）。首次打开后，新标签页会提供安装与连接提示词：具备本机终端和文件操作能力的 AI 可按提示从官方仓库下载安装、写入客户端配置，并在重启/重新加载后实际调用 `browser_tabs` 验证。只有 AI 实际调用 `browser_tabs` 后，工具栏才显示「AI 已连接」；配置写入成功本身不代表接通。
 
-### 方式二：源码运行（开发者）
+### 方式二：Linux AppImage
+
+从 [GitHub Releases](https://github.com/yuchen0x1/aa-browser/releases/latest) 下载 `aa-browser-<版本>-linux-x86_64.AppImage`。赋予执行权限后从当前桌面会话启动。MCP 接入需要系统 Node.js 22.12 或更高版本。系统依赖、按发行版验证状态和恢复步骤见 [平台指南](./docs/PLATFORMS.md)。
+
+### 方式三：源码运行（开发者）
+
+开发和打包使用 Node.js 22.12 或更高版本。
 
 ```bash
 git clone https://github.com/yuchen0x1/aa-browser.git aa-browser
 cd aa-browser
-npm install        # 首次会下载 Electron，慢可设镜像：
+npm ci             # 首次会下载 Electron，慢可设镜像：
                    # export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/
 npm run build      # 构建主进程 / 预加载 / 渲染层
 npm start          # 启动 Aa Browser

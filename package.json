@@ -1,7 +1,8 @@
 {
   "name": "aa-browser",
   "productName": "Aa Browser",
-  "version": "0.0.8",
+  "desktopName": "aa-browser.desktop",
+  "version": "0.1.0",
   "description": "AI-native browser — browse like a human, drive like an agent (为 Agent 而生的浏览器)",
   "license": "MIT",
   "author": {
@@ -29,10 +30,11 @@
     "validate:workbuddy": "node scripts/validate-workbuddy.mjs",
     "validate:codex": "node scripts/validate-codex-setup.mjs",
     "icon": "electron scripts/make-icon.js",
-    "dist": "electron-vite build && node scripts/build-bridge.mjs && electron-builder --win"
+    "dist": "npm run build && electron-builder --win --x64",
+    "dist:linux": "npm run build && electron-builder --linux AppImage --x64"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12.0"
   },
   "keywords": [
     "ai",

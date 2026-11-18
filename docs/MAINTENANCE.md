@@ -1,0 +1,63 @@
+# Aa Browser 维护状态
+
+基线审核于 2026-11-18。GitHub 的 [CI](https://github.com/yuchen0x1/aa-browser/actions/workflows/ci.yml)、[发行检查](https://github.com/yuchen0x1/aa-browser/actions/workflows/sync-release-readme.yml)、[CodeQL](https://github.com/yuchen0x1/aa-browser/actions/workflows/codeql.yml)、[最新发行](https://github.com/yuchen0x1/aa-browser/releases/latest) 提供实时状态。产品目标版本由 `package.json` 和 tag 共同确定。
+
+## 原项目
+
+Aa Browser 使用 Electron 45、TypeScript、electron-vite 和 npm。原有窗口壳层由本地 HTML/CSS/TypeScript 提供，预加载仅为壳层暴露限定 IPC。站点页使用独立 WebContentsView 和分区。主进程管理标签、历史、设置、下载、审批、网络诊断及更新。页面快照由自包含脚本提取。33 个 MCP 工具通过 stdio 桥与带 token 的本机 WebSocket 通信。
+
+```text
+src/renderer  →  src/preload  →  src/main  →  Chromium WebContentsView
+MCP 客户端    →  cli/mcp      →  src/main/agent-server →  tools / actions / snapshot
+持久化        →  Electron profile 与 ~/.aabrowser 的设置、历史、连接和下载
+发行          →  electron-builder → NSIS / AppImage → GitHub Releases
+```
+
+功能基线含标签与前后退、页面查找、语言和搜索设置、登录态、隔离标签、站点白名单、操作确认、历史、下载、MCP 客户端接入，以及快照和网页交互、文档导出、控制台与网络诊断。没有远程服务端、业务数据库或 schema 迁移。设置和历史用 JSON 容错及原子写入，Chromium 管理站点数据。此次 Linux 适配复用这一结构，MCP 路径独立于 AppImage 临时挂载目录。
+
+基线 `06e2bf9` 对应最新正式发行 v0.0.8。保留历史标签，其中一些历史版本号高于正式发行版本。用户升级来源是 GitHub Releases。原流水线只有 Windows，写入 README 与未来分支保护冲突，重跑还可替换同名公开资产。v0.1.0 使用版本文档随 PR 提交和只读周期检查，跨平台构建通过后上传草稿，GitHub 锁定公开资产。
+
+## 验证与留档
+
+| 检查 | 基线及证据来源 |
+| --- | --- |
+| Windows v0.0.8 本地回归 | 12 项命令通过。包括 check、build、test:tools、test:stores、test:security、test:updater、test:release、validate:workbuddy、validate:codex、smoke、test:desktop、test:update-ui |
+| Windows/Linux 新版本 | 两平台的 CI 展示源码回归、打包、更新描述检查和打包后实测；最新结果以运行日志为准 |
+| Windows 10、其他 Linux 发行版、Wayland 实机 | 待验证，当前按 [平台指南](PLATFORMS.md) 标出边界 |
+| 升级与回退 | 模拟测试覆盖下载、重试、稍后、安装触发和 Linux 旧包副本。连续版本间的安装、迁移、回退依赖发布后的真实验收 |
+| 签名 | 不可变 Release 的发行证明独立验证。Windows 尚缺 Authenticode 证书 |
+| 依赖 | 生产 npm audit 0 项。开发链存在上游 Picomatch [告警](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)，定期审计报告保留该结果 |
+| 绩效 | 现有 smoke 有部分延时断言。无长期内存、多显示器和批量标签压力数据 |
+
+## 发布前暴露面检查
+
+### 总览
+
+对 v0.0.8 Windows 解包目录和编译输出执行静态逆向暴露检查。扫描器对 76 个文件报告评分 25/100（D）。高项包括依赖 source map、无 Authenticode，另有第三方二进制模式命中待核实。分数反映暴露度。
+
+### 发现清单
+
+- 高。ASAR 中有 50 个 source map，辅助还原依赖代码。
+- 高。Windows 未签名，系统缺少发布者证书校验。
+- 中。ASAR unpacked 包含 stdio 桥，第三方 PE 中带构建时 PDB 路径。
+- 待核实。内网字符串和 .NET 签名由扫描器按字节模式匹配，未通过语义证据确认自有敏感信息。
+
+### 证据与修复
+
+`electron-builder.yml` 排除 map，禁用打包程序的 Node options 和 inspector，限制入口为 ASAR。保持 MCP 使用已存在的 Node fallback，Linux 用固定用户数据路径。再次打包后按 `@electron/fuses` 与 ASAR 文件列表复验。OS 签名后续由 release 构建输入合法证书。
+
+### 客户端边界
+
+本地连接 token 由运行时生成并写入本机发现文件。该文件和浏览历史应留在用户机器。没有远程授权服务或仓库写入 token 随包发行。MCP 桥属于发布的开源程序，ASAR 是代码归档，使用进程隔离和访问控制保护运行态。
+
+### 修复顺序
+
+优先清除打包调试材料和校验发行元数据，再由合法证书配置 Windows 发布者签名。后续验证客户端内置的独立签名校验与自动健康回退。
+
+## 维护节奏
+
+- PR 说明平台、数据与更新影响。功能和修复合并前运行双平台 CI，依赖变更由 Dependency review 和 Dependabot 提示。高危运行时告警通过优先修复 PR 处理。
+- CI 只给发布 job 仓库写权限。release 环境只接受版本标签。正式发行流程及恢复规则见 [自动更新](AUTO_UPDATE.md)。
+- 每周的维护工作流检查下载链接、摘要、平台更新元数据和依赖漏洞。GitHub Actions 运行结果提供失败记录。
+- 每月复查 [32 个相关项目](RESEARCH.md) 的版本、Issue 和平台差异，每次大版本前复核重要源码与许可证。研究变更通过 PR 更新本项目文档。
+- 每次扩展后同步更新 [平台功能矩阵](PLATFORMS.md) 与 release notes，保留真实系统验收和未覆盖条件。

@@ -22,10 +22,15 @@ import readline from 'node:readline'
 const require = createRequire(import.meta.url)
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkgVersion = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8')).version
+const packagedApp = process.argv[2] && path.resolve(process.argv[2])
 const SMOKE_DIR = path.join(ROOT, '.local-verification', `smoke-${process.pid}-${Date.now()}`)
 const SMOKE_CONNECT_FILE = path.join(SMOKE_DIR, 'connection.json')
 const SMOKE_DOWNLOAD_DIR = path.join(SMOKE_DIR, 'downloads')
 const SMOKE_SCREENSHOT_DIR = path.join(SMOKE_DIR, 'screenshots')
+const PROFILE = path.join(SMOKE_DIR, 'profile')
+const bridgePath = !packagedApp ? path.join(ROOT, 'cli', 'mcp.mjs') : process.platform === 'linux'
+  ? path.join(PROFILE, 'mcp', 'bridge.cjs')
+  : path.join(path.dirname(packagedApp), 'resources', 'app.asar.unpacked', 'out', 'bridge', 'mcp.cjs')
 process.env['AA_BROWSER_DOWNLOAD_DIR'] = SMOKE_DOWNLOAD_DIR
 const TEST_PAGE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'test-page.html')
 let appChild = null
@@ -69,8 +74,15 @@ function readConnection() {
 async function ensureAppRunning() {
   let info = null
   console.log('正在启动隔离的测试实例…')
-  const electronPath = require('electron')
+  const electronPath = packagedApp || require('electron')
   fs.mkdirSync(SMOKE_DIR, { recursive: true })
+  if (packagedApp) {
+    fs.writeFileSync(path.join(SMOKE_DIR, 'settings.json'), JSON.stringify({ autoUpdate: false }))
+    if (process.platform === 'linux') {
+      fs.mkdirSync(path.dirname(bridgePath), { recursive: true })
+      fs.writeFileSync(bridgePath, 'throw new Error("The previous bridge was not refreshed")')
+    }
+  }
   // 在应用启动前布置"上次异常退出遗留"的分区目录，
   // 用于验证启动阶段的分区清理（见 [18]）。
   const partsDir = path.join(SMOKE_DIR, 'profile', 'Partitions')
@@ -82,12 +94,12 @@ async function ensureAppRunning() {
       /* 忽略：断言阶段会报告 */
     }
   }
-  const child = spawn(electronPath, ['.'], {
+  const child = spawn(electronPath, packagedApp ? [] : ['.'], {
     cwd: ROOT,
     env: {
       ...process.env,
       AA_BROWSER_CONNECTION_FILE: SMOKE_CONNECT_FILE,
-      AA_BROWSER_USER_DATA_DIR: path.join(SMOKE_DIR, 'profile'),
+      AA_BROWSER_USER_DATA_DIR: PROFILE,
       AA_BROWSER_DOWNLOAD_DIR: SMOKE_DOWNLOAD_DIR,
       AA_BROWSER_SCREENSHOT_DIR: SMOKE_SCREENSHOT_DIR,
       AA_BROWSER_HISTORY_DIR: path.join(SMOKE_DIR, 'history'),
@@ -115,7 +127,7 @@ async function ensureAppRunning() {
 /* ── 最小 MCP stdio 客户端 ── */
 class McpClient {
   constructor() {
-    this.child = spawn(process.execPath, [path.join(ROOT, 'cli', 'mcp.mjs')], {
+    this.child = spawn(process.execPath, [bridgePath], {
       env: { ...process.env, AA_BROWSER_CONNECTION_FILE: SMOKE_CONNECT_FILE, AA_BROWSER_DOWNLOAD_DIR: SMOKE_DOWNLOAD_DIR, AA_BROWSER_SCREENSHOT_DIR: SMOKE_SCREENSHOT_DIR },
       stdio: ['pipe', 'pipe', 'pipe']
     })
@@ -234,27 +246,31 @@ async function main() {
     const startupPrompt = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.querySelector("#connection-prompt")?.value ?? ""' }))
     const startupBackground = mcp.text(await mcp.call('browser_evaluate', { expression: 'getComputedStyle(document.body).backgroundColor' }))
     const startupWidthOk = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.documentElement.scrollWidth <= window.innerWidth' }))
+    const promptLabel = process.platform === 'linux' ? '连接提示词' : '安装提示词'
+    const platformPrompt = process.platform === 'linux'
+      ? startupPrompt.includes('browser_tabs') && startupPrompt.includes('docs/PLATFORMS.md')
+      : startupPrompt.includes('https://raw.githubusercontent.com/yuchen0x1/aa-browser/main/install.mjs') && startupPrompt.includes('--repo yuchen0x1/aa-browser')
     check(
       '启动页向导与安装提示词正确渲染',
       startupInfo.includes('让 AI 直接使用') &&
-        startupInfo.includes('复制安装提示词') &&
-        startupPrompt.includes('https://raw.githubusercontent.com/yuchen0x1/aa-browser/main/install.mjs') &&
-        startupPrompt.includes('--repo yuchen0x1/aa-browser'),
+        startupInfo.includes(`复制${promptLabel}`) && platformPrompt,
       startupInfo.slice(0, 500)
     )
     check('启动页背景与窗口宽度正常', startupBackground.includes('rgb(17, 22, 25)') && startupWidthOk.includes('true'), `${startupBackground}; 横向无溢出=${startupWidthOk}`)
     const promptSnapshot = mcp.text(await mcp.call('browser_snapshot', { full: true }))
-    const copyPromptRef = findRef(promptSnapshot, /- button "复制安装提示词"/)
+    const copyPromptRef = findRef(promptSnapshot, new RegExp(`- button "复制${promptLabel}"`))
     check('安装提示词提供可操作的复制按钮', !!copyPromptRef, promptSnapshot.slice(0, 400))
     if (copyPromptRef) {
       await mcp.call('browser_click', { ref: copyPromptRef, snapshot: false })
       const copyStatus = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.querySelector("#copy-status")?.innerText' }))
-      check('复制按钮给出成功或手动复制反馈', copyStatus.includes('安装提示词已复制') || copyStatus.includes('已选中安装提示词'), copyStatus)
+      check('复制按钮给出成功或手动复制反馈', copyStatus.includes(`${promptLabel}已复制`) || copyStatus.includes(`已选中${promptLabel}`), copyStatus)
     }
-    const localNewtabUrl = pathToFileURL(path.join(ROOT, 'out', 'renderer', 'newtab.html')).toString()
-    await mcp.call('browser_navigate', { url: localNewtabUrl, snapshot: false })
-    const manualNewtab = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.body.innerText' }))
-    check('手动加载新标签 HTML 正常', manualNewtab.includes('让 AI 直接使用') && manualNewtab.includes('复制安装提示词'), manualNewtab.slice(0, 400))
+    if (!packagedApp) {
+      const localNewtabUrl = pathToFileURL(path.join(ROOT, 'out', 'renderer', 'newtab.html')).toString()
+      await mcp.call('browser_navigate', { url: localNewtabUrl, snapshot: false })
+      const manualNewtab = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.body.innerText' }))
+      check('手动加载新标签 HTML 正常', manualNewtab.includes('让 AI 直接使用') && manualNewtab.includes(`复制${promptLabel}`), manualNewtab.slice(0, 400))
+    }
 
     console.log('\n[2] 导航到本地 HTTP 测试页（内嵌完整快照）')
     testPageServer = http.createServer((req, res) => {

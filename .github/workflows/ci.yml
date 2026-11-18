@@ -5,6 +5,7 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
+  workflow_dispatch:
 
 concurrency:
   group: aa-browser-${{ github.workflow }}-${{ github.ref }}
@@ -15,203 +16,123 @@ permissions:
 
 jobs:
   test:
-    runs-on: windows-latest
+    name: Test (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: windows-x64, runner: windows-latest }
+          - { platform: linux-x64, runner: ubuntu-24.04 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
-          node-version: 22
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      # 工具合约漂移检查：v0.6.0 曾把 3 个 mock 工具漏在桥外，导致对客户端不可见。
-      # 这里在主进程 / MCP 桥 / README 三方之间做一致性断言。
-      - name: Tool contract drift check
-        run: npm run check:tools
-
-      - name: MCP tool annotation contract test
-        run: npm run test:tools
-
-      - name: Codex MCP configuration validation
-        run: npm run validate:codex
-
-      - name: Build (main / preload / renderer / mcp bridge)
-        run: npm run build
-
-      - name: End-to-end smoke test
-        run: npm run smoke
-        env:
-          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
-
-      - name: Native desktop regression test
-        run: npm run test:desktop
-
-      - name: Update notification UI regression test
-        run: npm run test:update-ui
-
-      - name: Persistence regression test
-        run: npm run test:stores
-
-      - name: Security regression test
-        run: npm run test:security
-
-      - name: Updater state regression test
-        run: npm run test:updater
-
-      - name: Release metadata regression test
-        run: npm run test:release
-
-  release:
-    if: startsWith(github.ref, 'refs/tags/v')
-    needs: test
-    runs-on: windows-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: actions/setup-node@v4
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 22
           cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Verify tag matches package version
-        shell: pwsh
+      - run: npm ci
+      - run: npm run check
+      - run: npm run test:tools
+      - run: npm run validate:codex
+      - run: npm run validate:workbuddy
+      - run: npm run build
+      - name: Headless desktop display (Linux)
+        if: runner.os == 'Linux'
         run: |
-          $tag = '${{ github.ref_name }}'.TrimStart('v')
-          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          if ($tag -ne $version) { throw "Tag v$tag does not match package.json version $version" }
-
-      - name: Build Windows installer and update metadata
-        run: npm run dist -- --publish never
+          sudo apt-get update
+          sudo apt-get install -y xvfb libfuse2t64 libgtk-3-0t64 libnss3 libgbm1 libasound2t64
+          # Enable Chromium user namespaces on this ephemeral CI runner.
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+      - name: Electron regression
+        shell: bash
+        run: |
+          set -euo pipefail
+          display=()
+          if [ "$RUNNER_OS" = Linux ]; then display=(xvfb-run -a); fi
+          "${display[@]}" npm run smoke
+          "${display[@]}" npm run test:desktop
+          "${display[@]}" npm run test:update-ui
+      - run: npm run test:stores
+      - run: npm run test:security
+      - run: npm run test:updater
+      - run: npm run test:release
+      - name: Package and validate platform assets
+        shell: bash
         env:
-          ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
-
-      - name: Generate SHA-256 manifest
+          CSC_LINK: ${{ startsWith(github.ref, 'refs/tags/v') && runner.os == 'Windows' && secrets.WINDOWS_CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ startsWith(github.ref, 'refs/tags/v') && runner.os == 'Windows' && secrets.WINDOWS_CSC_KEY_PASSWORD || '' }}
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = Linux ]; then
+            npm run dist:linux -- --publish never
+          else
+            npm run dist -- --publish never
+          fi
+          node scripts/release-assets.mjs prepare "${{ matrix.platform }}"
+      - name: Launch Linux AppImage and connect its MCP bridge
+        if: runner.os == 'Linux'
+        run: APPIMAGE_EXTRACT_AND_RUN=1 xvfb-run -a npm run smoke -- release/*.AppImage
+      - name: Install Windows NSIS package, exercise MCP and uninstall
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $files = Get-ChildItem release -File | Where-Object { $_.Extension -in '.exe', '.blockmap' -or $_.Name -eq 'latest.yml' }
-          $lines = foreach ($file in $files) {
-            $hash = (Get-FileHash $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            "$hash  $($file.Name)"
-          }
-          $lines | Set-Content release/SHA256SUMS.txt
-
-      - name: Create or update GitHub Release and upload assets
-        uses: actions/github-script@v7
+          $version = node -p 'require("./package.json").version'
+          $installDir = Join-Path $env:RUNNER_TEMP 'aa-browser-installed'
+          $installer = Start-Process -Wait -PassThru -WindowStyle Hidden -FilePath "release/aa-browser-setup-$version.exe" -ArgumentList "/S /D=$installDir"
+          if ($installer.ExitCode -ne 0) { throw "NSIS installation failed: $($installer.ExitCode)" }
+          npm run smoke -- (Join-Path $installDir 'Aa Browser.exe')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $uninstaller = Start-Process -Wait -PassThru -WindowStyle Hidden -FilePath (Join-Path $installDir 'Uninstall Aa Browser.exe') -ArgumentList '/S'
+          if ($uninstaller.ExitCode -ne 0 -or (Test-Path (Join-Path $installDir 'Aa Browser.exe'))) { throw 'NSIS uninstall failed' }
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          name: release-${{ matrix.platform }}
+          path: release/validated/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish tested release
+    if: github.repository == 'yuchen0x1/aa-browser' && startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: 22
+      - name: Check version and main ancestry
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$RELEASE_TAG" = "v$(node -p 'require("./package.json").version')"
+          git merge-base --is-ancestor HEAD refs/remotes/origin/main
+          test -s "release-notes-$RELEASE_TAG.md"
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          pattern: release-*
+          path: release
+          merge-multiple: true
+      - run: node scripts/release-assets.mjs manifest
+      - name: Publish and verify assets
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
           script: |
-            const crypto = require('node:crypto')
-            const fs = require('node:fs')
-            const path = require('node:path')
-
-            const { owner, repo } = context.repo
-            const tag = context.ref.replace(/^refs\/tags\//, '')
-            const name = `Aa Browser ${tag}`
-            const body = fs.readFileSync(`release-notes-${tag}.md`, 'utf8')
-            const assetsDir = path.resolve('release')
-            const assetNames = fs.readdirSync(assetsDir).filter(file =>
-              file.endsWith('.exe') || file === 'latest.yml' ||
-              file.endsWith('.blockmap') || file === 'SHA256SUMS.txt'
-            ).sort()
-
-            if (!assetNames.some(file => file.endsWith('.exe')) ||
-                !assetNames.includes('latest.yml') ||
-                !assetNames.some(file => file.endsWith('.blockmap')) ||
-                !assetNames.includes('SHA256SUMS.txt')) {
-              throw new Error(`Release asset set is incomplete: ${assetNames.join(', ')}`)
-            }
-
-            async function findRelease() {
-              try {
-                return (await github.rest.repos.getReleaseByTag({ owner, repo, tag })).data
-              } catch (error) {
-                if (error.status !== 404) throw error
-                const { data: releases } = await github.rest.repos.listReleases({ owner, repo, per_page: 100 })
-                return releases.find(release => release.tag_name === tag) || null
-              }
-            }
-
-            // Existing releases are treated as immutable metadata. This keeps asset
-            // repair working even when GitHub has more than one release record for
-            // the same tag and rejects metadata updates with already_exists.
-            let release = await findRelease()
-            let created = false
-            if (!release) {
-              try {
-                release = (await github.rest.repos.createRelease({
-                  owner, repo, tag_name: tag, name, body, draft: true, prerelease: false,
-                })).data
-                created = true
-              } catch (error) {
-                if (error.status !== 422) throw error
-                release = await findRelease()
-                if (!release) throw error
-              }
-            }
-
-            if (release.immutable) throw new Error(`Release ${tag} is immutable and cannot be updated`)
-            if (created) {
-              await github.rest.repos.updateRelease({
-                owner, repo, release_id: release.id, tag_name: tag,
-                target_commitish: context.sha, name, body,
-                draft: true, prerelease: false,
-              })
-            }
-
-            let { data: existingAssets } = await github.rest.repos.listReleaseAssets({
-              owner, repo, release_id: release.id, per_page: 100,
-            })
-            for (const assetName of assetNames) {
-              const filePath = path.join(assetsDir, assetName)
-              const data = fs.readFileSync(filePath)
-              const digest = `sha256:${crypto.createHash('sha256').update(data).digest('hex')}`
-              const existing = existingAssets.find(asset => asset.name === assetName)
-              if (existing && existing.digest === digest) {
-                core.info(`Already uploaded with matching SHA-256: ${assetName}`)
-                continue
-              }
-              if (existing) {
-                await github.rest.repos.deleteReleaseAsset({ owner, repo, asset_id: existing.id })
-                existingAssets = existingAssets.filter(asset => asset.id !== existing.id)
-              }
-              await github.rest.repos.uploadReleaseAsset({
-                owner, repo, release_id: release.id, name: assetName, data,
-                headers: { 'content-type': 'application/octet-stream', 'content-length': String(data.length) },
-                request: { timeout: 300000 },
-              })
-              core.info(`Uploaded ${assetName} (${data.length} bytes)`)
-              existingAssets.push({ name: assetName })
-            }
-
-            const { data: uploadedAssets } = await github.rest.repos.listReleaseAssets({
-              owner, repo, release_id: release.id, per_page: 100,
-            })
-            const uploadedNames = new Set(uploadedAssets.map(asset => asset.name))
-            const missing = assetNames.filter(file => !uploadedNames.has(file))
-            if (missing.length) throw new Error(`Release is missing assets: ${missing.join(', ')}`)
-
-            if (release.draft) {
-              await github.rest.repos.updateRelease({
-                owner, repo, release_id: release.id, tag_name: tag,
-                target_commitish: context.sha, draft: false, make_latest: 'true',
-              })
-            }
-            // Verify the public lookup: a successful PATCH alone does not prove
-            // the provider kept the requested tag or published the draft.
-            const { data: verifiedRelease } = await github.rest.repos.getReleaseByTag({ owner, repo, tag })
-            if (verifiedRelease.id !== release.id || verifiedRelease.tag_name !== tag || verifiedRelease.draft) {
-              throw new Error(`Release verification failed for ${tag}: id=${verifiedRelease.id}, tag=${verifiedRelease.tag_name}, draft=${verifiedRelease.draft}`)
-            }
-            core.info(`${created ? 'Published' : 'Repaired'} ${tag}: ${assetNames.join(', ')}`)
+            const { publishRelease } = await import(process.cwd() + '/scripts/publish-release.mjs')
+            await publishRelease(github.rest.repos, context.repo, context.ref.slice('refs/tags/'.length), context.sha, core.info)

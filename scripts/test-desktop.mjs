@@ -40,6 +40,7 @@ if (!process.versions.electron) {
   // ESM entry to finish evaluating before it can emit ready.
   void (async () => {
   const { app, webContents, BaseWindow, Menu } = await import('electron')
+  const runDir = process.env.AA_DESKTOP_TEST_DIR
   const updateUi = process.argv.includes('--update-ui')
   let updateProvider
   if (updateUi) {
@@ -47,6 +48,10 @@ if (!process.versions.electron) {
     app.setPath('userData', process.env.AA_BROWSER_USER_DATA_DIR)
     Object.defineProperty(app, 'isPackaged', { value: true })
     app.getVersion = () => '0.0.3'
+    if (process.platform === 'linux') {
+      process.env.APPIMAGE = path.join(runDir, 'aa-browser-test.AppImage')
+      fs.writeFileSync(process.env.APPIMAGE, 'previous-release-fixture')
+    }
     updateProvider = new EventEmitter()
     updateProvider.downloads = 0
     updateProvider.installs = 0
@@ -64,7 +69,6 @@ if (!process.versions.electron) {
     updateProvider.quitAndInstall = () => { updateProvider.installs++ }
   }
   const { WebSocket } = await import('ws')
-  const runDir = process.env.AA_DESKTOP_TEST_DIR
   const results = []
   const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   async function until(fn, label, timeout = 12_000) {
@@ -155,7 +159,11 @@ if (!process.versions.electron) {
       pass('automatic download is visible on the main window without opening settings')
       await click('#btn-find')
       await until(() => shellView.getBounds().height === 176, 'find plus update banner native bounds')
-      assert.ok(await ui('document.querySelector("#find-bar").getBoundingClientRect().top >= 128'))
+      await until(() => ui(`(() => {
+        const find = document.querySelector('#find-bar').getBoundingClientRect();
+        const notice = document.querySelector('#update-notice').getBoundingClientRect();
+        return find.height > 0 && notice.height > 0 && find.top >= notice.bottom - 0.5;
+      })()`), 'find toolbar starts below the update banner')
       await click('#find-close')
       pass('find toolbar and page layout reserve separate space for the update banner')
       updateProvider.emit('error', new Error('simulated download interruption'))
@@ -176,6 +184,11 @@ if (!process.versions.electron) {
       await click('#btn-close-settings')
       await click('#update-notice-action')
       assert.equal(updateProvider.installs, 1)
+      if (process.platform === 'linux') {
+        const backup = path.join(app.getPath('userData'), 'previous-versions', '0.0.3.AppImage')
+        assert.equal(fs.readFileSync(backup, 'utf8'), 'previous-release-fixture')
+        pass('AppImage recovery copy is ready before the installer receives control')
+      }
       pass('toolbar opens update settings and explicit restart action reaches the installer API')
       fs.writeFileSync(path.join(runDir, 'result.json'), JSON.stringify({ status: 'PASS', simulatedProvider: true, checks: results }, null, 2))
       console.log(`PASS: all ${results.length} update UI checks (simulated provider; no real installer)`)

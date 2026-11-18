@@ -262,7 +262,7 @@ function renderUpdate(update?: UpdateState): void {
   }
   updateStatus.textContent = labels[update.status]
   updateStatus.title = [update.checkedAt ? `上次检查：${new Date(update.checkedAt).toLocaleString()}` : '', update.retryAt ? `自动重试：${new Date(update.retryAt).toLocaleTimeString()}` : '', update.releaseDate ? `发布时间：${update.releaseDate}` : '', update.size ? `大小：${formatUpdateBytes(update.size)}` : '', update.releaseNotes ?? ''].filter(Boolean).join('\n')
-  if (btnUpdateCheck) btnUpdateCheck.disabled = ['checking', 'downloading', 'downloaded'].includes(update.status)
+  if (btnUpdateCheck) btnUpdateCheck.disabled = update.failedOperation === 'install' || ['checking', 'downloading', 'downloaded'].includes(update.status)
   if (btnUpdateAction) {
     btnUpdateAction.hidden = !['available', 'downloaded', 'error'].includes(update.status)
     btnUpdateAction.disabled = update.status === 'downloading'
@@ -275,7 +275,8 @@ function renderUpdate(update?: UpdateState): void {
   updateNotice.hidden = !update.noticeVisible
   document.documentElement.style.setProperty('--notice-height', update.noticeVisible ? '44px' : '0px')
   updateNotice.classList.toggle('error', update.status === 'error')
-  updateNoticeText.textContent = update.status === 'downloaded' ? (activeLocale === 'en-US' ? `${update.version} downloaded. Restart to install.` : `新版 ${update.version} 已下载完成，重启即可安装。`) : update.status === 'available' ? (activeLocale === 'en-US' ? `Version ${update.version} is available; current version is ${update.currentVersion}.` : `发现新版本 ${update.version}，当前为 ${update.currentVersion}。`) : update.status === 'error' ? (activeLocale === 'en-US' ? `Update ${update.failedOperation === 'download' ? 'download' : 'check'} failed. ${update.retryAt ? 'It will retry automatically.' : 'Retry now or review settings.'}` : `更新${update.failedOperation === 'download' ? '下载' : '检查'}失败，${update.retryAt ? '将自动重试，也可立即重试。' : '点击重试或在设置中查看原因。'}`) : labels[update.status]
+  const failedOperation = { check: ['check', '检查'], download: ['download', '下载'], install: ['installation', '安装'] }[update.failedOperation ?? 'check']
+  updateNoticeText.textContent = update.status === 'downloaded' ? (activeLocale === 'en-US' ? `${update.version} downloaded. Restart to install.` : `新版 ${update.version} 已下载完成，重启即可安装。`) : update.status === 'available' ? (activeLocale === 'en-US' ? `Version ${update.version} is available; current version is ${update.currentVersion}.` : `发现新版本 ${update.version}，当前为 ${update.currentVersion}。`) : update.status === 'error' ? (activeLocale === 'en-US' ? `Update ${failedOperation[0]} failed. ${update.retryAt ? 'It will retry automatically.' : 'Retry now or review settings.'}` : `更新${failedOperation[1]}失败，${update.retryAt ? '将自动重试，也可立即重试。' : '点击重试或在设置中查看原因。'}`) : labels[update.status]
   updateNoticeProgress.hidden = update.status !== 'downloading'
   updateNoticeProgress.value = Math.max(0, Math.min(100, update.progress ?? 0))
   updateNoticeAction.hidden = !['available', 'downloaded', 'error'].includes(update.status)

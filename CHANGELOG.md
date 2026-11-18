@@ -2,6 +2,12 @@
 
 产品版本历史以 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md) 为准。
 
+## v0.1.0 — 2026-11-18
+
+- 新增 Linux x86_64 AppImage、MCP 桥稳定路径、安装阶段错误反馈与 AppImage 手动回退副本。
+- 两平台打包后运行 MCP 端到端检查，发布包含平台更新描述、SHA-256 和 GitHub 不可变发行证明。
+- 开启依赖更新检查、PR 依赖评审、CodeQL、私密漏洞报告和定期发行检查。
+
 ## v0.0.8 — 2026-11-18
 
 - 修复 MCP 导航对重定向和实际加载失败的判定。
