@@ -7,6 +7,7 @@ on:
   workflow_dispatch:
   schedule:
     - cron: '26 3 * * 1'
+    - cron: '12 4 1 * *'
 
 permissions:
   contents: read
@@ -26,7 +27,7 @@ jobs:
         run: node scripts/verify-public-release.mjs "${{ github.repository }}"
 
   audit:
-    if: github.event_name != 'workflow_run'
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '26 3 * * 1'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -38,3 +39,22 @@ jobs:
           node-version: 22
       - run: npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
       - run: npm audit --audit-level=high --registry=https://registry.npmjs.org
+
+  research:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '12 4 1 * *'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Collect public research metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/research-snapshot.mjs > research-snapshot.md
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: research-snapshot
+          path: research-snapshot.md
+          if-no-files-found: error
+          retention-days: 90

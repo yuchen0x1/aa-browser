@@ -40,6 +40,7 @@ if (!process.versions.electron) {
   // ESM entry to finish evaluating before it can emit ready.
   void (async () => {
   const { app, webContents, BaseWindow, Menu } = await import('electron')
+  const runDir = process.env.AA_DESKTOP_TEST_DIR
   const updateUi = process.argv.includes('--update-ui')
   let updateProvider
   if (updateUi) {
@@ -68,7 +69,6 @@ if (!process.versions.electron) {
     updateProvider.quitAndInstall = () => { updateProvider.installs++ }
   }
   const { WebSocket } = await import('ws')
-  const runDir = process.env.AA_DESKTOP_TEST_DIR
   const results = []
   const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
   async function until(fn, label, timeout = 12_000) {
