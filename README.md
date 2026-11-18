@@ -9,22 +9,15 @@
 
 ## 最新更新
 
-### v0.0.7 · 2026-11-17
+<!-- github-release:start -->
 
-- 新增界面语言设置，支持自动跟随系统或浏览器语言，并可手动选择简体中文或 English；选择会持久化并立即应用到核心浏览器壳层。
+**[v0.0.7](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.0.7)** · 2026-11-17
 
-### v0.0.6 — 2026-11-16
+本版为 AI Agent 浏览器的应用壳层新增界面语言设置：可自动跟随系统或浏览器语言，也可手动选择简体中文或 English 并持久化。核心浏览器壳层即时更新语言；网页内容、导航协议策略、MCP 快照行为和安全边界保持原样。
 
-- 导航策略现在拒绝 `file:`、`data:`、`devtools:`、`view-source:` 等非网页协议，仅保留应用内部新标签页。
-- GitHub Release 安装器现在要求可验证的 SHA-256 digest；缺失、格式错误或不匹配都会中止安装。
-- 开启高危操作审批后，导出或查看未脱敏网络数据需要用户确认。
-- 新增项目审计、19 个开源项目对标和 40 项升级路线图，详见 [`PROJECT_AUDIT.md`](./PROJECT_AUDIT.md)、[`COMPETITOR_ANALYSIS.md`](./COMPETITOR_ANALYSIS.md) 和 [`UPGRADE_ROADMAP.md`](./UPGRADE_ROADMAP.md)。
+[全部发行记录](https://github.com/yuchen0x1/aa-browser/releases)
 
-### v0.0.5 — 2026-11-16
-
-- MCP 工具列表现在为每个工具明确标注只读、破坏性、幂等性和开放世界提示，AI 客户端可以在调用前获得更准确的风险信息。
-- 工具清单与实际实现保持一致，并补充了按键、控制台日志等工具的回归覆盖，降低客户端看不到或调用失败的情况。
-- 客户端接入不再通过子进程探测 Node，改为无 shell 的 PATH 查找；找不到系统 Node 时自动回退到应用自带运行时。
+<!-- github-release:end -->
 
 旧版用户首次请在「设置 → 软件更新」检查、下载并重启安装，或安装最新 Windows 安装包；新逻辑需升级后才会生效。
 
