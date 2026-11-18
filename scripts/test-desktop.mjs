@@ -47,6 +47,10 @@ if (!process.versions.electron) {
     app.setPath('userData', process.env.AA_BROWSER_USER_DATA_DIR)
     Object.defineProperty(app, 'isPackaged', { value: true })
     app.getVersion = () => '0.0.3'
+    if (process.platform === 'linux') {
+      process.env.APPIMAGE = path.join(runDir, 'aa-browser-test.AppImage')
+      fs.writeFileSync(process.env.APPIMAGE, 'previous-release-fixture')
+    }
     updateProvider = new EventEmitter()
     updateProvider.downloads = 0
     updateProvider.installs = 0
@@ -176,6 +180,11 @@ if (!process.versions.electron) {
       await click('#btn-close-settings')
       await click('#update-notice-action')
       assert.equal(updateProvider.installs, 1)
+      if (process.platform === 'linux') {
+        const backup = path.join(app.getPath('userData'), 'previous-versions', '0.0.3.AppImage')
+        assert.equal(fs.readFileSync(backup, 'utf8'), 'previous-release-fixture')
+        pass('AppImage recovery copy is ready before the installer receives control')
+      }
       pass('toolbar opens update settings and explicit restart action reaches the installer API')
       fs.writeFileSync(path.join(runDir, 'result.json'), JSON.stringify({ status: 'PASS', simulatedProvider: true, checks: results }, null, 2))
       console.log(`PASS: all ${results.length} update UI checks (simulated provider; no real installer)`)

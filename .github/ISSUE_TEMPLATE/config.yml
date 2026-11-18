@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: 私密安全报告
+    url: https://github.com/yuchen0x1/aa-browser/security/advisories/new
+    about: 请通过私密报告提交安全问题和敏感细节。

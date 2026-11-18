@@ -8,9 +8,16 @@ files:
   - out/**
   - cli/**
   - package.json
+  - '!**/*.map'
 asarUnpack:
   - cli/**
   - out/bridge/**
+electronFuses:
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  onlyLoadAppFromAsar: true
+toolsets:
+  appimage: '1.0.3'
 win:
   icon: build/icon.png
   target:
@@ -21,6 +28,15 @@ nsis:
   artifactName: aa-browser-setup-${version}.${ext}
   uninstallDisplayName: Aa Browser
   createDesktopShortcut: true
+linux:
+  executableName: aa-browser
+  syncDesktopName: true
+  icon: build/icon.png
+  category: Network
+  target:
+    - target: AppImage
+      arch: [x64]
+  artifactName: aa-browser-${version}-linux-${arch}.${ext}
 publish:
   provider: github
   owner: yuchen0x1

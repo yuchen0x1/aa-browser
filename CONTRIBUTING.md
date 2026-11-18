@@ -18,7 +18,9 @@ npm run test:updater # 更新器调度/状态测试（模拟更新源，不访�
 npm run test:release # 发布标签/草稿/资产回归（模拟 GitHub API）
 ```
 
-要求：Node.js ≥ 20，Windows（macOS/Linux 可开发但安装包尚未支持）。
+要求使用 Node.js 22.12 或更高版本。Windows 和 Ubuntu 的打包及支持状态见 [平台指南](docs/PLATFORMS.md)。
+
+从 `main` 开发，通过短期分支和 PR 合入。发布提交须通过两平台 CI。发布标签采用 `vX.Y.Z`，指向 `main` 上匹配 `package.json` 的提交。紧急修复采用相同路径，并使用新版本号。
 
 ## 提交 PR 前
 

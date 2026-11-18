@@ -2,6 +2,7 @@ import { app } from 'electron'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { writeFileAtomic } from './atomic-json'
 
 /**
  * 一键接入：检测本机 AI 客户端并把 aa-browser 的 MCP 配置写入其配置文件。
@@ -45,7 +46,8 @@ export interface ClientSetupResult {
 }
 
 const home = (): string => os.homedir()
-const appData = (): string => process.env['APPDATA'] || path.join(home(), 'AppData', 'Roaming')
+const appData = (): string => app.getPath('appData')
+const isAppImage = (): boolean => app.isPackaged && process.platform === 'linux' && !!process.env['APPIMAGE']
 
 const joinHome = (...p: string[]): string => path.join(home(), ...p)
 
@@ -155,12 +157,21 @@ export const CLIENT_DEFS: ClientDef[] = [
 
 /** MCP 桥脚本的绝对路径：优先用构建出的单文件零依赖产物（out/bridge/mcp.cjs） */
 export function mcpBridgePath(): string {
+  if (isAppImage()) return path.join(app.getPath('userData'), 'mcp', 'bridge.cjs')
   if (app.isPackaged) {
     return path.join(process.resourcesPath, 'app.asar.unpacked', 'out', 'bridge', 'mcp.cjs')
   }
   const bundled = path.resolve(app.getAppPath(), 'out', 'bridge', 'mcp.cjs')
   if (fs.existsSync(bundled)) return bundled
   return path.resolve(app.getAppPath(), 'cli', 'mcp.mjs')
+}
+
+/** AppImage mount paths change every launch. Publish the bridge under a stable client path. */
+export function syncAppImageBridge(existingOnly = false): void {
+  if (!isAppImage()) return
+  const dest = mcpBridgePath()
+  if (existingOnly && !fs.existsSync(dest)) return
+  writeFileAtomic(dest, fs.readFileSync(path.join(process.resourcesPath, 'app.asar.unpacked', 'out', 'bridge', 'mcp.cjs')))
 }
 
 /** MCP 条目：优先系统 node；没有则用本应用本体（ELECTRON_RUN_AS_NODE）作为运行时 */
@@ -173,6 +184,7 @@ export function bridgeEntry(): { command: string; args: string[]; env?: Record<s
   }
   const systemNode = findSystemNode()
   if (systemNode) return { command: systemNode, args: [mcp], env }
+  if (isAppImage()) return { command: 'node', args: [mcp], env }
   env['ELECTRON_RUN_AS_NODE'] = '1'
   return { command: process.execPath, args: [mcp], env }
 }
@@ -207,7 +219,7 @@ function getContainer(obj: Record<string, unknown>, container: string): Record<s
 
 /** 组装将要写入的 MCP 条目 */
 export function entryFor(def: ClientDef): Record<string, unknown> {
-  if (def.id === 'workbuddy') {
+  if (def.id === 'workbuddy' && !isAppImage()) {
     return {
       type: 'stdio',
       command: process.execPath,
@@ -222,7 +234,8 @@ export function entryFor(def: ClientDef): Record<string, unknown> {
   const e = bridgeEntry()
   const entry: Record<string, unknown> = { command: e.command, args: e.args }
   if (e.env) entry['env'] = e.env
-  if (def.vscodeStyle) entry['type'] = 'stdio'
+  if (def.vscodeStyle || def.id === 'workbuddy') entry['type'] = 'stdio'
+  if (def.id === 'workbuddy') entry['timeout'] = 60000
   return entry
 }
 
@@ -346,6 +359,14 @@ export function detectClients(): ClientDetectResult[] {
 export function setupClients(ids: string[]): ClientSetupResult[] {
   const results: ClientSetupResult[] = []
   const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+  try {
+    if (isAppImage() && !findSystemNode()) throw new Error('请先安装 Node.js 22 并重新打开 Aa Browser。')
+    if (CLIENT_DEFS.some((def) => ids.includes(def.id))) syncAppImageBridge()
+  } catch (error) {
+    return CLIENT_DEFS.filter((def) => ids.includes(def.id)).map((def) => ({
+      id: def.id, name: def.name, status: 'error', message: String(error)
+    }))
+  }
   for (const def of CLIENT_DEFS) {
     if (!ids.includes(def.id)) continue
     if (def.toml) {

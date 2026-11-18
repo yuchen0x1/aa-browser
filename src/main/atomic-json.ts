@@ -4,12 +4,16 @@ import { randomUUID } from 'node:crypto'
 
 /** 同目录临时文件写完并刷新后再替换，失败时保留原文件。 */
 export function writeJsonAtomic(file: string, value: unknown, backupInvalid = false): void {
+  writeFileAtomic(file, JSON.stringify(value, null, 2), backupInvalid)
+}
+
+export function writeFileAtomic(file: string, value: string | Buffer, backupInvalid = false): void {
   fs.mkdirSync(path.dirname(file), { recursive: true })
   const temp = `${file}.${randomUUID()}.tmp`
   let fd: number | undefined
   try {
     fd = fs.openSync(temp, 'wx', 0o600)
-    fs.writeFileSync(fd, JSON.stringify(value, null, 2), 'utf8')
+    fs.writeFileSync(fd, value)
     fs.fsyncSync(fd)
     fs.closeSync(fd)
     fd = undefined

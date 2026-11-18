@@ -248,17 +248,31 @@
       const button = document.getElementById('copy-prompt');
       const prompt = document.getElementById('connection-prompt');
       const status = document.getElementById('copy-status');
+      const linux = /^Linux/.test(navigator.platform);
+      const promptName = linux ? '连接提示词' : '安装提示词';
+      if (linux) {
+        document.querySelector('.intro').textContent = '打开右上角设置，选择「连接 AI 客户端」，写入当前客户端的 MCP 配置。Linux 版需要系统 Node.js 22.12 或更新版本。';
+        const firstStep = document.querySelector('.step');
+        firstStep.querySelector('.step-label').lastChild.textContent = '写入 MCP 配置';
+        firstStep.querySelector('h2').textContent = '连接当前客户端';
+        firstStep.querySelector('p').textContent = '保存配置后，再按下方提示词请 AI 验证浏览器工具。';
+        document.getElementById('prompt-title').textContent = '发给 AI 的连接提示词';
+        button.textContent = '复制连接提示词';
+        prompt.setAttribute('aria-label', '可复制的 AI 连接提示词');
+        prompt.value = '我已在 Linux 桌面打开 Aa Browser。请确认当前会话提供 browser_tabs、browser_navigate 和 browser_snapshot，并实际调用 browser_tabs。若工具缺失，请提示我通过 Aa Browser 的「设置 → 连接 AI 客户端」写入配置并重启客户端。只有返回 Aa Browser 的标签列表后才报告连接成功。\n\n平台指南：https://github.com/yuchen0x1/aa-browser/blob/main/docs/PLATFORMS.md';
+        status.textContent = '先写入 MCP 配置并重启客户端，再复制这段提示词。';
+      }
       button.addEventListener('click', async () => {
         try {
           await navigator.clipboard.writeText(prompt.value);
-          status.textContent = '安装提示词已复制。粘贴到你正在使用的 AI 客户端即可。';
+          status.textContent = `${promptName}已复制。粘贴到你正在使用的 AI 客户端即可。`;
         } catch {
           prompt.focus();
           prompt.select();
           const copied = document.execCommand('copy');
           status.textContent = copied
-            ? '安装提示词已复制。粘贴到你正在使用的 AI 客户端即可。'
-            : '已选中安装提示词，请按 Ctrl+C 复制，再粘贴到 AI 客户端。';
+            ? `${promptName}已复制。粘贴到你正在使用的 AI 客户端即可。`
+            : `已选中${promptName}，请按 Ctrl+C 复制，再粘贴到 AI 客户端。`;
         }
       });
     </script>

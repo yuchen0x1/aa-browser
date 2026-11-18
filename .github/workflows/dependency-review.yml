@@ -1,0 +1,19 @@
+name: Supply chain review
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  dependencies:
+    name: Dependency review
+    if: github.repository == 'yuchen0x1/aa-browser'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/dependency-review-action@2031cfc080254a8a887f58cffee85186f0e49e48 # v4
+        with:
+          fail-on-severity: high
+          deny-licenses: AGPL-3.0-only, AGPL-3.0-or-later, SSPL-1.0

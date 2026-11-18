@@ -8,7 +8,7 @@ import { TabManager } from './tabs'
 import { AgentServer } from './agent-server'
 import { buildTools } from './tools'
 import { normalizeUrl } from './tabs'
-import { detectClients, setupClients } from './clients'
+import { detectClients, setupClients, syncAppImageBridge } from './clients'
 import { getDownloadTracker } from './downloads'
 import { getHistoryStore } from './history'
 import { getSettingsStore } from './settings'
@@ -31,8 +31,9 @@ function searchUrlBase(): string {
 
 // 开发版使用独立 userData：避免与安装版争单实例锁/登录态/connection.json。
 // ⚠️ 必须在 requestSingleInstanceLock() 之前调用（锁按 userData 路径区分）。
-if (!app.isPackaged) {
-  const userData = process.env['AA_BROWSER_USER_DATA_DIR'] || path.join(app.getPath('appData'), 'aa-browser-dev')
+const profileOverride = process.env['AA_BROWSER_USER_DATA_DIR']
+if (profileOverride || !app.isPackaged) {
+  const userData = profileOverride || path.join(app.getPath('appData'), 'aa-browser-dev')
   app.setPath('userData', userData)
   process.env['AA_BROWSER_CONNECTION_FILE'] ||= path.join(userData, 'connection.json')
 }
@@ -524,13 +525,24 @@ function onTabChange(): void {
 }
 
 app.whenReady().then(() => {
+  if (process.platform === 'linux' && app.isPackaged && app.commandLine.hasSwitch('no-sandbox')) {
+    console.error('Aa Browser requires the Chromium sandbox. Enable user namespaces for the application and relaunch.')
+    app.exit(1)
+    return
+  }
   app.setAppUserModelId('com.aa.browser')
   Menu.setApplicationMenu(null)
+  try { syncAppImageBridge(true) }
+  catch (error) { console.error('Failed to refresh the installed MCP bridge:', error) }
 
+  const appImage = process.platform === 'linux' && process.env['APPIMAGE']
   updater = new UpdateManager(VERSION, () => {
     const settings = getSettingsStore().get()
     return { autoUpdate: settings.autoUpdate, updateChannel: settings.updateChannel }
-  }, app.isPackaged)
+  }, app.isPackaged && (process.platform === 'win32' || !!appImage), appImage ? {
+    source: appImage,
+    directory: path.join(app.getPath('userData'), 'previous-versions')
+  } : undefined)
   updater.init(pushState)
   powerMonitor.on('resume', () => { void updater?.checkIfDue() })
 
