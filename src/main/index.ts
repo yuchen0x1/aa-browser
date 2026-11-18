@@ -421,7 +421,9 @@ function registerIpc(): void {
       } catch {
         return false
       }
-      void active.view.webContents.loadURL(target)
+      void tabManager.navigate(active, target).catch(() => {
+        // 页面加载失败由 WebContents 呈现，地址栏 IPC 只确认是否接受输入。
+      })
       return true
     })
   })

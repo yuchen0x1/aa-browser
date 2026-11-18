@@ -15,6 +15,8 @@ export interface Tab {
   loading: boolean
   consoleBuf: { level: string; text: string; ts: number }[]
   net: NetworkCapture
+  ready: Promise<void>
+  initialNavigation: Promise<void>
   /** 是否使用独立会话分区（隔离标签） */
   isolated: boolean
 }
@@ -93,6 +95,7 @@ export function isUrlAllowed(url: string, rules: string[], newtabUrl: string): b
 
 let idSeq = 0
 const genId = (): string => `t${Date.now().toString(36)}${(idSeq++).toString(36)}`
+const NAVIGATION_TIMEOUT_MS = 20_000
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined
@@ -192,6 +195,9 @@ export class TabManager {
         // 任何注入的桥都会随导航泄漏给网页脚本。接入/设置等特权 UI 只在外壳 chrome 视图。
       }
     })
+    const wc = view.webContents
+    const net = new NetworkCapture(wc)
+    const ready = Promise.resolve().then(() => this.prepareTab(wc, net, id))
     const tab: Tab = {
       id,
       partition,
@@ -202,51 +208,62 @@ export class TabManager {
       url: target,
       loading: false,
       consoleBuf: [],
-      net: new NetworkCapture(view.webContents)
+      net,
+      ready,
+      initialNavigation: ready.then(() => this.loadPage(wc, target))
     }
     this.attachEvents(tab)
     this.tabs.push(tab)
     if (activate) this.activeId = tab.id
     this.onSession?.(ses)
+    void tab.initialNavigation.catch((error: unknown) => {
+      if (!wc.isDestroyed() && this.tabs.includes(tab)) {
+        console.warn(`[aa-browser] 标签 ${id} 页面导航未完成 (${error instanceof Error ? error.name : '未知错误'})`)
+      }
+    })
+    this.onChange()
+    return tab
+  }
+
+  private async prepareTab(wc: WebContents, net: NetworkCapture, id: string): Promise<void> {
     // 注意安装顺序：新建的 WebContents 还没有渲染上下文，
     // 此时 Page.enable / Page.addScriptToEvaluateOnNewDocument 会永久挂起
     // （不 resolve 也不 reject，实测 >15s）。必须先加载 about:blank 建好上下文，
     // 再装守卫——守卫对之后的首屏导航依然生效，因为注入的是"新文档"脚本。
-    void (async () => {
-      const wc = view.webContents
-      const closed = (): boolean => wc.isDestroyed() || !this.tabs.includes(tab)
-      try {
-        await withTimeout(wc.loadURL('about:blank'), 3000, 'about:blank 初始化')
-      } catch (error) {
-        console.warn(`[aa-browser] 标签 ${id} 空白上下文初始化失败，继续加载目标页: ${error instanceof Error ? error.message : String(error)}`)
-      }
-      try {
-        if (closed()) return
-        // CDP attach/enable 在部分打包运行时可能不返回；它是弹窗保护，
-        // 不应让主页面永远卡在 about:blank。
-        await withTimeout(installDialogGuard(wc), 2500, '页面对话框守卫初始化')
-      } catch (error) {
-        console.warn(`[aa-browser] 标签 ${id} 对话框守卫未就绪，继续加载目标页: ${error instanceof Error ? error.message : String(error)}`)
-      }
-      if (closed()) return
-      try {
-        // Network.enable and the dialog guard share one CDP debugger. Serialize
-        // initialization so the first document navigation cannot race the CDP commands.
-        await withTimeout(tab.net.ensure(), 3000, 'Network.enable 初始化')
-      } catch (error) {
-        console.warn(`[aa-browser] 标签 ${id} 抓包初始化失败，继续加载目标页: ${error instanceof Error ? error.message : String(error)}`)
-      }
-      if (closed()) return
-      try {
-        // The about:blank did-stop-loading event updates tab.url. Use the
-        // immutable requested target captured before initialization instead.
-        await withTimeout(wc.loadURL(target), 10000, '目标页面导航')
-      } catch (error) {
-        console.error(`[aa-browser] 标签 ${id} 页面导航未完成 (${error instanceof Error ? error.name : '未知错误'})`)
-      }
-    })()
-    this.onChange()
-    return tab
+    if (wc.isDestroyed()) return
+    try {
+      await withTimeout(wc.loadURL('about:blank'), 3000, 'about:blank 初始化')
+    } catch (error) {
+      console.warn(`[aa-browser] 标签 ${id} 空白上下文初始化失败: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    if (wc.isDestroyed()) return
+    try {
+      await withTimeout(installDialogGuard(wc), 2500, '页面对话框守卫初始化')
+    } catch (error) {
+      console.warn(`[aa-browser] 标签 ${id} 对话框守卫未就绪: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    if (wc.isDestroyed()) return
+    // 抓包和对话框守卫共用 CDP，按顺序启用后再开始首个页面导航。
+    try {
+      await withTimeout(net.ensure(), 3000, 'Network.enable 初始化')
+    } catch (error) {
+      console.warn(`[aa-browser] 标签 ${id} 抓包初始化失败: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  private loadPage(wc: WebContents, url: string): Promise<void> {
+    if (wc.isDestroyed()) throw new Error('页面已关闭')
+    this.assertUrlAllowed(url)
+    return withTimeout(wc.loadURL(url), NAVIGATION_TIMEOUT_MS, '目标页面导航')
+  }
+
+  async navigate(tab: Tab, url: string, capture = false): Promise<void> {
+    await tab.ready
+    const wc = tab.view.webContents
+    if (capture && !wc.isDestroyed()) {
+      await withTimeout(tab.net.ensure(), 3000, 'Network.enable').catch(() => {})
+    }
+    await this.loadPage(wc, url)
   }
 
   get canReopenClosed(): boolean {
@@ -321,6 +338,11 @@ export class TabManager {
     wc.on('did-stop-loading', () => {
       tab.loading = false
       tab.url = wc.getURL() || tab.url
+      // 只移除用于初始化渲染上下文的历史项，保留真实页面的前进和后退记录。
+      const history = wc.navigationHistory
+      if (history.getActiveIndex() > 0 && history.getEntryAtIndex(0)?.url === 'about:blank') {
+        history.removeEntryAtIndex(0)
+      }
       this.onChange()
     })
     wc.on('page-title-updated', (_e, title) => {

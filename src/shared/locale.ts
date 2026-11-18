@@ -23,6 +23,8 @@ export type LocaleKey =
   | 'softwareUpdate' | 'autoUpdate' | 'stable' | 'beta' | 'currentVersion' | 'checkUpdate'
   | 'downloadUpdate' | 'connectClient' | 'scanningClients' | 'rescan' | 'writeClients'
   | 'agentService' | 'loading' | 'save' | 'saving' | 'saved' | 'saveFailed' | 'autoLocale'
+  | 'defaultSearchEngine' | 'customSearchAddress' | 'isolatedSessionsHint' | 'downloadDirPlaceholder'
+  | 'siteAllowlistHint' | 'siteAllowlistPlaceholder' | 'updateHint' | 'clientSetupHint'
 
 const catalogs: Record<Locale, Record<LocaleKey, string>> = {
   'zh-CN': {
@@ -38,7 +40,14 @@ const catalogs: Record<Locale, Record<LocaleKey, string>> = {
     stable: '稳定版', beta: 'Beta 测试版', currentVersion: '当前版本', checkUpdate: '检查更新', downloadUpdate: '下载更新',
     connectClient: '连接 AI 客户端', scanningClients: '正在扫描已安装的 AI 客户端…', rescan: '重新扫描',
     writeClients: '写入所选客户端', agentService: 'Agent 本地服务', loading: '加载中…', save: '保存设置',
-    saving: '正在保存…', saved: '已保存', saveFailed: '保存失败：', autoLocale: '自动（跟随系统 / 浏览器）'
+    saving: '正在保存…', saved: '已保存', saveFailed: '保存失败：', autoLocale: '自动（跟随系统 / 浏览器）',
+    defaultSearchEngine: '默认搜索引擎', customSearchAddress: '自定义地址',
+    isolatedSessionsHint: '关闭时所有标签共享 Cookie 和登录态。Agent 也可以用 browser_tabs new isolated:true 单独打开隔离标签。',
+    downloadDirPlaceholder: '留空以使用默认目录 ~/.aabrowser/downloads',
+    siteAllowlistPlaceholder: '每行一个规则，例如：\nhttps://example.com\nhttps://*.example.org:8443',
+    siteAllowlistHint: '填写后仅允许匹配的 HTTP/HTTPS 站点。留空表示不启用白名单。支持 *.example.com 子域名匹配。',
+    updateHint: '更新来自 GitHub Releases。下载完成并通过 electron-updater 校验后才会安装。',
+    clientSetupHint: '写入前自动备份，只改 aa-browser 一个键。写入后请在客户端确认工具已加载。'
   },
   'en-US': {
     appTitle: 'aa-browser', tabs: 'Browser tabs', newTab: 'New tab (Ctrl+T)', back: 'Back (Alt+←)',
@@ -53,7 +62,14 @@ const catalogs: Record<Locale, Record<LocaleKey, string>> = {
     stable: 'Stable', beta: 'Beta', currentVersion: 'Current version', checkUpdate: 'Check for updates', downloadUpdate: 'Download update',
     connectClient: 'Connect AI clients', scanningClients: 'Scanning installed AI clients…', rescan: 'Rescan',
     writeClients: 'Write to selected clients', agentService: 'Agent local service', loading: 'Loading…', save: 'Save settings',
-    saving: 'Saving…', saved: 'Saved', saveFailed: 'Save failed: ', autoLocale: 'Automatic (follow system / browser)'
+    saving: 'Saving…', saved: 'Saved', saveFailed: 'Save failed: ', autoLocale: 'Automatic (follow system / browser)',
+    defaultSearchEngine: 'Default search engine', customSearchAddress: 'Custom address',
+    isolatedSessionsHint: 'When off, tabs share cookies and sign-in state. Agents can open an isolated tab with browser_tabs new isolated:true.',
+    downloadDirPlaceholder: 'Leave blank to use ~/.aabrowser/downloads',
+    siteAllowlistPlaceholder: 'One rule per line, for example:\nhttps://example.com\nhttps://*.example.org:8443',
+    siteAllowlistHint: 'Only matching HTTP/HTTPS sites are allowed when configured. Leave blank to allow all HTTP/HTTPS sites. Use *.example.com to match subdomains.',
+    updateHint: 'Updates come from GitHub Releases. electron-updater verifies the downloaded update before installation.',
+    clientSetupHint: 'Aa Browser backs up the configuration and changes only the aa-browser entry. Confirm in the client that it loaded the tools.'
   }
 }
 

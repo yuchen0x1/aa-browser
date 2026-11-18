@@ -258,6 +258,14 @@ async function main() {
 
     console.log('\n[2] 导航到本地 HTTP 测试页（内嵌完整快照）')
     testPageServer = http.createServer((req, res) => {
+      if (req.url === '/disconnect') {
+        req.socket.destroy()
+        return
+      }
+      if (req.url === '/redirect') {
+        res.writeHead(302, { Location: '/test-page.html' }).end()
+        return
+      }
       if (req.url === '/test-page.html' || req.url === '/') {
         res.setHeader('Content-Type', 'text/html; charset=utf-8')
         res.end(fs.readFileSync(TEST_PAGE))
@@ -267,10 +275,14 @@ async function main() {
       res.end('Not found')
     })
     await new Promise((resolve) => testPageServer.listen(0, '127.0.0.1', resolve))
-    const testPageUrl = `http://127.0.0.1:${testPageServer.address().port}/test-page.html`
-    const nav = await mcp.call('browser_navigate', { url: testPageUrl })
-    check('导航成功', !nav.isError, mcp.text(nav).slice(0, 200))
+    const testOrigin = `http://127.0.0.1:${testPageServer.address().port}`
+    const testPageUrl = `${testOrigin}/test-page.html`
+    const disconnected = await mcp.call('browser_navigate', { url: `${testOrigin}/disconnect` })
+    const disconnectedText = mcp.text(disconnected)
+    check('主文档连接中断返回导航失败', disconnected.isError && disconnectedText.includes('ERR_EMPTY_RESPONSE') && !disconnectedText.includes('已导航'), disconnectedText.slice(0, 200))
+    const nav = await mcp.call('browser_navigate', { url: `${testOrigin}/redirect` })
     const navText = mcp.text(nav)
+    check('302 导航成功并返回最终地址', !nav.isError && navText.startsWith(`已导航: ${testPageUrl}\n`), navText.slice(0, 200))
     check('导航结果内嵌完整快照', navText.includes('页面快照（完整）') && navText.includes('Aa 快照引擎测试页'), navText.slice(0, 200))
 
     console.log('\n[3] refs 来自导航内嵌快照')

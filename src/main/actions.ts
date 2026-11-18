@@ -19,7 +19,7 @@ import {
   uploadScript,
   laserCursorScript
 } from '@snapshot/scripts'
-import type { Tab } from './tabs'
+import type { Tab, TabManager } from './tabs'
 
 export class ActionError extends Error {}
 
@@ -46,25 +46,6 @@ export function findElement(snap: PageSnapshot, ref: string): SnapshotElement | 
 }
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
-
-/** 单次导航的等待上限：超过则交给 settle + URL 校验判断实际结果 */
-const NAVIGATE_TIMEOUT_MS = 20000
-
-/**
- * Chromium exposes file:// URLs in their serialized (percent-encoded) form.
- * The MCP caller may provide a Windows path containing non-ASCII characters,
- * so comparing the raw input with webContents.getURL() produces a false
- * navigation failure even though the page loaded successfully.
- */
-function comparableNavigationUrl(raw: string): string {
-  try {
-    const parsed = new URL(raw)
-    parsed.hash = ''
-    return parsed.href.replace(/\/$/, '')
-  } catch {
-    return raw.replace(/\/$/, '')
-  }
-}
 
 /** 等待页面加载稳定（导航结束 + 小缓冲），供动作后调用 */
 async function settle(wc: WebContents): Promise<void> {
@@ -149,44 +130,23 @@ async function waitClickProbe(wc: WebContents, urlBefore: string, timeoutMs = 70
 }
 
 export async function doNavigate(
-  tabs: { active: () => Tab | null; get: (id: string) => Tab | null; createTab: (url?: string) => Tab; assertUrlAllowed?: (url: string) => void },
+  tabs: TabManager,
   url: string,
   opts: { newTab?: boolean; tabId?: string }
 ): Promise<{ tabId: string; url: string; title: string }> {
-  tabs.assertUrlAllowed?.(url)
-  let tab: Tab | null = null
-  if (opts.tabId) {
-    tab = tabs.get(opts.tabId)
-    if (!tab) throw new ActionError(`标签不存在: ${opts.tabId}`)
-  } else if (opts.newTab) {
-    tab = tabs.createTab(url)
-  } else {
-    tab = tabs.active() ?? tabs.createTab(url)
-  }
+  tabs.assertUrlAllowed(url)
+  const existing = opts.tabId ? tabs.get(opts.tabId) : opts.newTab ? null : tabs.active()
+  if (opts.tabId && !existing) throw new ActionError(`标签不存在: ${opts.tabId}`)
+  const tab = existing ?? tabs.createTab(url)
   const wc = tab.view.webContents
-  // 导航前确保抓包已启用（保证本次导航的请求都被捕获）
-  await tab.net.ensure().catch(() => {})
-  // loadURL 在打断进行中的导航时会抛出上一次导航的 ERR_ABORTED，
-  // 因此不信任其 Promise，以"加载停止后的最终 URL"为准。
-  // 同时给 loadURL 加超时：标签刚创建时对话框守卫正在注入，此时 loadURL
-  // 可能长期不 settle，会把整个工具调用拖到 MCP 超时。
   try {
-    await Promise.race([wc.loadURL(url), delay(NAVIGATE_TIMEOUT_MS)])
-  } catch {
-    /* ERR_ABORTED / 超时：由下方 URL 校验兜底 */
+    // 新标签的首个加载由 TabManager 发起，避免两个 loadURL 互相打断。
+    await (existing ? tabs.navigate(tab, url, true) : tab.initialNavigation)
+  } catch (error) {
+    throw new ActionError(`导航失败：${error instanceof Error ? error.message : String(error)}`)
   }
-  await settle(wc)
-  const finalUrl = wc.getURL() || ''
-  const expectedComparable = comparableNavigationUrl(url)
-  const finalComparable = comparableNavigationUrl(finalUrl)
-  const ok = finalComparable === expectedComparable
-  if (!ok && finalUrl && !finalUrl.startsWith(url)) {
-    // 未到达目标（如被重定向到完全不同的地址且非正常跳转）时仍放行常见情形
-    if (finalComparable !== expectedComparable) {
-      throw new ActionError(`导航未到达目标：当前 ${finalUrl}，目标 ${url}`)
-    }
-  }
-  return { tabId: tab.id, url: finalUrl || url, title: tab.title }
+  if (wc.isDestroyed()) throw new ActionError('页面已关闭')
+  return { tabId: tab.id, url: wc.getURL(), title: wc.getTitle() }
 }
 
 export async function doClick(

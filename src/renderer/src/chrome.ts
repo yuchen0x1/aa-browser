@@ -112,7 +112,12 @@ const findBar = document.getElementById('find-bar') as HTMLDivElement
 const findQuery = document.getElementById('find-query') as HTMLInputElement
 const findStatus = document.getElementById('find-status') as HTMLSpanElement
 
-let activeLocale: Locale = resolveLocale('auto', navigator.languages?.length ? navigator.languages : [navigator.language])
+function resolveUiLocale(setting: AppSettings['locale'] = 'auto'): Locale {
+  return resolveLocale(setting, navigator.languages?.length ? navigator.languages : [navigator.language])
+}
+
+let savedLocale = resolveUiLocale()
+let activeLocale = savedLocale
 const t = (key: LocaleKey): string => translate(activeLocale, key)
 
 function setText(id: string, key: LocaleKey): void {
@@ -143,14 +148,26 @@ function applyLocale(locale: Locale): void {
   setText('agent-stop', state.agentInterrupted ? 'resume' : 'interrupt')
   setText('settings-title', 'settingsTitle')
   setAttr('btn-close-settings', 'aria-label', 'close')
-  setText('settings-engine-label', 'customSearch')
+  setText('settings-engine-label', 'defaultSearchEngine')
+  setText('settings-engine-custom', 'customSearchAddress')
   setText('settings-full-snapshot-label', 'fullSnapshot')
   setText('settings-approval-label', 'approval')
   setText('settings-isolated-label', 'isolatedSessions')
+  setText('settings-isolated-hint', 'isolatedSessionsHint')
   setText('settings-download-dir-label', 'downloadDir')
+  setAttr('set-download-dir', 'placeholder', 'downloadDirPlaceholder')
   setText('settings-allowlist-label', 'siteAllowlist')
+  setText('settings-allowlist-hint', 'siteAllowlistHint')
+  setAttr('set-allowed-sites', 'placeholder', 'siteAllowlistPlaceholder')
   setText('software-update-settings', 'softwareUpdate')
+  setText('settings-auto-update-label', 'autoUpdate')
+  setText('settings-update-stable', 'stable')
+  setText('settings-update-beta', 'beta')
+  setText('settings-update-hint', 'updateHint')
   setText('settings-client-label', 'connectClient')
+  setText('btn-client-scan', 'rescan')
+  setText('btn-client-setup', 'writeClients')
+  setText('settings-client-hint', 'clientSetupHint')
   setText('settings-agent-label', 'agentService')
   setText('btn-save-settings', 'save')
   setAttr('find-bar', 'aria-label', 'findInPage')
@@ -771,6 +788,7 @@ async function openSettings(): Promise<void> {
   const view = await window.aa.settingsGet().catch(() => null)
   const agent = await window.aa.agentInfo().catch(() => null)
   if (view && setEngine) {
+    savedLocale = resolveUiLocale(view.settings.locale)
     setEngine.innerHTML = ''
     for (const p of view.presets) {
       const opt = document.createElement('option')
@@ -779,8 +797,9 @@ async function openSettings(): Promise<void> {
       setEngine.appendChild(opt)
     }
     const custom = document.createElement('option')
+    custom.id = 'settings-engine-custom'
     custom.value = ''
-    custom.textContent = '自定义地址'
+    custom.textContent = t('customSearchAddress')
     setEngine.appendChild(custom)
     setEngine.value = view.presets.some((preset) => preset.url === view.settings.searchEngine) ? view.settings.searchEngine : ''
     if (setEngineUrl) setEngineUrl.value = view.settings.searchEngine
@@ -807,6 +826,7 @@ async function openSettings(): Promise<void> {
 function closeSettings(): void {
   if (!settingsModal) return
   settingsModal.hidden = true
+  if (activeLocale !== savedLocale) applyLocale(savedLocale)
   void window.aa.settingsOpen(false)
 }
 btnSettings?.addEventListener('click', () => {
@@ -826,7 +846,7 @@ setEngineUrl?.addEventListener('input', () => {
 })
 setLocale?.addEventListener('change', () => {
   const setting = setLocale.value === 'zh-CN' || setLocale.value === 'en-US' ? setLocale.value : 'auto'
-  applyLocale(resolveLocale(setting, navigator.languages?.length ? navigator.languages : [navigator.language]))
+  applyLocale(resolveUiLocale(setting))
 })
 document.getElementById('btn-save-settings')?.addEventListener('click', async () => {
   const button = document.getElementById('btn-save-settings') as HTMLButtonElement
@@ -848,7 +868,8 @@ document.getElementById('btn-save-settings')?.addEventListener('click', async ()
   try {
     const saved = await window.aa.settingsSet(patch)
     if (!saved) throw new Error('设置未保存，请重试。')
-    applyLocale(resolveLocale(saved.locale, navigator.languages?.length ? navigator.languages : [navigator.language]))
+    savedLocale = resolveUiLocale(saved.locale)
+    applyLocale(savedLocale)
     if (settingsStatus) {
       settingsStatus.textContent = t('saved')
       settingsStatusTimer = setTimeout(() => { if (settingsStatus) settingsStatus.textContent = '' }, 1800)
@@ -939,6 +960,7 @@ window.addEventListener('keydown', (e) => {
 
 /* 初始化拉取一次状态 */
 void window.aa.settingsGet().then((view) => {
-  applyLocale(resolveLocale(view?.settings.locale, navigator.languages?.length ? navigator.languages : [navigator.language]))
+  savedLocale = resolveUiLocale(view?.settings.locale)
+  applyLocale(savedLocale)
 }).catch(() => applyLocale(activeLocale))
 void window.aa.getState().then(applyState)

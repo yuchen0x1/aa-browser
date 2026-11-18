@@ -78,8 +78,10 @@ if (!process.versions.electron) {
   }
   function pass(label) { results.push(label); console.log(`PASS: ${label}`) }
   let ws
+  let newTabRequests = 0
   const server = http.createServer((req, res) => {
     res.setHeader('Content-Type', 'text/html; charset=utf-8')
+    if (req.url === '/new-tab') newTabRequests++
     if (req.url === '/frame') { res.end('<p>Child frame</p>'); return }
     res.end(`<title>Desktop fixture</title><h1>Aa desktop regression</h1><p>needle needle needle</p><input aria-label="Fixture input"><a href="/popup-private" target="_blank">Open child</a><iframe src="about:blank"></iframe>`)
   })
@@ -196,6 +198,9 @@ if (!process.versions.electron) {
     const normalId = (await state()).activeId
     const page = await activePage()
     await until(() => page.executeJavaScript('document.body.innerText.includes("needle")'), 'fixture DOM')
+    assert.equal((await state()).tabs.find((tab) => tab.id === normalId).canBack, false)
+    assert.deepEqual(page.navigationHistory.getAllEntries().map(({ url }) => url), [base + '/normal'])
+    pass('first page in a new desktop tab has no synthetic blank history entry')
     await ui('window.aa.settingsSet({requireOperationApproval:true})')
     const captured = await tool('browser_network_requests', { tabId: normalId })
     const capturedId = /\[([^\]]+)\]/.exec(toolText(captured))?.[1]
@@ -361,6 +366,42 @@ if (!process.versions.electron) {
     await tool('browser_tabs', { action: 'new', url: 'another search phrase' })
     await until(async () => (await state()).tabs.some((t) => t.active && t.url === base + '/search?q=another%20search%20phrase'), 'Agent new-tab search engine refresh')
     pass('both Agent search paths use updated settings without restarting')
+
+    const newTabUrl = base + '/new-tab'
+    const opened = await tool('browser_navigate', { url: newTabUrl, newTab: true, snapshot: false })
+    assert.ok(toolText(opened).startsWith(`已导航: ${newTabUrl}\n`))
+    assert.equal(newTabRequests, 1)
+    assert.equal((await state()).tabs.find((tab) => tab.active).canBack, false)
+    pass('MCP new-tab navigation loads the requested page once')
+
+    const savedChoice = (await ui('window.aa.settingsGet()')).settings.locale
+    const originalLanguage = await ui('document.documentElement.lang')
+    const previewLanguage = originalLanguage === 'en-US' ? 'zh-CN' : 'en-US'
+    async function selectLanguage(value) {
+      await ui(`(() => {
+        const select = document.querySelector('#set-locale');
+        select.value = ${JSON.stringify(value)};
+        select.dispatchEvent(new Event('change'));
+      })()`)
+    }
+    await click('#btn-settings')
+    await selectLanguage(previewLanguage)
+    assert.equal(await ui('document.documentElement.lang'), previewLanguage)
+    await click('#btn-close-settings')
+    assert.equal(await ui('document.documentElement.lang'), originalLanguage)
+    await click('#btn-settings')
+    await until(async () => (await ui('document.querySelector("#set-locale").value')) === savedChoice, 'saved locale displayed')
+    pass('closing a language preview restores the language saved in settings')
+
+    await selectLanguage('en-US')
+    assert.equal(await ui('document.querySelector("#settings-engine-custom").textContent'), 'Custom address')
+    assert.equal(await ui('document.querySelector("#settings-auto-update-label").textContent'), 'Check for and download updates automatically (notify before install)')
+    await click('#btn-save-settings')
+    await until(() => ui('document.querySelector("#settings-status").textContent === "Saved"'), 'save English locale')
+    await click('#btn-close-settings')
+    assert.equal(await ui('document.documentElement.lang'), 'en-US')
+    assert.equal(JSON.parse(fs.readFileSync(process.env.AA_BROWSER_SETTINGS_FILE, 'utf8')).locale, 'en-US')
+    pass('English settings controls translate live and saving persists the choice')
     await pause(500)
     await until(() => webContents.getAllWebContents().filter((wc) => wc !== chrome).every((wc) => !wc.isLoading()), 'all pages settle before shutdown')
     assert.equal(errors.length, 0, errors.join('\n'))
