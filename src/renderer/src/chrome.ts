@@ -262,7 +262,7 @@ function renderUpdate(update?: UpdateState): void {
   }
   updateStatus.textContent = labels[update.status]
   updateStatus.title = [update.checkedAt ? `上次检查：${new Date(update.checkedAt).toLocaleString()}` : '', update.retryAt ? `自动重试：${new Date(update.retryAt).toLocaleTimeString()}` : '', update.releaseDate ? `发布时间：${update.releaseDate}` : '', update.size ? `大小：${formatUpdateBytes(update.size)}` : '', update.releaseNotes ?? ''].filter(Boolean).join('\n')
-  if (btnUpdateCheck) btnUpdateCheck.disabled = ['checking', 'downloading', 'downloaded'].includes(update.status)
+  if (btnUpdateCheck) btnUpdateCheck.disabled = update.failedOperation === 'install' || ['checking', 'downloading', 'downloaded'].includes(update.status)
   if (btnUpdateAction) {
     btnUpdateAction.hidden = !['available', 'downloaded', 'error'].includes(update.status)
     btnUpdateAction.disabled = update.status === 'downloading'

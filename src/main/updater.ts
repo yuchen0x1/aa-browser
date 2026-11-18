@@ -80,7 +80,7 @@ export class UpdateManager {
 
   dismissNotice(): void { this.dismissedNotice = this.noticeKey(); this.emit() }
 
-  private noticeKey(): string { return `${this.state.status}:${this.state.version ?? ''}` }
+  private noticeKey(): string { return `${this.state.status}:${this.state.version ?? ''}:${this.state.failedOperation ?? ''}` }
 
   private listen(event: UpdateEvent, handler: (...args: any[]) => void): void {
     this.listeners.push({ event, handler })
@@ -88,7 +88,7 @@ export class UpdateManager {
   }
 
   async check(): Promise<UpdateState> {
-    if (this.stopped || ['disabled', 'checking', 'downloading', 'downloaded'].includes(this.state.status)) return this.getState()
+    if (this.stopped || this.installing || this.state.failedOperation === 'install' || ['disabled', 'checking', 'downloading', 'downloaded'].includes(this.state.status)) return this.getState()
     this.clearRetry()
     autoUpdater.autoDownload = this.getSettings().autoUpdate
     autoUpdater.allowPrerelease = this.getSettings().updateChannel === 'beta'

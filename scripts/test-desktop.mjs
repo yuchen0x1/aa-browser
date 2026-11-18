@@ -159,7 +159,11 @@ if (!process.versions.electron) {
       pass('automatic download is visible on the main window without opening settings')
       await click('#btn-find')
       await until(() => shellView.getBounds().height === 176, 'find plus update banner native bounds')
-      assert.ok(await ui('document.querySelector("#find-bar").getBoundingClientRect().top >= 128'))
+      await until(() => ui(`(() => {
+        const find = document.querySelector('#find-bar').getBoundingClientRect();
+        const notice = document.querySelector('#update-notice').getBoundingClientRect();
+        return find.height > 0 && notice.height > 0 && find.top >= notice.bottom - 0.5;
+      })()`), 'find toolbar starts below the update banner')
       await click('#find-close')
       pass('find toolbar and page layout reserve separate space for the update banner')
       updateProvider.emit('error', new Error('simulated download interruption'))
