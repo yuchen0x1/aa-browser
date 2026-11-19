@@ -1,5 +1,23 @@
 # Aa Browser 发布说明
 
+> 本文件保留精简版变更摘要；完整 GitHub Release 正文以 `bodies/` 下对应版本的归档为准。归档内容已与线上正文逐字核对（仅忽略换行格式和末尾换行）。新版本请按 [`release-notes-template.md`](./release-notes-template.md) 编写；发布后将 GitHub 上的实际正文同步到 `bodies/v<版本号>.md`，并更新本页摘要。运行 `npm run check:release-bodies` 检查本地归档与索引；发布后运行 `npm run check:release-bodies:remote` 对照 GitHub，发现漂移时先同步再合并。
+
+## 已发布正文归档
+
+| 版本 | 完整 Release 正文 |
+| --- | --- |
+| v0.3.0 | [bodies/v0.3.0.md](./bodies/v0.3.0.md) |
+| v0.2.0 | [bodies/v0.2.0.md](./bodies/v0.2.0.md) |
+| v0.1.0 | [bodies/v0.1.0.md](./bodies/v0.1.0.md) |
+| v0.0.8 | [bodies/v0.0.8.md](./bodies/v0.0.8.md) |
+| v0.0.7 | [bodies/v0.0.7.md](./bodies/v0.0.7.md) |
+| v0.0.6 | [bodies/v0.0.6.md](./bodies/v0.0.6.md) |
+| v0.0.5 | [bodies/v0.0.5.md](./bodies/v0.0.5.md) |
+| v0.0.4 | [bodies/v0.0.4.md](./bodies/v0.0.4.md) |
+| v0.0.3 | [bodies/v0.0.3.md](./bodies/v0.0.3.md) |
+| v0.0.2 | [bodies/v0.0.2.md](./bodies/v0.0.2.md) |
+| v0.0.1 | [bodies/v0.0.1.md](./bodies/v0.0.1.md) |
+
 ## v0.3.0 — 2026-11-19
 
 - 设置面板改版：卡片从 560px 提升到 960px，改为左侧分区导航（通用 / 浏览与快照 / 数据与下载 / AI 集成 / 软件更新）加右侧内容区，导航随滚动高亮、点击跳转；设置项改为「左标题说明、右控件」两栏，原生复选框换成开关，保存栏吸底常驻；窗口宽度不足 1000px 时自动收起分区导航。中英文新增 13 条文案。

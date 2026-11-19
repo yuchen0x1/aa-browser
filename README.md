@@ -586,7 +586,8 @@ python -m http.server 4321 --directory site
 | [自动更新](./docs/AUTO_UPDATE.md) | 检查、下载、重启安装、SHA-512 与回滚 |
 | [插件市场接入](./docs/MARKETPLACE.md) | DeepSeek Harness 插件安装与验证 |
 | [维护状态](./docs/MAINTENANCE.md) | 发行证据、回归记录与维护边界 |
-| [发布说明](./docs/releases/release-notes.md) / [CHANGELOG](./CHANGELOG.md) | 按版本整理的变更历史 |
+| [发布说明](./docs/releases/release-notes.md) / [Release 正文归档](./docs/releases/bodies/) / [发布模板](./docs/releases/release-notes-template.md) | 按版本摘要、线上正文副本与下一版模板；`npm run check:release-bodies:remote` 可对照 GitHub 检查漂移 |
+| [CHANGELOG](./CHANGELOG.md) | 工程与产品变更摘要 |
 | [竞品与生态调研](./docs/RESEARCH.md) | 开源项目对标、平台可行性依据 |
 | [README 多语言](./docs/i18n/README.md) | 12 种语言的 README 索引与新增语言步骤 |
 | [宣传站说明](./site/README.md) | 静态站部署与内容维护 |

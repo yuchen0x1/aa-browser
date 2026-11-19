@@ -1,6 +1,6 @@
 # Changelog
 
-产品版本历史以 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md) 为准。
+产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
 ## v0.3.0 — 2026-11-19
 
