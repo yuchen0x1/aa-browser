@@ -148,6 +148,24 @@ function applyLocale(locale: Locale): void {
   setAttr('btn-settings', 'title', 'settings'); setAttr('btn-settings', 'aria-label', 'settings')
   setText('agent-stop', state.agentInterrupted ? 'resume' : 'interrupt')
   setText('settings-title', 'settingsTitle')
+  setText('settings-subtitle', 'settingsSubtitle')
+  setAttr('settings-nav', 'aria-label', 'settingsSections')
+  setText('settings-nav-general', 'settingsNavGeneral')
+  setText('settings-nav-browsing', 'settingsNavBrowsing')
+  setText('settings-nav-data', 'settingsNavData')
+  setText('settings-nav-ai', 'settingsNavAi')
+  setText('settings-nav-update', 'softwareUpdate')
+  setText('settings-head-general', 'settingsNavGeneral')
+  setText('settings-head-browsing', 'settingsNavBrowsing')
+  setText('settings-head-data', 'settingsNavData')
+  setText('settings-head-ai', 'settingsNavAi')
+  setText('settings-desc-general', 'settingsDescGeneral')
+  setText('settings-desc-browsing', 'settingsDescBrowsing')
+  setText('settings-desc-data', 'settingsDescData')
+  setText('settings-desc-ai', 'settingsDescAi')
+  setText('settings-desc-update', 'settingsDescUpdate')
+  setText('settings-update-channel-label', 'updateChannel')
+  setText('settings-engine-hint', 'engineHint')
   setAttr('btn-close-settings', 'aria-label', 'close')
   setText('settings-engine-label', 'defaultSearchEngine')
   setText('settings-engine-custom', 'customSearchAddress')
@@ -264,6 +282,8 @@ function renderUpdate(update?: UpdateState): void {
     downloaded: activeLocale === 'en-US' ? `${update.version ?? ''} downloaded; restart to install` : `已下载 ${update.version ?? ''}，可以重启安装`, error: activeLocale === 'en-US' ? `Update failed: ${update.error ?? 'Unknown error'}` : `更新失败：${update.error ?? '未知错误'}`
   }
   updateStatus.textContent = labels[update.status]
+  const navVersion = document.getElementById('settings-nav-version')
+  if (navVersion) navVersion.textContent = `v${update.currentVersion}`
   updateStatus.title = [update.checkedAt ? `上次检查：${new Date(update.checkedAt).toLocaleString()}` : '', update.retryAt ? `自动重试：${new Date(update.retryAt).toLocaleTimeString()}` : '', update.releaseDate ? `发布时间：${update.releaseDate}` : '', update.size ? `大小：${formatUpdateBytes(update.size)}` : '', update.releaseNotes ?? ''].filter(Boolean).join('\n')
   if (btnUpdateCheck) btnUpdateCheck.disabled = update.failedOperation === 'install' || ['checking', 'downloading', 'downloaded'].includes(update.status)
   if (btnUpdateAction) {
@@ -788,6 +808,8 @@ async function openSettings(): Promise<void> {
   if (feedDrawer) feedDrawer.hidden = true
   await window.aa.settingsOpen(true)
   settingsModal.hidden = false
+  if (settingsBody) settingsBody.scrollTop = 0
+  if (settingsSections[0]) setActiveSettingsSection(settingsSections[0].id)
   if (settingsStatus) settingsStatus.textContent = ''
   const view = await window.aa.settingsGet().catch(() => null)
   const agent = await window.aa.agentInfo().catch(() => null)
@@ -840,6 +862,49 @@ btnSettings?.addEventListener('click', () => {
 document.getElementById('btn-close-settings')?.addEventListener('click', () => {
   closeSettings()
 })
+
+/* ── 设置面板：左侧分区导航 ─────────────── */
+const settingsBody = document.getElementById('settings-body') as HTMLDivElement | null
+const settingsNavItems = Array.from(document.querySelectorAll<HTMLButtonElement>('.settings-nav-item'))
+const settingsSections = settingsNavItems
+  .map((item) => document.getElementById(item.dataset['target'] ?? ''))
+  .filter((section): section is HTMLElement => section !== null)
+
+function setActiveSettingsSection(id: string): void {
+  for (const item of settingsNavItems) {
+    const active = item.dataset['target'] === id
+    item.classList.toggle('is-active', active)
+    if (active) item.setAttribute('aria-current', 'true')
+    else item.removeAttribute('aria-current')
+  }
+}
+
+function scrollToSettingsSection(id: string): void {
+  const target = document.getElementById(id)
+  if (!target || !settingsBody) return
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  settingsBody.scrollTo({ top: Math.max(0, target.offsetTop - 16), behavior: reduceMotion ? 'auto' : 'smooth' })
+}
+
+for (const item of settingsNavItems) {
+  item.addEventListener('click', () => {
+    const id = item.dataset['target']
+    if (id) scrollToSettingsSection(id)
+  })
+}
+
+settingsBody?.addEventListener('scroll', () => {
+  if (!settingsBody || !settingsSections.length) return
+  const last = settingsSections[settingsSections.length - 1]
+  if (settingsBody.scrollTop + settingsBody.clientHeight >= settingsBody.scrollHeight - 4) {
+    if (last) setActiveSettingsSection(last.id)
+    return
+  }
+  const line = settingsBody.scrollTop + 28
+  let current = settingsSections[0]
+  for (const section of settingsSections) if (section.offsetTop <= line) current = section
+  if (current) setActiveSettingsSection(current.id)
+}, { passive: true })
 setEngine?.addEventListener('change', () => {
   if (setEngineUrl && setEngine.value) setEngineUrl.value = setEngine.value
   else setEngineUrl?.focus()

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-globalThis.__AA_BRIDGE_VERSION__ = "0.2.0";
+globalThis.__AA_BRIDGE_VERSION__ = "0.3.0";
 // \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -1043,6 +1043,7 @@ var require_receiver = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 				data = this.consume(this._payloadLength);
 				if (this._masked && (this._mask[0] | this._mask[1] | this._mask[2] | this._mask[3]) !== 0) unmask(data, this._mask);
 			}
+			this._mask = void 0;
 			if (this._opcode > 7) {
 				this.controlMessage(data, cb);
 				return;
@@ -2084,6 +2085,7 @@ var require_websocket = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	const https = require("https");
 	const http = require("http");
 	const net = require("net");
+	const querystring = require("querystring");
 	const tls = require("tls");
 	const { randomBytes, createHash } = require("crypto");
 	const { Duplex, Readable } = require("stream");
@@ -2150,12 +2152,15 @@ var require_websocket = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 						else protocols = [options.protocols];
 					} else protocols = [protocols];
 				}
-				initAsClient(this, address, protocols, options);
-			} else {
-				this._autoPong = options.autoPong;
-				this._closeTimeout = options.closeTimeout;
-				this._isServer = true;
+				options = initAsClient(this, address, protocols, options);
+			} else this._isServer = true;
+			if (options.autoPong) {
+				this._autoPong = true;
+				this._autoPongComplete = () => autoPongComplete(this);
+				this._pendingAutoPongs = 0;
+				this._maxPendingAutoPongs = options.maxPendingAutoPongs | 0;
 			}
+			this._closeTimeout = options.closeTimeout;
 		}
 		/**
 		* For historical reasons, the custom "nodebuffer" type is used by the default
@@ -2596,6 +2601,8 @@ var require_websocket = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	*     fragments
 	* @param {Number} [options.maxPayload=104857600] The maximum allowed message
 	*     size
+	* @param {Number} [options.maxPendingAutoPongs=60] The maximum number of
+	*     pending automatic pongs
 	* @param {Number} [options.maxRedirects=10] The maximum number of redirects
 	*     allowed
 	* @param {String} [options.origin] Value of the `Origin` or
@@ -2606,6 +2613,7 @@ var require_websocket = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	*     `Sec-WebSocket-Version` header
 	* @param {Boolean} [options.skipUTF8Validation=false] Specifies whether or
 	*     not to skip UTF-8 validation for text and close messages
+	* @return {Object} The resolved options object used for initialization
 	* @private
 	*/
 	function initAsClient(websocket, address, protocols, options) {
@@ -2617,6 +2625,7 @@ var require_websocket = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 			maxBufferedChunks: 262144,
 			maxFragments: 16384,
 			maxPayload: 104857600,
+			maxPendingAutoPongs: 60,
 			skipUTF8Validation: false,
 			perMessageDeflate: true,
 			followRedirects: false,
@@ -2632,8 +2641,6 @@ var require_websocket = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 			path: void 0,
 			port: void 0
 		};
-		websocket._autoPong = opts.autoPong;
-		websocket._closeTimeout = opts.closeTimeout;
 		if (!protocolVersions.includes(opts.protocolVersion)) throw new RangeError(`Unsupported protocol version: ${opts.protocolVersion} (supported versions: ${protocolVersions.join(", ")})`);
 		let parsedUrl;
 		if (address instanceof URL) parsedUrl = address;
@@ -2642,8 +2649,10 @@ var require_websocket = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 		} catch {
 			throw new SyntaxError(`Invalid URL: ${address}`);
 		}
-		if (parsedUrl.protocol === "http:") parsedUrl.protocol = "ws:";
-		else if (parsedUrl.protocol === "https:") parsedUrl.protocol = "wss:";
+		if (parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:") {
+			parsedUrl = new URL(parsedUrl);
+			parsedUrl.protocol = parsedUrl.protocol === "http:" ? "ws:" : "wss:";
+		}
 		websocket._url = parsedUrl.href;
 		const isSecure = parsedUrl.protocol === "wss:";
 		const isIpcUrl = parsedUrl.protocol === "ws+unix:";
@@ -2696,7 +2705,7 @@ var require_websocket = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 			if (opts.protocolVersion < 13) opts.headers["Sec-WebSocket-Origin"] = opts.origin;
 			else opts.headers.Origin = opts.origin;
 		}
-		if (parsedUrl.username || parsedUrl.password) opts.auth = `${parsedUrl.username}:${parsedUrl.password}`;
+		if (parsedUrl.username || parsedUrl.password) opts.auth = `${querystring.unescape(parsedUrl.username)}:${querystring.unescape(parsedUrl.password)}`;
 		if (isIpcUrl) {
 			const i = opts.path.indexOf(":");
 			if (i === -1) {
@@ -2821,6 +2830,7 @@ var require_websocket = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 		});
 		if (opts.finishRequest) opts.finishRequest(req, websocket);
 		else req.end();
+		return opts;
 	}
 	/**
 	* Emit the `'error'` and `'close'` events.
@@ -2912,8 +2922,12 @@ var require_websocket = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	function receiverOnConclude(code, reason) {
 		const websocket = this[kWebSocket];
 		websocket._closeFrameReceived = true;
-		websocket._closeMessage = reason;
 		websocket._closeCode = code;
+		if (reason.length === 0) websocket._closeMessage = EMPTY_BUFFER;
+		else {
+			websocket._closeMessage = Buffer.allocUnsafeSlow(reason.length);
+			websocket._closeMessage.set(reason);
+		}
 		if (websocket._socket[kWebSocket] === void 0) return;
 		websocket._socket.removeListener("data", socketOnData);
 		process.nextTick(resume, websocket._socket);
@@ -2973,8 +2987,23 @@ var require_websocket = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	*/
 	function receiverOnPing(data) {
 		const websocket = this[kWebSocket];
-		if (websocket._autoPong) websocket.pong(data, !this._isServer, NOOP);
+		if (websocket._autoPong && websocket.readyState === WebSocket.OPEN) {
+			if (websocket._maxPendingAutoPongs > 0 && websocket._pendingAutoPongs >= websocket._maxPendingAutoPongs) websocket.terminate();
+			else {
+				websocket._pendingAutoPongs++;
+				websocket.pong(data, !this._isServer, websocket._autoPongComplete);
+			}
+		}
 		websocket.emit("ping", data);
+	}
+	/**
+	* The callback for automatic pong responses.
+	*
+	* @param {WebSocket} websocket The WebSocket instance
+	* @private
+	*/
+	function autoPongComplete(websocket) {
+		websocket._pendingAutoPongs--;
 	}
 	/**
 	* The listener of the `Receiver` `'pong'` event.
@@ -3279,6 +3308,8 @@ var require_websocket_server = /* @__PURE__ */ __commonJSMin(((exports, module) 
 		*     fragments
 		* @param {Number} [options.maxPayload=104857600] The maximum allowed message
 		*     size
+		* @param {Number} [options.maxPendingAutoPongs=60] The maximum number of
+		*     pending automatic pongs
 		* @param {Boolean} [options.noServer=false] Enable no server mode
 		* @param {String} [options.path] Accept only connections matching this path
 		* @param {(Boolean|Object)} [options.perMessageDeflate=false] Enable/disable
@@ -3301,6 +3332,7 @@ var require_websocket_server = /* @__PURE__ */ __commonJSMin(((exports, module) 
 				maxBufferedChunks: 262144,
 				maxFragments: 16384,
 				maxPayload: 104857600,
+				maxPendingAutoPongs: 60,
 				skipUTF8Validation: false,
 				perMessageDeflate: false,
 				handleProtocols: null,

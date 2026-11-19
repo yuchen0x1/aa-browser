@@ -25,7 +25,10 @@ export type LocaleKey =
   | 'agentService' | 'loading' | 'save' | 'saving' | 'saved' | 'saveFailed' | 'autoLocale'
   | 'defaultSearchEngine' | 'customSearchAddress' | 'isolatedSessionsHint' | 'downloadDirPlaceholder'
   | 'siteAllowlistHint' | 'siteAllowlistPlaceholder' | 'updateHint' | 'clientSetupHint'
-  | 'restoreSession' | 'restoreSessionHint'
+  | 'restoreSession' | 'restoreSessionHint' | 'settingsSubtitle' | 'settingsSections'
+  | 'settingsNavGeneral' | 'settingsNavBrowsing' | 'settingsNavData' | 'settingsNavAi'
+  | 'settingsDescGeneral' | 'settingsDescBrowsing' | 'settingsDescData' | 'settingsDescAi'
+  | 'settingsDescUpdate' | 'updateChannel' | 'engineHint'
 
 const catalogs: Record<Locale, Record<LocaleKey, string>> = {
   'zh-CN': {
@@ -50,7 +53,13 @@ const catalogs: Record<Locale, Record<LocaleKey, string>> = {
     updateHint: '更新来自 GitHub Releases。下载完成并通过 electron-updater 校验后才会安装。',
     clientSetupHint: '写入前自动备份，只改 aa-browser 一个键。写入后请在客户端确认工具已加载。',
     restoreSession: '重启后恢复上次打开的标签页',
-    restoreSessionHint: '只恢复普通网页标签，不恢复隔离标签、内部页和 file/data 地址。关闭后下次启动打开新标签页。'
+    restoreSessionHint: '只恢复普通网页标签，不恢复隔离标签、内部页和 file/data 地址。关闭后下次启动打开新标签页。',
+    settingsSubtitle: '调整浏览、快照与 AI 连接行为', settingsSections: '设置分区',
+    settingsNavGeneral: '通用', settingsNavBrowsing: '浏览与快照', settingsNavData: '数据与下载', settingsNavAi: 'AI 集成',
+    settingsDescGeneral: '界面语言与默认搜索引擎', settingsDescBrowsing: '快照输出、人工确认与标签页行为',
+    settingsDescData: '下载落盘位置与可访问站点范围', settingsDescAi: '连接本机 AI 客户端与 Agent 本地服务',
+    settingsDescUpdate: '更新通道、下载与安装', updateChannel: '更新通道',
+    engineHint: '浏览器与 Agent 共用；也可直接填写自定义搜索基址。'
   },
   'en-US': {
     appTitle: 'aa-browser', tabs: 'Browser tabs', newTab: 'New tab (Ctrl+T)', back: 'Back (Alt+←)',
@@ -74,7 +83,13 @@ const catalogs: Record<Locale, Record<LocaleKey, string>> = {
     updateHint: 'Updates come from GitHub Releases. electron-updater verifies the downloaded update before installation.',
     clientSetupHint: 'Aa Browser backs up the configuration and changes only the aa-browser entry. Confirm in the client that it loaded the tools.',
     restoreSession: 'Restore the tabs from the last session on restart',
-    restoreSessionHint: 'Only regular web tabs are restored; isolated tabs, internal pages and file/data URLs are skipped. When off, the next launch starts with a new tab.'
+    restoreSessionHint: 'Only regular web tabs are restored; isolated tabs, internal pages and file/data URLs are skipped. When off, the next launch starts with a new tab.',
+    settingsSubtitle: 'Tune browsing, snapshots and AI connection behavior', settingsSections: 'Settings sections',
+    settingsNavGeneral: 'General', settingsNavBrowsing: 'Browsing', settingsNavData: 'Data', settingsNavAi: 'AI integration',
+    settingsDescGeneral: 'Interface language and the default search provider', settingsDescBrowsing: 'Snapshot output, confirmations and tab behavior',
+    settingsDescData: 'Where downloads go and which sites are reachable', settingsDescAi: 'Connect local AI clients and the Agent service',
+    settingsDescUpdate: 'Update channel, download and install', updateChannel: 'Update channel',
+    engineHint: 'Shared by you and the Agent. You can also type a custom search base directly.'
   }
 }
 

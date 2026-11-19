@@ -84,96 +84,215 @@
         </div>
       </div>
       <div id="settings-modal" class="settings-modal" hidden>
-        <div class="settings-card">
-          <div class="drawer-header">
-            <span id="settings-title">设置</span>
+        <div class="settings-card" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+          <header class="settings-head">
+            <div class="settings-head-text">
+              <h2 id="settings-title">设置</h2>
+              <p id="settings-subtitle" class="settings-subtitle">调整浏览、快照与 AI 连接行为</p>
+            </div>
             <button id="btn-close-settings" type="button" class="drawer-close" aria-label="关闭设置">×</button>
-          </div>
-          <div class="settings-body">
-            <div class="settings-group">
-              <label class="settings-label" for="set-locale">语言 / Language</label>
-              <select id="set-locale" class="settings-select">
-                <option value="auto">自动（跟随系统 / 浏览器）</option>
-                <option value="zh-CN">简体中文</option>
-                <option value="en-US">English</option>
-              </select>
-            </div>
-            <div class="settings-group">
-                <div id="settings-engine-label" class="settings-label">默认搜索引擎</div>
-              <select id="set-engine" class="settings-select"></select>
-              <input id="set-engine-url" class="settings-input" type="text" placeholder="自定义搜索基址（以 = 结尾）" />
-            </div>
-            <div class="settings-group">
-              <label class="settings-check">
-                <input type="checkbox" id="set-full-snapshot" />
-                <span id="settings-full-snapshot-label">快照默认全量输出（关闭=增量省 token）</span>
-              </label>
-            </div>
-            <div class="settings-group">
-              <label class="settings-check">
-                <input type="checkbox" id="set-op-approval" />
-                <span id="settings-approval-label">提交表单或输入后回车前弹人工确认</span>
-              </label>
-            </div>
-            <div class="settings-group">
-              <label class="settings-check">
-                <input type="checkbox" id="set-isolated-sessions" />
-                <span id="settings-isolated-label">新建标签默认使用隔离会话（不共享登录态，关闭即清除）</span>
-              </label>
-              <div id="settings-isolated-hint" class="settings-hint">关闭时所有标签共享 Cookie 和登录态。Agent 也可以用 browser_tabs new isolated:true 单独打开隔离标签。</div>
-            </div>
-            <div class="settings-group">
-              <label class="settings-check">
-                <input type="checkbox" id="set-restore-session" />
-                <span id="settings-restore-label">重启后恢复上次打开的标签页</span>
-              </label>
-              <div id="settings-restore-hint" class="settings-hint">只恢复普通网页标签，不恢复隔离标签、内部页和 file/data 地址。关闭后下次启动打开新标签页。</div>
-            </div>
-            <div class="settings-group">
-                <div id="settings-download-dir-label" class="settings-label">下载保存目录</div>
-              <input id="set-download-dir" class="settings-input" type="text" placeholder="留空=默认 ~/.aabrowser/downloads" />
-            </div>
-            <div class="settings-group">
-                <div id="settings-allowlist-label" class="settings-label">站点白名单</div>
-              <textarea id="set-allowed-sites" class="settings-input settings-textarea" rows="4" placeholder="每行一个规则，例如：&#10;https://example.com&#10;https://*.example.org:8443"></textarea>
-              <div id="settings-allowlist-hint" class="settings-hint">填写后仅允许匹配的 HTTP/HTTPS 站点。留空表示不启用白名单。支持 *.example.com 子域名匹配。</div>
-            </div>
-            <div class="settings-group">
-              <div id="software-update-settings" class="settings-label">软件更新</div>
-              <label class="settings-check">
-                <input type="checkbox" id="set-auto-update" />
-                <span id="settings-auto-update-label">自动检查并下载更新（安装前通知）</span>
-              </label>
-              <select id="set-update-channel" class="settings-select">
-                <option id="settings-update-stable" value="stable">稳定版</option>
-                <option id="settings-update-beta" value="beta">Beta 测试版</option>
-              </select>
-              <div id="update-status" class="settings-info" role="status" aria-live="polite">当前版本</div>
-              <div class="settings-actions">
-                <button id="btn-update-check" type="button" class="settings-btn">检查更新</button>
-                <button id="btn-update-action" type="button" class="settings-btn settings-btn-primary" hidden>下载更新</button>
+          </header>
+          <div class="settings-main">
+            <nav id="settings-nav" class="settings-nav" aria-label="设置分区">
+              <button type="button" class="settings-nav-item is-active" data-target="settings-section-general" aria-controls="settings-section-general" aria-current="true">
+                <svg class="settings-nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                <span id="settings-nav-general">通用</span>
+              </button>
+              <button type="button" class="settings-nav-item" data-target="settings-section-browsing" aria-controls="settings-section-browsing">
+                <svg class="settings-nav-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.8" y="2.8" width="12.4" height="10.4" rx="2" stroke="currentColor" stroke-width="1.4" fill="none"/><path d="M1.8 6.2h12.4" stroke="currentColor" stroke-width="1.4"/><path d="M4.3 4.5h.01M6.3 4.5h.01" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+                <span id="settings-nav-browsing">浏览与快照</span>
+              </button>
+              <button type="button" class="settings-nav-item" data-target="settings-section-data" aria-controls="settings-section-data">
+                <svg class="settings-nav-icon" viewBox="0 0 16 16" aria-hidden="true"><ellipse cx="8" cy="4" rx="5.2" ry="2.2" stroke="currentColor" stroke-width="1.4" fill="none"/><path d="M2.8 4v8c0 1.2 2.3 2.2 5.2 2.2s5.2-1 5.2-2.2V4M2.8 8c0 1.2 2.3 2.2 5.2 2.2s5.2-1 5.2-2.2" stroke="currentColor" stroke-width="1.4" fill="none"/></svg>
+                <span id="settings-nav-data">数据与下载</span>
+              </button>
+              <button type="button" class="settings-nav-item" data-target="settings-section-ai" aria-controls="settings-section-ai">
+                <svg class="settings-nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8l1.5 4.2 4.2 1.5-4.2 1.5L8 13.2 6.5 9 2.3 7.5 6.5 6 8 1.8z" stroke="currentColor" stroke-width="1.3" fill="none" stroke-linejoin="round"/></svg>
+                <span id="settings-nav-ai">AI 集成</span>
+              </button>
+              <button type="button" class="settings-nav-item" data-target="settings-section-update" aria-controls="settings-section-update">
+                <svg class="settings-nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 1.5v3h-3" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                <span id="settings-nav-update">软件更新</span>
+              </button>
+              <div class="settings-nav-meta">
+                <span class="settings-nav-brand">Aa Browser</span>
+                <span id="settings-nav-version" class="settings-nav-version"></span>
               </div>
-              <div id="settings-update-hint" class="settings-hint">更新来自 GitHub Releases。下载完成并通过 electron-updater 校验后才会安装。</div>
-            </div>
-            <div class="settings-group">
-                <div id="settings-client-label" class="settings-label">连接 AI 客户端</div>
-              <div id="set-client-list" class="client-list" aria-live="polite" aria-busy="true">正在扫描已安装的 AI 客户端…</div>
-              <div class="settings-actions">
-                <button id="btn-client-scan" type="button" class="settings-btn">重新扫描</button>
-                <button id="btn-client-setup" type="button" class="settings-btn settings-btn-primary" disabled>写入所选客户端</button>
-              </div>
-              <div id="set-client-result" class="settings-hint" role="status" aria-live="polite"></div>
-              <div id="settings-client-hint" class="settings-hint">写入前自动备份，只改 aa-browser 一个键。写入后请在客户端确认工具已加载。</div>
-            </div>
-            <div class="settings-group">
-                <div id="settings-agent-label" class="settings-label">Agent 本地服务</div>
-              <div id="set-agent-info" class="settings-info">加载中…</div>
-            </div>
-            <div class="settings-save">
-              <button id="btn-save-settings" class="setup-btn">保存设置</button>
-              <span id="settings-status" class="settings-status" role="status" aria-live="polite"></span>
+            </nav>
+            <div id="settings-body" class="settings-body">
+              <section id="settings-section-general" class="settings-section" aria-labelledby="settings-head-general">
+                <header class="settings-section-head">
+                  <h3 id="settings-head-general">通用</h3>
+                  <p id="settings-desc-general" class="settings-section-desc">界面语言与默认搜索引擎</p>
+                </header>
+                <div class="settings-panel">
+                  <div class="settings-group settings-row">
+                    <div class="settings-row-text">
+                      <label class="settings-label" for="set-locale">语言 / Language</label>
+                    </div>
+                    <div class="settings-control">
+                      <div class="settings-select-wrap">
+                        <select id="set-locale" class="settings-select">
+                          <option value="auto">自动（跟随系统 / 浏览器）</option>
+                          <option value="zh-CN">简体中文</option>
+                          <option value="en-US">English</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="settings-group settings-row">
+                    <div class="settings-row-text">
+                      <div id="settings-engine-label" class="settings-label">默认搜索引擎</div>
+                      <div id="settings-engine-hint" class="settings-hint">浏览器与 Agent 共用；也可直接填写自定义搜索基址。</div>
+                    </div>
+                    <div class="settings-control">
+                      <div class="settings-select-wrap">
+                        <select id="set-engine" class="settings-select"></select>
+                      </div>
+                      <input id="set-engine-url" class="settings-input" type="text" placeholder="自定义搜索基址（以 = 结尾）" />
+                    </div>
+                  </div>
+                </div>
+              </section>
+              <section id="settings-section-browsing" class="settings-section" aria-labelledby="settings-head-browsing">
+                <header class="settings-section-head">
+                  <h3 id="settings-head-browsing">浏览与快照</h3>
+                  <p id="settings-desc-browsing" class="settings-section-desc">快照输出、人工确认与标签页行为</p>
+                </header>
+                <div class="settings-panel">
+                  <div class="settings-group settings-row">
+                    <div class="settings-row-text">
+                      <label id="settings-full-snapshot-label" class="settings-label" for="set-full-snapshot">快照默认全量输出（关闭=增量省 token）</label>
+                    </div>
+                    <label class="settings-switch" for="set-full-snapshot">
+                      <input type="checkbox" id="set-full-snapshot" />
+                      <span class="settings-switch-track" aria-hidden="true"></span>
+                    </label>
+                  </div>
+                  <div class="settings-group settings-row">
+                    <div class="settings-row-text">
+                      <label id="settings-approval-label" class="settings-label" for="set-op-approval">提交表单或输入后回车前弹人工确认</label>
+                    </div>
+                    <label class="settings-switch" for="set-op-approval">
+                      <input type="checkbox" id="set-op-approval" />
+                      <span class="settings-switch-track" aria-hidden="true"></span>
+                    </label>
+                  </div>
+                  <div class="settings-group settings-row">
+                    <div class="settings-row-text">
+                      <label id="settings-restore-label" class="settings-label" for="set-restore-session">重启后恢复上次打开的标签页</label>
+                      <div id="settings-restore-hint" class="settings-hint">只恢复普通网页标签，不恢复隔离标签、内部页和 file/data 地址。关闭后下次启动打开新标签页。</div>
+                    </div>
+                    <label class="settings-switch" for="set-restore-session">
+                      <input type="checkbox" id="set-restore-session" />
+                      <span class="settings-switch-track" aria-hidden="true"></span>
+                    </label>
+                  </div>
+                  <div class="settings-group settings-row">
+                    <div class="settings-row-text">
+                      <label id="settings-isolated-label" class="settings-label" for="set-isolated-sessions">新建标签默认使用隔离会话（不共享登录态，关闭即清除）</label>
+                      <div id="settings-isolated-hint" class="settings-hint">关闭时所有标签共享 Cookie 和登录态。Agent 也可以用 browser_tabs new isolated:true 单独打开隔离标签。</div>
+                    </div>
+                    <label class="settings-switch" for="set-isolated-sessions">
+                      <input type="checkbox" id="set-isolated-sessions" />
+                      <span class="settings-switch-track" aria-hidden="true"></span>
+                    </label>
+                  </div>
+                </div>
+              </section>
+              <section id="settings-section-data" class="settings-section" aria-labelledby="settings-head-data">
+                <header class="settings-section-head">
+                  <h3 id="settings-head-data">数据与下载</h3>
+                  <p id="settings-desc-data" class="settings-section-desc">下载落盘位置与可访问站点范围</p>
+                </header>
+                <div class="settings-panel">
+                  <div class="settings-group settings-row">
+                    <div class="settings-row-text">
+                      <div id="settings-download-dir-label" class="settings-label">下载保存目录</div>
+                    </div>
+                    <div class="settings-control">
+                      <input id="set-download-dir" class="settings-input" type="text" placeholder="留空=默认 ~/.aabrowser/downloads" />
+                    </div>
+                  </div>
+                  <div class="settings-group settings-row settings-row-stack">
+                    <div class="settings-row-text">
+                      <div id="settings-allowlist-label" class="settings-label">站点白名单</div>
+                      <div id="settings-allowlist-hint" class="settings-hint">填写后仅允许匹配的 HTTP/HTTPS 站点。留空表示不启用白名单。支持 *.example.com 子域名匹配。</div>
+                    </div>
+                    <textarea id="set-allowed-sites" class="settings-input settings-textarea" rows="4" placeholder="每行一个规则，例如：&#10;https://example.com&#10;https://*.example.org:8443"></textarea>
+                  </div>
+                </div>
+              </section>
+              <section id="settings-section-ai" class="settings-section" aria-labelledby="settings-head-ai">
+                <header class="settings-section-head">
+                  <h3 id="settings-head-ai">AI 集成</h3>
+                  <p id="settings-desc-ai" class="settings-section-desc">连接本机 AI 客户端与 Agent 本地服务</p>
+                </header>
+                <div class="settings-panel">
+                  <div class="settings-group settings-row settings-row-stack">
+                    <div class="settings-row-text">
+                      <div id="settings-client-label" class="settings-label">连接 AI 客户端</div>
+                      <div id="settings-client-hint" class="settings-hint">写入前自动备份，只改 aa-browser 一个键。写入后请在客户端确认工具已加载。</div>
+                    </div>
+                    <div id="set-client-list" class="client-list" aria-live="polite" aria-busy="true">正在扫描已安装的 AI 客户端…</div>
+                    <div class="settings-actions">
+                      <button id="btn-client-scan" type="button" class="settings-btn">重新扫描</button>
+                      <button id="btn-client-setup" type="button" class="settings-btn settings-btn-primary" disabled>写入所选客户端</button>
+                    </div>
+                    <div id="set-client-result" class="settings-hint" role="status" aria-live="polite"></div>
+                  </div>
+                  <div class="settings-group settings-row settings-row-stack">
+                    <div class="settings-row-text">
+                      <div id="settings-agent-label" class="settings-label">Agent 本地服务</div>
+                    </div>
+                    <div id="set-agent-info" class="settings-info">加载中…</div>
+                  </div>
+                </div>
+              </section>
+              <section id="settings-section-update" class="settings-section" aria-labelledby="software-update-settings">
+                <header class="settings-section-head">
+                  <h3 id="software-update-settings">软件更新</h3>
+                  <p id="settings-desc-update" class="settings-section-desc">更新通道、下载与安装</p>
+                </header>
+                <div class="settings-panel">
+                  <div class="settings-group settings-row">
+                    <div class="settings-row-text">
+                      <label id="settings-auto-update-label" class="settings-label" for="set-auto-update">自动检查并下载更新（安装前通知）</label>
+                      <div id="settings-update-hint" class="settings-hint">更新来自 GitHub Releases。下载完成并通过 electron-updater 校验后才会安装。</div>
+                    </div>
+                    <label class="settings-switch" for="set-auto-update">
+                      <input type="checkbox" id="set-auto-update" />
+                      <span class="settings-switch-track" aria-hidden="true"></span>
+                    </label>
+                  </div>
+                  <div class="settings-group settings-row">
+                    <div class="settings-row-text">
+                      <label id="settings-update-channel-label" class="settings-label" for="set-update-channel">更新通道</label>
+                    </div>
+                    <div class="settings-control">
+                      <div class="settings-select-wrap">
+                        <select id="set-update-channel" class="settings-select">
+                          <option id="settings-update-stable" value="stable">稳定版</option>
+                          <option id="settings-update-beta" value="beta">Beta 测试版</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="settings-group settings-row settings-row-stack">
+                    <div id="update-status" class="settings-info" role="status" aria-live="polite">当前版本</div>
+                    <div class="settings-actions">
+                      <button id="btn-update-check" type="button" class="settings-btn">检查更新</button>
+                      <button id="btn-update-action" type="button" class="settings-btn settings-btn-primary" hidden>下载更新</button>
+                    </div>
+                  </div>
+                </div>
+              </section>
             </div>
           </div>
+          <footer class="settings-footer">
+            <span id="settings-status" class="settings-status" role="status" aria-live="polite"></span>
+            <button id="btn-save-settings" type="button" class="settings-btn settings-btn-primary">保存设置</button>
+          </footer>
         </div>
       </div>
     </div>

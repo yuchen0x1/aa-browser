@@ -2,6 +2,13 @@
 
 产品版本历史以 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md) 为准。
 
+## v0.3.0 — 2026-11-19
+
+- 设置面板改版：960px 宽卡片 + 左侧分区导航（通用 / 浏览与快照 / 数据与下载 / AI 集成 / 软件更新），导航随滚动高亮并可点击跳转；设置项改为「左说明、右控件」两栏，原生复选框换成开关，保存栏吸底；窗口不足 1000px 时自动收起导航；中英文新增 13 条文案。
+- 应用图标重做：透明满幅「方窗」，修复桌面快捷方式、任务栏与 favicon 四周白边；`npm run icon` 改用 Canvas 直接导出 PNG，一次生成应用图标、官网图标与 DSH 市场图标，且产物可重复。
+- 安全：注入脚本的数据字面量统一走 `jsLiteral()` / `refLiteral()`（转义 `<` `>` `/` 与 U+2028/U+2029，`ref` 只放行 `^e\d+$`），避免 `</script>` 或行分隔符截断脚本；页面侧探针脚本集中到 `@snapshot/scripts`，`browser_evaluate` 错误文案不再拼接 `ref` 进源码。
+- 新增 `npm run test:page-scripts` 并并入 `npm run check`；本地回归 check、test:tools、test:stores 11/11、test:security、test:updater 13/13、test:release 5/5、test:installer 4/4、test:bridge、smoke 18 组、test:desktop 26/26、test:update-ui 6/6 全部通过。
+
 ## v0.2.0 — 2026-11-19
 
 - 新增通用安装/接入提示词：一段提示词发给任意具备本机执行能力的 AI，自动下载、校验、安装（Windows NSIS / Linux AppImage）、写入 MCP 配置并实际调用 `browser_tabs` 验证；已安装时用 `--connect-only` 只接入不重装。

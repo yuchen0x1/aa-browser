@@ -11,6 +11,7 @@ npm install        # Electron 下载慢可设 ELECTRON_MIRROR=https://npmmirror.
 npm run build
 npm run dev        # 开发模式（渲染层热更新）
 npm run smoke      # MCP 端到端冒烟测试，本地测试页面
+npm run test:page-scripts # 注入脚本字面量转义回归（ref 白名单、特殊字符不被截断）
 npm run test:desktop # 原生 Electron 界面、查找、恢复与隐私回归
 npm run test:update-ui # 更新提示/后台下载/重试交互（模拟 provider，不运行安装器）
 npm run test:stores  # 设置/历史容错、原子写入与异常备份

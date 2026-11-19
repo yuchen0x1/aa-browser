@@ -32,9 +32,9 @@ Official builds: Windows x64 (NSIS) and Linux x86_64 (AppImage), MIT licensed. I
 
 <!-- github-release:start -->
 
-**[v0.2.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.2.0)** · 2026-11-19
+**[v0.3.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.3.0)** · 2026-11-19
 
-新增跨会话标签恢复、`browser_performance` 性能摘要工具，以及随发行附带的 CycloneDX SBOM。
+设置面板改为宽版分区布局，应用图标重做为透明满幅并修复白边；Agent 注入脚本的数据字面量统一加固。
 
 [全部发行记录](https://github.com/yuchen0x1/aa-browser/releases)
 
@@ -543,8 +543,9 @@ aa-browser/
 要求 Node.js 22.12 或更高版本（构建、测试与 MCP 桥共用）。
 
 ```bash
-npm run check          # typecheck + 工具契约 + 提示词漂移 + DeepSeek Harness 插件检查
+npm run check          # typecheck + 工具契约 + 提示词漂移 + DeepSeek Harness 插件检查 + 页面脚本转义
 npm run typecheck      # 仅 TypeScript 类型检查
+npm run test:page-scripts # 注入脚本字面量转义回归（特殊字符不被截断、能原样还原）
 npm run smoke          # 端到端冒烟：启动浏览器 → MCP 驱动 → 断言（含抓包，无外网依赖）
 npm run test:desktop   # 原生桌面回归：会话恢复、查找、快捷键、隔离会话、审批
 npm run test:update-ui # 更新提示 / 后台下载 / 重试交互（模拟 provider）

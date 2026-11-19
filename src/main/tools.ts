@@ -1,4 +1,5 @@
 import type { ToolContent } from '@shared/types'
+import { checkedStateScript, fingerprintScript, refLiteral, tagNameScript } from '@snapshot/scripts'
 import { TabManager, normalizeUrl } from './tabs'
 import { clipBody, safeNetworkHeaders, safeNetworkUrl } from './network'
 import type { DownloadTracker } from './downloads'
@@ -367,7 +368,7 @@ export function buildTools(
         // Never write or retain an agent-supplied secret. Let the user type directly into the focused page field.
         const wc = tab.view.webContents
         const originalUrl = wc.getURL()
-        const originalFrame = await wc.executeJavaScript(`(() => { const e=(window.__aaRefs||{})[${JSON.stringify(ref)}]; if(!e||!e.isConnected) return null; const r=e.getBoundingClientRect(); e.focus(); return {fingerprint:[e.tagName,e.type||'',e.name||'',e.id||'',e.autocomplete||'',e.getAttribute('aria-label')||'',e.labels?Array.from(e.labels).map(x=>x.innerText||x.textContent||'').join(' '):''].join('|'), rect:[Math.round(r.x),Math.round(r.y),Math.round(r.width),Math.round(r.height)]} })()`, false) as { fingerprint?: string; rect?: number[] } | null
+        const originalFrame = await wc.executeJavaScript(fingerprintScript(ref), false) as { fingerprint?: string; rect?: number[] } | null
         if (!originalFrame) throw new ActionError('敏感输入目标已失效；请刷新快照后重试。')
         const url = new URL(originalUrl)
         const signal = args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
@@ -1233,10 +1234,11 @@ tools.push({
         if (!ref) throw new ActionError('每个字段都必须提供 ref')
         if (typeof field['checked'] === 'boolean') {
           // 复选框/单选框：仅在状态不一致时点击，避免把已勾选的又取消
-          const state = (await tab.view.webContents.executeJavaScript(
-            `(() => { const el = (window.__aaRefs || {})[${JSON.stringify(ref)}]; if (!el) return { ok: false }; return { ok: true, checked: !!el.checked, type: (el.type || '').toLowerCase() } })()`,
-            false
-          )) as { ok: boolean; checked?: boolean; type?: string }
+          const state = (await tab.view.webContents.executeJavaScript(checkedStateScript(ref), false)) as {
+            ok: boolean
+            checked?: boolean
+            type?: string
+          }
           if (!state?.ok) throw new ActionError(`找不到元素 ${ref}；请刷新页面快照后重试。`)
           if (state.type !== 'checkbox' && state.type !== 'radio') {
             throw new ActionError(`元素 ${ref} 不是复选框/单选框（是 ${state.type || 'unknown'}）`)
@@ -1249,10 +1251,7 @@ tools.push({
         }
         if (field['label'] !== undefined || (field['value'] !== undefined && !field['submit'])) {
           // <select> 走下拉选择
-          const probe = (await tab.view.webContents.executeJavaScript(
-            `(() => { const el = (window.__aaRefs || {})[${JSON.stringify(ref)}]; return el ? el.tagName.toLowerCase() : '' })()`,
-            false
-          )) as string
+          const probe = (await tab.view.webContents.executeJavaScript(tagNameScript(ref), false)) as string
           if (probe === 'select') {
             const r = await doSelectOption(tab, ref, {
               value: field['value'] as string | undefined,
@@ -1331,8 +1330,11 @@ tools.push({
       const expression = String(args['expression'] ?? '')
       if (!expression.trim()) throw new ActionError('expression 不能为空')
       const ref = args['ref'] ? String(args['ref']) : ''
+      // expression 是 browser_evaluate 的语义本身（在页面内求值的代码），刻意不转义；
+      // 数据部分（ref 与错误文案）一律走白名单字面量，避免 ref 破坏注入脚本的结构。
+      const refKey = ref ? refLiteral(ref) : ''
       const source = ref
-        ? `(() => { const element = (window.__aaRefs || {})[${JSON.stringify(ref)}]; if (!element) return { __aaError: '找不到元素 ${ref}' }; return (${expression}) })()`
+        ? `(() => { const element = (window.__aaRefs || {})[${refKey}]; if (!element) return { __aaError: '找不到元素 ' + ${refKey} }; return (${expression}) })()`
         : `(() => { return (${expression}) })()`
       let value: unknown
       try {

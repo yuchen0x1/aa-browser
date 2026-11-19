@@ -2,7 +2,7 @@
   "name": "aa-browser",
   "productName": "Aa Browser",
   "desktopName": "aa-browser.desktop",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "AI-native browser — browse like a human, drive like an agent (为 Agent 而生的浏览器)",
   "license": "MIT",
   "author": {
@@ -23,7 +23,8 @@
     "prompt": "node scripts/generate-prompt.mjs",
     "dsh:sync": "node packages/dsh/scripts/sync-bridge.mjs",
     "test:tools": "node scripts/test-tool-contract.mjs",
-    "check": "npm run typecheck && npm run check:tools && npm run check:prompt && npm run check:dsh",
+    "test:page-scripts": "node scripts/test-page-scripts.mjs",
+    "check": "npm run typecheck && npm run check:tools && npm run check:prompt && npm run check:dsh && npm run test:page-scripts",
     "test:installer": "node scripts/test-installer.mjs",
     "test:bridge": "node scripts/test-bridge-offline.mjs",
     "test:connect": "node scripts/test-connect-flow.mjs",

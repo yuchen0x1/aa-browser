@@ -108,10 +108,14 @@ if (!process.versions.electron) {
   let chrome
   const ui = (code) => chrome.executeJavaScript(code, true)
   const state = () => ui('window.aa.getState()')
+  // 注入脚本里的数据字面量统一走 jsLiteral：JSON.stringify 之外再转义 `<` `>` `/` 与
+  // U+2028/U+2029（CodeQL js/bad-code-sanitization 的建议），避免选择器截断脚本。
+  const UNSAFE_CHARS = { '<': '\\u003C', '>': '\\u003E', '/': '\\u002F', '\u2028': '\\u2028', '\u2029': '\\u2029' }
+  const jsLiteral = (value) => JSON.stringify(value).replace(/[<>/\u2028\u2029]/g, (ch) => UNSAFE_CHARS[ch])
   async function click(selector) {
-    await ui(`document.querySelector(${JSON.stringify(selector)}).scrollIntoView({block:'nearest',inline:'nearest'})`)
+    await ui(`document.querySelector(${jsLiteral(selector)}).scrollIntoView({block:'nearest',inline:'nearest'})`)
     await pause(40)
-    const point = await ui(`(() => { const el = document.querySelector(${JSON.stringify(selector)}); const r = el.getBoundingClientRect(); return {x: Math.round(r.x+r.width/2), y: Math.round(r.y+r.height/2)} })()`)
+    const point = await ui(`(() => { const el = document.querySelector(${jsLiteral(selector)}); const r = el.getBoundingClientRect(); return {x: Math.round(r.x+r.width/2), y: Math.round(r.y+r.height/2)} })()`)
     chrome.focus()
     chrome.sendInputEvent({ type: 'mouseDown', ...point, button: 'left', clickCount: 1 })
     chrome.sendInputEvent({ type: 'mouseUp', ...point, button: 'left', clickCount: 1 })
@@ -229,7 +233,7 @@ if (!process.versions.electron) {
     pass('search preset selection is saved instead of the old custom URL')
     await click('#btn-close-settings')
 
-    await ui(`window.aa.tabNew(${JSON.stringify(base + '/normal')})`)
+    await ui(`window.aa.tabNew(${jsLiteral(base + '/normal')})`)
     await until(async () => (await state()).tabs.some((t) => t.active && t.url === base + '/normal' && !t.loading), 'normal page')
     const normalId = (await state()).activeId
     const page = await activePage()
@@ -247,7 +251,7 @@ if (!process.versions.electron) {
     )
     await until(async () => (await state()).pendingApprovals.length === 1, 'sensitive network approval')
     const approvalId = (await state()).pendingApprovals[0].id
-    await ui(`window.aa.decideApproval(${JSON.stringify(approvalId)}, false)`)
+    await ui(`window.aa.decideApproval(${jsLiteral(approvalId)}, false)`)
     const denied = await sensitiveCall
     assert.match(denied?.message ?? '', /高危操作已取消/)
     await ui('window.aa.settingsSet({requireOperationApproval:false})')
@@ -325,7 +329,7 @@ if (!process.versions.electron) {
     await until(() => shellView.getBounds().height === 84, 'suggestions close')
     pass('history suggestions render beyond toolbar and return view bounds on blur')
 
-    await ui(`window.aa.tabClose(${JSON.stringify(normalId)})`)
+    await ui(`window.aa.tabClose(${jsLiteral(normalId)})`)
     assert.equal((await state()).canReopenClosed, true)
     chrome.sendInputEvent({ type: 'keyDown', keyCode: 'T', modifiers: ['control', 'shift'] })
     chrome.sendInputEvent({ type: 'keyUp', keyCode: 'T', modifiers: ['control', 'shift'] })
@@ -346,14 +350,14 @@ if (!process.versions.electron) {
     pass('web page has no privileged bridge and clipboard-read permission is denied')
     await privatePage.executeJavaScript('history.pushState({}, "", "/private-spa")')
     const tabsBefore = (await state()).tabs.length
-    await privatePage.executeJavaScript(`window.open(${JSON.stringify(base + '/popup-private')})`)
+    await privatePage.executeJavaScript(`window.open(${jsLiteral(base + '/popup-private')})`)
     await until(async () => (await state()).tabs.length === tabsBefore + 1, 'private popup')
     await until(async () => (await state()).tabs.some((t) => t.active && t.url === base + '/popup-private' && !t.loading), 'private popup load')
     const privateTabs = (await state()).tabs.filter((t) => t.isolated)
     assert.equal(privateTabs.length, 2)
     const history = JSON.parse(fs.readFileSync(historyFile, 'utf8'))
     assert.equal(history.some((e) => /private/.test(e.url)), false)
-    for (const tab of privateTabs) await ui(`window.aa.tabClose(${JSON.stringify(tab.id)})`)
+    for (const tab of privateTabs) await ui(`window.aa.tabClose(${jsLiteral(tab.id)})`)
     assert.equal((await state()).canReopenClosed, false)
     pass('private navigation/SPA/popup stay isolated and never enter history or restore stack')
     await until(() => {
@@ -383,16 +387,16 @@ if (!process.versions.electron) {
     pass('context-menu link opening also preserves isolation')
 
     // Restoring must re-evaluate a newly tightened allowlist.
-    await ui(`window.aa.tabNew(${JSON.stringify(base + '/blocked-restore')})`)
+    await ui(`window.aa.tabNew(${jsLiteral(base + '/blocked-restore')})`)
     const blockedId = (await state()).activeId
     await until(async () => (await state()).tabs.find((t) => t.id === blockedId)?.url === base + '/blocked-restore', 'restore candidate')
-    await ui(`window.aa.tabClose(${JSON.stringify(blockedId)})`)
+    await ui(`window.aa.tabClose(${jsLiteral(blockedId)})`)
     await ui('window.aa.settingsSet({allowedSites:["https://example.com"]})')
     assert.equal(await ui('window.aa.tabReopen()'), false)
     await ui('window.aa.settingsSet({allowedSites:[]})')
     pass('reopen applies current site allowlist')
     for (const unsafeUrl of ['file:///C:/Windows/win.ini', 'data:text/html,<h1>unsafe</h1>', `view-source:${base}/blocked-source`]) {
-      assert.equal(await ui(`window.aa.tabNew(${JSON.stringify(unsafeUrl)})`), false, `rejects non-web navigation: ${unsafeUrl}`)
+      assert.equal(await ui(`window.aa.tabNew(${jsLiteral(unsafeUrl)})`), false, `rejects non-web navigation: ${unsafeUrl}`)
     }
     pass('navigation rejects local, data and view-source schemes while preserving the internal new-tab page')
     await click('#btn-settings')
@@ -402,7 +406,7 @@ if (!process.versions.electron) {
     await until(() => ui('document.querySelector("#settings-status").textContent.includes(document.documentElement.lang === "en-US" ? "Save failed" : "保存失败")'), 'save failure feedback')
     assert.equal((await ui('window.aa.settingsGet()')).settings.searchEngine, 'https://duckduckgo.com/?q=')
     pass('invalid settings show an error and preserve the previous value')
-    await ui(`document.querySelector('#set-engine-url').value=${JSON.stringify(base + '/search?q=')}; document.querySelector('#set-engine-url').dispatchEvent(new Event('input'))`)
+    await ui(`document.querySelector('#set-engine-url').value=${jsLiteral(base + '/search?q=')}; document.querySelector('#set-engine-url').dispatchEvent(new Event('input'))`)
     await click('#btn-save-settings')
     await until(() => ui('document.querySelector("#settings-status").textContent === (document.documentElement.lang === "en-US" ? "Saved" : "已保存")'), 'valid settings save')
     await click('#btn-close-settings')
@@ -425,7 +429,7 @@ if (!process.versions.electron) {
     async function selectLanguage(value) {
       await ui(`(() => {
         const select = document.querySelector('#set-locale');
-        select.value = ${JSON.stringify(value)};
+        select.value = ${jsLiteral(value)};
         select.dispatchEvent(new Event('change'));
       })()`)
     }

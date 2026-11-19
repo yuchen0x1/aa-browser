@@ -17,6 +17,9 @@ import {
   selectorScript,
   storageScript,
   uploadScript,
+  clickScript,
+  refLiteral,
+  jsLiteral,
   laserCursorScript
 } from '@snapshot/scripts'
 import type { Tab, TabManager } from './tabs'
@@ -25,7 +28,7 @@ export class ActionError extends Error {}
 
 /** 从 webContents 上执行注入的快照引擎（mode=full 强制完整快照，默认增量） */
 export async function captureSnapshot(wc: WebContents, opts?: { mode?: 'full' | 'auto' }): Promise<PageSnapshot> {
-  const source = `(${__aaSnapshot.toString()})(${JSON.stringify(opts ?? {})})`
+  const source = `(${__aaSnapshot.toString()})(${jsLiteral(opts ?? {})})`
   const snap = (await wc.executeJavaScript(source, false)) as PageSnapshot
   if (!snap || typeof snap !== 'object') {
     throw new ActionError('快照执行失败：页面未返回有效数据')
@@ -82,7 +85,7 @@ async function armClickProbe(wc: WebContents, ref: string): Promise<boolean> {
   try {
     return (await wc.executeJavaScript(
       `(() => {
-        const el = (window.__aaRefs || {})[${JSON.stringify(ref)}]
+        const el = (window.__aaRefs || {})[${refLiteral(ref)}]
         if (!el) return false
         window.__aaClickProbe = { fired: false }
         el.addEventListener('click', () => { window.__aaClickProbe.fired = true }, { once: true, capture: true })
@@ -197,7 +200,7 @@ export async function doClick(
     // 元素被遮挡 → 页面内合成事件兜底
     if (button === 'left' && (loc.type === 'checkbox' || loc.type === 'radio')) {
       // 合成 MouseEvent 不会执行 checkbox/radio 的默认切换行为。
-      await wc.executeJavaScript(`(() => { const el = (window.__aaRefs || {})[${JSON.stringify(ref)}]; if (el) el.click(); return !!el })()`, false)
+      await wc.executeJavaScript(clickScript(ref), false)
     } else {
       await wc.executeJavaScript(syntheticClickScript(ref, button), false)
     }
@@ -208,7 +211,7 @@ export async function doClick(
     if (delivered !== true) {
       // sendInputEvent 偶发静默丢失；补发页面点击，避免“调用成功但页面没动”。
       if (loc.type === 'checkbox' || loc.type === 'radio') {
-        await wc.executeJavaScript(`(() => { const el = (window.__aaRefs || {})[${JSON.stringify(ref)}]; if (el) el.click(); return !!el })()`, false)
+        await wc.executeJavaScript(clickScript(ref), false)
       } else {
         await wc.executeJavaScript(syntheticClickScript(ref, button), false)
       }

@@ -9,6 +9,28 @@ const REF_GUARD = (ref: string): string => {
   return ref
 }
 
+/** ref → 可直接拼入脚本的字面量（'e12'）：先白名单校验，再拼接。 */
+export const refLiteral = (ref: string): string => `'${REF_GUARD(ref)}'`
+
+const CHAR_MAP: Record<string, string> = {
+  '<': '\\u003C',
+  '>': '\\u003E',
+  '/': '\\u002F',
+  '\u2028': '\\u2028',
+  '\u2029': '\\u2029'
+}
+
+/**
+ * 数据 → 可安全嵌入注入脚本的字面量。
+ * JSON.stringify 负责引号、换行与反斜杠，再补上 JSON 不转义的 `<` `>` `/` 与
+ * U+2028/U+2029，避免脚本被 `</script>` 或行分隔符截断（CodeQL
+ * js/bad-code-sanitization 建议的做法）；JS 侧单靠 JSON.stringify 不算清理干净。
+ */
+export const jsLiteral = (value: unknown): string => {
+  const json: string | undefined = JSON.stringify(value)
+  return (json ?? 'null').replace(/[<>/\u2028\u2029]/g, (ch) => CHAR_MAP[ch] ?? ch)
+}
+
 /** 定位元素：滚动到视野内，返回顶层视口坐标与命中测试结果 */
 export const locateScript = (ref: string): string => {
   REF_GUARD(ref)
@@ -80,6 +102,14 @@ export const syntheticClickScript = (ref: string, button: 'left' | 'right' | 'mi
 })()`
 }
 
+/**
+ * 合成点击兜底（元素被遮挡或 sendInputEvent 静默丢失时）：
+ * checkbox/radio 必须走真实 click 才会切换默认行为。
+ */
+export const clickScript = (ref: string): string => {
+  return `(() => { const el = (window.__aaRefs || {})[${refLiteral(ref)}]; if (el) el.click(); return !!el })()`
+}
+
 /** Inspect an input target without reading or returning its current value. */
 export const inspectInputScript = (ref: string): string => {
   REF_GUARD(ref)
@@ -94,6 +124,21 @@ export const inspectInputScript = (ref: string): string => {
     const sensitive = type === 'password' || /^(current-password|new-password|one-time-code|cc-csc|cc-number|cc-exp|cc-exp-month|cc-exp-year)$/.test(autocomplete) || secretPattern.test(meta)
   const fingerprint = [el.tagName, type, el.name || '', el.id || '', autocomplete, el.getAttribute('aria-label') || '', label].join('|')
   return { ok: true, sensitive, fingerprint, label: (label || el.getAttribute('aria-label') || el.name || el.id || type || el.tagName).slice(0, 120), type }
+})()`
+}
+
+/** 敏感输入指纹：聚焦目标并回报特征串与包围盒，供确认前后比对目标是否漂移 */
+export const fingerprintScript = (ref: string): string => {
+  return `(() => {
+  const e = (window.__aaRefs || {})[${refLiteral(ref)}]
+  if (!e || !e.isConnected) return null
+  const r = e.getBoundingClientRect()
+  e.focus()
+  const labels = e.labels ? Array.from(e.labels).map(x => x.innerText || x.textContent || '').join(' ') : ''
+  return {
+    fingerprint: [e.tagName, e.type || '', e.name || '', e.id || '', e.autocomplete || '', e.getAttribute('aria-label') || '', labels].join('|'),
+    rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]
+  }
 })()`
 }
 
@@ -141,7 +186,7 @@ export const clearScript = (ref: string): string => {
  */
 export const setValueScript = (ref: string, text: string): string => {
   REF_GUARD(ref)
-  const lit = JSON.stringify(text)
+  const lit = jsLiteral(text)
   return `(() => {
   const el = (window.__aaRefs || {})['${ref}']
   if (!el) return { ok: false, reason: 'no-ref' }
@@ -162,8 +207,8 @@ export const setValueScript = (ref: string, text: string): string => {
 /** 下拉选择：按 value 或 label 匹配 option，触发 change */
 export const selectOptionScript = (ref: string, value?: string, label?: string): string => {
   REF_GUARD(ref)
-  const vLit = JSON.stringify(value == null ? null : String(value))
-  const lLit = JSON.stringify(label == null ? null : String(label))
+  const vLit = jsLiteral(value == null ? null : String(value))
+  const lLit = jsLiteral(label == null ? null : String(label))
   return `(() => {
   const el = (window.__aaRefs || {})['${ref}']
   if (!el) return { ok: false, reason: 'no-ref' }
@@ -186,7 +231,7 @@ export const selectOptionScript = (ref: string, value?: string, label?: string):
 
 /** 滚动：先滚主文档，失败则找最大可滚动区域 */
 export const scrollScript = (direction: string, amount: number): string => {
-  const d = JSON.stringify(direction)
+  const d = jsLiteral(direction)
   const a = Math.max(50, Math.min(3000, Math.round(amount)))
   return `(() => {
   const dir = ${d}, amt = ${a}
@@ -256,7 +301,7 @@ export const extractScript = (ref?: string): string => {
 
 /** 等待文本出现（主进程轮询调用） */
 export const containsTextScript = (text: string): string => {
-  const lit = JSON.stringify(text)
+  const lit = jsLiteral(text)
   return `(() => {
   try { return !!document.body && document.body.innerText.indexOf(${lit}) !== -1 } catch (e) { return false }
 })()`
@@ -271,6 +316,23 @@ export const readValueScript = (ref: string): string => {
   try {
     return { ok: true, value: el.isContentEditable ? (el.textContent || '') : (el.value != null ? el.value : '') }
   } catch (e) { return { ok: false, reason: 'read-failed' } }
+})()`
+}
+
+/** 读取 checkbox/radio 的勾选状态与类型（fill_form 判断是否真的需要点击） */
+export const checkedStateScript = (ref: string): string => {
+  return `(() => {
+  const el = (window.__aaRefs || {})[${refLiteral(ref)}]
+  if (!el) return { ok: false }
+  return { ok: true, checked: !!el.checked, type: (el.type || '').toLowerCase() }
+})()`
+}
+
+/** 读取元素标签名（fill_form 判断 <select> 用） */
+export const tagNameScript = (ref: string): string => {
+  return `(() => {
+  const el = (window.__aaRefs || {})[${refLiteral(ref)}]
+  return el ? el.tagName.toLowerCase() : ''
 })()`
 }
 
@@ -334,11 +396,11 @@ export const selectorScript = (ref: string): string => {
 
 /** localStorage / sessionStorage 读写 */
 export const storageScript = (action: string, kind: string, key?: string, value?: string): string => {
-  const kLit = JSON.stringify(key ?? null)
-  const vLit = JSON.stringify(value ?? null)
+  const kLit = jsLiteral(key ?? null)
+  const vLit = jsLiteral(value ?? null)
   return `(() => {
-  const store = ${JSON.stringify(kind)} === 'session' ? sessionStorage : localStorage
-  const action = ${JSON.stringify(action)}
+  const store = ${jsLiteral(kind)} === 'session' ? sessionStorage : localStorage
+  const action = ${jsLiteral(action)}
   try {
     if (action === 'get') {
       const key = ${kLit}
@@ -359,7 +421,7 @@ export const storageScript = (action: string, kind: string, key?: string, value?
 /** 文件上传：注入 File 对象到 <input type=file>（主进程先读文件转 base64） */
 export const uploadScript = (ref: string, files: { name: string; type: string; data: string }[]): string => {
   REF_GUARD(ref)
-  const lit = JSON.stringify(files)
+  const lit = jsLiteral(files)
   return `(() => {
   const el = (window.__aaRefs || {})['${ref}']
   if (!el) return { ok: false, reason: 'no-ref' }
