@@ -31,6 +31,7 @@ MCP 客户端    →  cli/mcp      →  src/main/agent-server →  tools / actio
 | 安装器与 connect-only | 纯函数 4/4（平台资产、稳定路径、digest、PE/ELF 文件头）；对 `release/win-unpacked` 执行 `--connect-only --dir ... --verify --json` 通过，`--print-config` 输出可用的 MCP 命令；Linux 由 CI 在 AppImage 上执行同一测试 |
 | MCP 桥离线行为 | `npm run test:bridge`：浏览器未运行时 `tools/call` 在 8 秒内返回工具级 `isError`，不再挂到客户端超时 |
 | 注入脚本转义 | `npm run test:page-scripts`（已并入 `npm run check`）：编译 `src/snapshot/scripts.ts` 后在 vm 沙箱里跑真实注入脚本，断言 `</script>`、U+2028/U+2029 不会截断脚本，`ref` 只放行 `^e\d+$`，文本/选择器/上传文件名能原样还原。对应 CodeQL `js/bad-code-sanitization`（安全严重度 6.1，中等）的清理要求：数据进脚本一律走 `refLiteral()` / `jsLiteral()` |
+| README 多语言 | 主文 `README.md`（简体中文，完整 663 行）+ 11 种精简导读（en / zh-TW / ja / ko / es / pt-BR / fr / de / ru / ar / hi，各 203 行）；清单在 `docs/i18n/readme-languages.json`，说明见 `docs/i18n/README.md`。`npm run check:readme-i18n`（已并入 `npm run check`）校验清单 ↔ 语言栏 ↔ 文件 ↔ 相对链接一致，并断言安装命令、34 个工具名、`127.0.0.1`、180/120 秒、Node.js 22.12 与必应真实快照示例未在翻译中丢失；翻译为精简导读，权威细节以中文主文为准 |
 | DSH 插件 | `npm run check:dsh` 校验清单/patch 两行/桥版本/locale/detail/图标/市场条目；已通过 `plugin_manager install_bundle` 安装到当前 profile（`aa-browser-dsh@0.1.0`，两行启用），当前会话已暴露 34 个 `mcp__aa-browser__*` 工具；插件市场收录尚未提交（需 npm 发布与外部仓库 PR） |
 | 跨会话恢复 | 持久化单测覆盖凭据剥离、去重、上限、损坏/未来版本；桌面回归覆盖种子会话恢复、活动标签恢复和「隔离标签不入记录」 |
 | 性能摘要 | 冒烟测试在真实页面调用 `browser_performance`，断言导航/资源/DOM 字段和当前 URL |

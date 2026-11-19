@@ -8,25 +8,25 @@
 > **The Agent-Native Browser** — snapshots, actions, and packet capture over MCP.
 
 <p align="center">
-  <img src="./site/assets/og-image.png" alt="Aa Browser —— 为 Agent 而生的浏览器" width="720" />
+  <b>简体中文</b> ·
+  <a href="./README.en.md">English</a> ·
+  <a href="./README.zh-TW.md">繁體中文</a> ·
+  <a href="./README.ja.md">日本語</a> ·
+  <a href="./README.ko.md">한국어</a> ·
+  <a href="./README.es.md">Español</a> ·
+  <a href="./README.pt-BR.md">Português (BR)</a> ·
+  <a href="./README.fr.md">Français</a> ·
+  <a href="./README.de.md">Deutsch</a> ·
+  <a href="./README.ru.md">Русский</a> ·
+  <a href="./README.ar.md">العربية</a> ·
+  <a href="./README.hi.md">हिन्दी</a>
 </p>
 
-<details>
-<summary><b>English overview</b></summary>
+> 其他语言版本是精简导读，安装、接入、安全与工具的权威细节以本文件为准。语言清单见 [`docs/i18n/readme-languages.json`](./docs/i18n/readme-languages.json)。
 
-**Aa Browser** is an open-source Chromium desktop browser for AI agents. It is a normal browser you can use every day — tabs, omnibox, history, downloads, page find, persistent logins — and it also exposes **34 MCP tools** over a local stdio bridge so any MCP-capable agent can:
-
-- read a **structured accessibility snapshot** (YAML-style tree with stable `ref` ids) instead of screenshots;
-- click, type, select, drag, hover, scroll and fill forms through **real input events**;
-- extract text, evaluate JavaScript, read console logs and capture **HTTP traffic** (list, detail, HAR export, request mocking);
-- inspect performance (navigation timing, FCP, resources, JS heap, DOM size);
-- manage tabs, cookies, storage, downloads, uploads and PDF export.
-
-Snapshots are **incremental** by default: an unchanged page costs one line, small changes return only the diff, and `ref` ids stay stable. The bridge listens on `127.0.0.1` with a per-launch token stored in `~/.aabrowser/connection.json`.
-
-Official builds: Windows x64 (NSIS) and Linux x86_64 (AppImage), MIT licensed. Install with the one-prompt flow in [PROMPT.md](./PROMPT.md), or point any MCP client at the config printed by `node install.mjs --print-config`. Detailed docs are in Chinese under [`docs/`](./docs).
-
-</details>
+<p align="center">
+  <img src="./site/assets/og-image.png" alt="Aa Browser —— 为 Agent 而生的浏览器" width="720" />
+</p>
 
 ## 最新更新
 
@@ -588,6 +588,7 @@ python -m http.server 4321 --directory site
 | [维护状态](./docs/MAINTENANCE.md) | 发行证据、回归记录与维护边界 |
 | [发布说明](./docs/releases/release-notes.md) / [CHANGELOG](./CHANGELOG.md) | 按版本整理的变更历史 |
 | [竞品与生态调研](./docs/RESEARCH.md) | 开源项目对标、平台可行性依据 |
+| [README 多语言](./docs/i18n/README.md) | 12 种语言的 README 索引与新增语言步骤 |
 | [宣传站说明](./site/README.md) | 静态站部署与内容维护 |
 | [贡献指南](./CONTRIBUTING.md) | 开发环境、提交约定与 PR 要求 |
 
