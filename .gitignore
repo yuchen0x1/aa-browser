@@ -5,6 +5,8 @@ release/
 release-v*/
 *.log
 *.blockmap
+# 站点打包产物（构建生成，不入库）
+aa-browser-site-v*.zip
 .DS_Store
 Thumbs.db
 
