@@ -18,11 +18,13 @@ import readline from 'node:readline'
 import process from 'node:process'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
-// 优先使用构建出的单文件零依赖桥（out/bridge/mcp.cjs），源码运行退回 cli/mcp.mjs
+// 优先使用显式指定的稳定桥（跨平台安装器写入），其次构建出的单文件零依赖桥（out/bridge/mcp.cjs），
+// 源码运行退回 cli/mcp.mjs。
 const BUNDLED = path.resolve(HERE, '..', 'out', 'bridge', 'mcp.cjs')
-const MCP_PATH = fs.existsSync(BUNDLED) ? BUNDLED : path.resolve(HERE, 'mcp.mjs')
+const MCP_PATH = process.env['AA_BROWSER_MCP_BRIDGE'] || (fs.existsSync(BUNDLED) ? BUNDLED : path.resolve(HERE, 'mcp.mjs'))
 const home = os.homedir()
-const appData = process.env['APPDATA'] || path.join(home, 'AppData', 'Roaming')
+const isWindows = process.platform === 'win32'
+const appData = process.env['APPDATA'] || (isWindows ? path.join(home, 'AppData', 'Roaming') : process.env['XDG_CONFIG_HOME'] || path.join(home, '.config'))
 const j = (...p) => path.join(home, ...p)
 const jA = (...p) => path.join(appData, ...p)
 

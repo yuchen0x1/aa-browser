@@ -39,6 +39,8 @@ jobs:
       - run: npm run validate:codex
       - run: npm run validate:workbuddy
       - run: npm run build
+      - name: Generate software bill of materials
+        run: npm run sbom
       - name: Headless desktop display (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -61,6 +63,8 @@ jobs:
       - run: npm run test:security
       - run: npm run test:updater
       - run: npm run test:release
+      - run: npm run test:installer
+      - run: npm run test:bridge
       - name: Package and validate platform assets
         shell: bash
         env:
@@ -74,6 +78,15 @@ jobs:
             npm run dist -- --publish never
           fi
           node scripts/release-assets.mjs prepare "${{ matrix.platform }}"
+      - name: Verify connect-only installer against the packaged app
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a node scripts/test-connect-flow.mjs
+          else
+            node scripts/test-connect-flow.mjs
+          fi
       - name: Launch Linux AppImage and connect its MCP bridge
         if: runner.os == 'Linux'
         run: APPIMAGE_EXTRACT_AND_RUN=1 xvfb-run -a npm run smoke -- release/*.AppImage
@@ -129,6 +142,8 @@ jobs:
           pattern: release-*
           path: release
           merge-multiple: true
+      - name: Generate SBOM for the tested release
+        run: npm run sbom
       - run: node scripts/release-assets.mjs manifest
       - name: Publish and verify assets
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8

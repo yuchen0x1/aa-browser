@@ -5,10 +5,11 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { publishRelease } from './publish-release.mjs'
-import { releaseAssets } from './release-assets.mjs'
+import { releaseFileNames } from './release-assets.mjs'
 
-const tag = 'v0.1.0'
-const names = [...Object.values(releaseAssets(tag)).flat(), 'SHA256SUMS.txt']
+const tag = 'v0.2.0'
+const names = releaseFileNames(tag)
+assert.ok(names.includes('sbom.cdx.json'), 'v0.2.0 releases must include the SBOM')
 const repo = { owner: 'fixture', repo: 'fixture' }
 const sha = 'a'.repeat(40)
 const digest = (data) => 'sha256:' + createHash('sha256').update(data).digest('hex')

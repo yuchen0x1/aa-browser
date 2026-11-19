@@ -123,6 +123,13 @@
               <div id="settings-isolated-hint" class="settings-hint">关闭时所有标签共享 Cookie 和登录态。Agent 也可以用 browser_tabs new isolated:true 单独打开隔离标签。</div>
             </div>
             <div class="settings-group">
+              <label class="settings-check">
+                <input type="checkbox" id="set-restore-session" />
+                <span id="settings-restore-label">重启后恢复上次打开的标签页</span>
+              </label>
+              <div id="settings-restore-hint" class="settings-hint">只恢复普通网页标签，不恢复隔离标签、内部页和 file/data 地址。关闭后下次启动打开新标签页。</div>
+            </div>
+            <div class="settings-group">
                 <div id="settings-download-dir-label" class="settings-label">下载保存目录</div>
               <input id="set-download-dir" class="settings-input" type="text" placeholder="留空=默认 ~/.aabrowser/downloads" />
             </div>

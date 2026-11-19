@@ -443,4 +443,22 @@ export class TabManager {
       canForward: this.canForward(t)
     }))
   }
+
+  /**
+   * 跨会话恢复所需的普通网页标签（保持标签顺序，跳过隔离标签和内部页）。
+   * 只收集 http(s) 地址；同一地址只保留一次，活动标签序号按过滤后的列表计算。
+   */
+  sessionTabs(): { tabs: { url: string; title: string }[]; activeIndex: number } {
+    const restorable = this.tabs.filter((tab) => !tab.isolated && /^https?:\/\//i.test(tab.url))
+    const seen = new Set<string>()
+    const tabs: { url: string; title: string }[] = []
+    let activeIndex = 0
+    for (const tab of restorable) {
+      if (seen.has(tab.url)) continue
+      seen.add(tab.url)
+      if (tab.id === this.activeId) activeIndex = tabs.length
+      tabs.push({ url: tab.url, title: tab.title })
+    }
+    return { tabs, activeIndex }
+  }
 }

@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Aa Browser connection",
+    "description": "Connects a running Aa Browser to DeepSeek Harness so the agent can drive the browser through its MCP tools. Requires Aa Browser on Windows x64 or Linux x64; the MCP entry connects even when the browser is closed, and tool calls fail until it is launched. Tools appear as mcp__aa-browser__*.",
+    "detail": "docs/DETAIL.md"
+  }
+}

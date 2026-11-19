@@ -11,9 +11,9 @@
 
 <!-- github-release:start -->
 
-**[v0.1.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.1.0)** · 2026-11-18
+**[v0.2.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.2.0)** · 2026-11-19
 
-新增 Linux x86_64 AppImage，支持桌面浏览和 MCP 接入。安装 AppImage 更新前会保留当前版本，供需要时手动恢复。
+新增跨会话标签恢复、`browser_performance` 性能摘要工具，以及随发行附带的 CycloneDX SBOM。
 
 [全部发行记录](https://github.com/yuchen0x1/aa-browser/releases)
 
@@ -34,6 +34,10 @@
 - 🔒 **本地安全**：WebSocket 仅监听 127.0.0.1，随机端口 + 一次性 token，拒绝非本机连接
 - 🎯 **真实输入路径**：点击走受信任的输入事件（`isTrusted=true`），输入走 `insertText` 管线并对 React 受控组件兜底，被遮挡元素自动降级为合成事件
 - 🔁 **动作后自动快照**：每次点击/输入后自动返回新快照，Agent 无需二次请求即可继续决策
+- 🔄 **会话恢复**：重启后按上次顺序恢复普通网页标签并回到活动标签；隔离标签、内部页和非 HTTP(S) 地址不恢复，可在设置中关闭
+- 🔌 **一段接入**：新标签页或 [PROMPT.md](./PROMPT.md) 的通用提示词发给任意具备本机执行能力的 AI，自动完成下载、安装、MCP 配置和 `browser_tabs` 验证；配置指向稳定桥路径，随应用升级
+- 📊 **性能诊断**：`browser_performance` 一次返回导航耗时、首绘、资源体积与慢资源、JS 堆和 DOM 规模，Agent 不开 DevTools 也能解释慢页面
+- 📦 **可验证发行**：Windows NSIS 与 Linux AppImage 同版本发布，附 `SHA256SUMS.txt`、GitHub 发行证明和 CycloneDX `sbom.cdx.json`
 
 ## 快照示例
 
@@ -104,25 +108,26 @@ title: Aa Browser - 搜索
 
 ## 快速开始
 
-### ⚡ Windows WorkBuddy 安装和接入
+### ⚡ 任意 AI 一键接入（推荐）
 
-把 [PROMPT.md](./PROMPT.md) 中的 WorkBuddy 提示词整段发给 WorkBuddy。它会尝试下载并运行安装器，准备 `~/.workbuddy/mcp.json` 和本地 Connector 文件；这不保证 WorkBuddy 自动加载。需要时须通过 WorkBuddy 5.9.3 支持的“专家·技能·连接器”流程导入/启用，然后由当前会话实际调用 `browser_tabs` 验证。若产品不支持本地 Connector 导入或工具未出现，报告具体阻塞；不得以安装或配置文件生成声称已接通。
+把 [PROMPT.md](./PROMPT.md) 中的提示词整段发给任意具备本机命令执行能力的 AI（WorkBuddy、ZCode、Codex/ChatGPT 桌面端、Claude Code、Cursor、Windsurf、Cline、VS Code、Gemini CLI、Qwen Code、DeepSeek Harness 等）。
 
-手动 PowerShell 等效命令：
+- **还没安装 Aa Browser**：AI 会下载官方安装器，自动选择平台、校验 SHA-256、安装并启动，再写入 MCP 配置。
+- **已经下载并打开了 Aa Browser**：点新标签页的「复制接入提示词」，AI 会跳过安装，只写配置并调用 `browser_tabs` 验证。
+- **网页版 ChatGPT 等没有本机执行能力的环境**：提示词要求 AI 明确说明无法自动安装并给出手动步骤，不会假装成功。
 
-```powershell
-Invoke-WebRequest https://raw.githubusercontent.com/yuchen0x1/aa-browser/main/install.mjs -OutFile install.mjs
-node .\\install.mjs --repo yuchen0x1/aa-browser --clients workbuddy
-```
+安装器写入前会备份客户端配置，只修改 `aa-browser` 一个条目；配置指向稳定桥路径，应用升级后一般无需重写。完整平台/客户端矩阵、参数和排查见 [通用安装与接入](./docs/CONNECT.md)。
 
-### Windows 其他 MCP 客户端
+手动等效命令（AI 不可用时）：
 
 ```bash
-node install.mjs --repo yuchen0x1/aa-browser                 # 自动拉 GitHub Releases 最新版
-node install.mjs --repo yuchen0x1/aa-browser --clients zcode,cursor
+node install.mjs --repo yuchen0x1/aa-browser --verify --json   # 下载、安装、接入并验证
+node install.mjs --connect-only --verify --json                 # 已安装，只接入并验证
 ```
 
-WorkBuddy 路径尝试写入用户级 `~/.workbuddy/mcp.json` 并生成本地 Connector 包。配置写入、Connector 导入/启用、bridge 鉴权、工具调用成功是不同状态，必须分别确认；不能推断 WorkBuddy 会自动发现该 JSON，也不要改写 WorkBuddy 数据库、缓存或内部运行时文件。
+自动写入配置的客户端：ZCode、Claude Code、Cursor、Windsurf、Cline、VS Code、Gemini CLI、Qwen Code、Codex、WorkBuddy。其他客户端可用 `node install.mjs --print-config` 获取通用 MCP 配置。DeepSeek Harness 可直接安装插件市场的 Aa Browser 插件（见 [插件市场接入](./docs/MARKETPLACE.md)）。
+
+WorkBuddy 会写入用户级 `~/.workbuddy/mcp.json` 并生成本地 Connector；配置写入、Connector 导入/启用、bridge 鉴权、工具调用成功是不同状态，必须由 WorkBuddy 实际调用 `browser_tabs` 后才能报告已连接。不要改写 WorkBuddy 数据库、缓存或内部运行时文件。
 
 ### 自动更新
 
@@ -213,6 +218,7 @@ npm run dev
 | `browser_pdf` | 页面渲染为 PDF 并保存 |
 | `browser_upload_file` | 向 `<input type=file>` 上传本机文件（触发 change 事件） |
 | `browser_console` | 读取页面控制台日志 |
+| `browser_performance` | 页面性能摘要：导航耗时（TTFB / DOMContentLoaded / load）、首绘、资源体积与慢资源、JS 堆、DOM 规模（只读诊断） |
 | `browser_network_requests` | **抓包**：列出捕获的 HTTP 请求（方法/状态/类型/大小/耗时/URL，支持过滤） |
 | `browser_network_detail` | **抓包**：单个请求的完整请求/响应头 + 响应体（`body: true`） |
 | `browser_har` | **抓包**：导出 HAR 1.2 文件（可导入 DevTools/Fiddler 人工分析） |
@@ -244,7 +250,9 @@ aa-browser/
 ├── cli/
 │   ├── mcp.mjs        # stdio MCP 桥（零依赖）
 │   └── setup.mjs      # 一键接入 CLI（零依赖）
-├── scripts/           # 冒烟测试 / 实战测试 / 图标生成
+├── installer/         # 通用安装/接入提示词源文件（生成 PROMPT.md 与新标签页）
+├── packages/dsh/      # DeepSeek Harness 插件（插件市场接入）
+├── scripts/           # 冒烟测试 / 安装器与接入测试 / 图标生成
 ├── electron.vite.config.ts
 └── electron-builder.yml
 ```
@@ -253,6 +261,11 @@ aa-browser/
 
 ```bash
 npm run smoke   # 端到端冒烟：启动浏览器 → MCP 驱动 → 断言（含抓包，无外网依赖）
+npm run test:desktop   # 原生桌面回归：会话恢复、查找、快捷键、隔离会话、审批
+npm run test:stores    # 设置 / 历史 / 会话恢复记录的持久化回归
+npm run test:installer # 安装器纯函数：平台资产选择、稳定路径、digest/文件头校验
+npm run test:connect   # 对打包产物执行 --connect-only --verify --json（需先 dist）
+npm run test:updater   # 更新器状态机（模拟 provider）
 npm run validate:codex # 验证 Codex TOML 接入、保留其他配置、备份与幂等
 node scripts/live-test.mjs   # 实战示例：MCP 驱动必应搜索全流程
 ```

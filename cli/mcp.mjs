@@ -397,6 +397,19 @@ const TOOL_DEFS = [
     }
   },
   {
+    name: 'browser_performance',
+    title: '页面性能摘要',
+    description:
+      'Summarize performance metrics of the active tab: navigation timing (TTFB / DOMContentLoaded / load), First Contentful Paint, resource count and transfer size, slowest resources, JS heap usage and DOM size. Read-only diagnostics for slow pages; no DevTools needed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slowest: { type: 'number', description: 'How many slowest resources to list (default 5, max 20)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      }
+    }
+  },
+  {
     name: 'browser_network_requests',
     title: '网络请求列表（抓包）',
     description:
@@ -588,6 +601,7 @@ const TOOL_ANNOTATIONS = Object.freeze({
   browser_pdf: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   browser_upload_file: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   browser_console: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  browser_performance: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   browser_network_requests: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   browser_network_detail: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   browser_har: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -777,7 +791,10 @@ rl.on('line', (line) => {
         pending.delete(bridgeId)
         p.reject(new Error('MCP 请求已取消。'))
       }
-      try { ws?.send(JSON.stringify({ id: bridgeId, cancel: true })) } catch {}
+      // -1 是"仍在等待建立连接"的占位 id；此时没有可发送的浏览器调用。
+      if (bridgeId > 0) {
+        try { ws?.send(JSON.stringify({ id: bridgeId, cancel: true })) } catch {}
+      }
       mcpToBridge.delete(requestId)
     }
     return
@@ -820,6 +837,10 @@ rl.on('line', (line) => {
         rpcError(id, -32602, `未知工具: ${name}`)
         break
       }
+      // 先在 mcpToBridge 里占位：callTool 可能因为浏览器未运行而在
+      // await getWs() 阶段就失败；没有占位时下面的 catch 会把错误静默丢弃，
+      // 客户端就永远收不到 tools/call 的响应（DSH 中表现为挂到工具超时）。
+      mcpToBridge.set(id, -1)
       callTool(name, { ...args, __mcpId: id })
         .then((result) => {
           if (mcpToBridge.has(id)) {
@@ -828,7 +849,7 @@ rl.on('line', (line) => {
           }
         })
         .catch((err) => {
-          if (!mcpToBridge.has(id)) return
+          // 无论失败发生在「建立连接」还是「工具执行」，都必须给出响应。
           mcpToBridge.delete(id)
           // 工具级错误按 MCP 规范放在结果里（isError: true）
           rpcResult(id, {

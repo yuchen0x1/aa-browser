@@ -88,6 +88,7 @@ export const TOOL_ANNOTATIONS: Record<string, McpToolAnnotations> = {
   browser_pdf: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   browser_upload_file: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   browser_console: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  browser_performance: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   browser_network_requests: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   browser_network_detail: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   browser_har: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -102,6 +103,83 @@ export const TOOL_ANNOTATIONS: Record<string, McpToolAnnotations> = {
 
 /** 工具结果：文本内容 */
 const text = (t: string): ToolContent => ({ type: 'text', text: t })
+
+interface PerformanceResourceEntry {
+  name: string
+  type: string
+  duration: number
+  transfer: number
+  decoded: number
+}
+
+interface PerformanceSummary {
+  url: string
+  title: string
+  readyState: string
+  nav: { ttfb: number; domContentLoaded: number; load: number; transfer: number } | null
+  paints: Record<string, number>
+  resources: PerformanceResourceEntry[]
+  memory: { used: number; total: number; limit: number } | null
+  dom: { elements: number; images: number; pendingImages: number; scripts: number; stylesheets: number }
+}
+
+/** 在页面主世界采集 Performance API 指标（只读、单次表达式）。 */
+const PERFORMANCE_SCRIPT = `(() => {
+  const nav = performance.getEntriesByType('navigation')[0] || null;
+  const paints = {};
+  for (const entry of performance.getEntriesByType('paint')) paints[entry.name] = Math.round(entry.startTime);
+  let resources = [];
+  try {
+    resources = performance.getEntriesByType('resource').map((entry) => ({
+      name: entry.name,
+      type: entry.initiatorType || 'other',
+      duration: Math.round(entry.duration || 0),
+      transfer: Number(entry.transferSize || 0),
+      decoded: Number(entry.decodedBodySize || 0)
+    }));
+  } catch {}
+  let memory = null;
+  try {
+    if (performance.memory) memory = {
+      used: Number(performance.memory.usedJSHeapSize || 0),
+      total: Number(performance.memory.totalJSHeapSize || 0),
+      limit: Number(performance.memory.jsHeapSizeLimit || 0)
+    };
+  } catch {}
+  let dom = { elements: 0, images: 0, pendingImages: 0, scripts: 0, stylesheets: 0 };
+  try {
+    const images = Array.from(document.images || []);
+    dom = {
+      elements: document.getElementsByTagName('*').length,
+      images: images.length,
+      pendingImages: images.filter((image) => !image.complete).length,
+      scripts: document.scripts?.length || 0,
+      stylesheets: document.styleSheets?.length || 0
+    };
+  } catch {}
+  return {
+    url: location.href,
+    title: document.title,
+    readyState: document.readyState,
+    nav: nav ? {
+      ttfb: Math.round(nav.responseStart || 0),
+      domContentLoaded: Math.round(nav.domContentLoadedEventEnd || 0),
+      load: Math.round(nav.loadEventEnd || 0),
+      transfer: Number(nav.transferSize || 0)
+    } : null,
+    paints,
+    resources,
+    memory,
+    dom
+  };
+})()`
+
+function formatSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0B'
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(2)}MB`
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)}KB`
+  return `${Math.round(bytes)}B`
+}
 
 /** 把可选快照拼接到结果文本后 */
 function withSnap(base: string, snapshot: unknown, wantSnapshot: boolean): string {
@@ -786,6 +864,54 @@ export function buildTools(
         .map((l) => `[${l.level}] ${l.text.replace(/\s+/g, ' ').slice(0, 500)}`)
         .join('\n')
       return { content: [text(`共 ${r.logs.length} 条：\n${body}`)] }
+    }
+  })
+
+  tools.push({
+    name: 'browser_performance',
+    title: '页面性能摘要',
+    description:
+      'Summarize performance metrics of the active tab: navigation timing (TTFB / DOMContentLoaded / load), ' +
+      'First Contentful Paint, resource count and transfer size, slowest resources, JS heap usage and DOM size. ' +
+      'Read-only diagnostics: use it to explain a slow page without opening DevTools. Requires the page to be loaded.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slowest: { type: 'number', description: 'How many slowest resources to list (default 5, max 20)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      }
+    },
+    handler: async (args) => {
+      const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      const wc = tab.view.webContents
+      if (wc.isDestroyed()) throw new ActionError('页面已关闭')
+      const limit = Math.min(20, Math.max(1, Math.floor(Number(args['slowest'] ?? 5)) || 5))
+      const summary = (await wc.executeJavaScript(PERFORMANCE_SCRIPT, true)) as PerformanceSummary
+      const lines: string[] = ['页面性能摘要', `url: ${String(summary?.url ?? tab.url)}`]
+      if (summary?.title) lines.push(`title: ${summary.title}`)
+      lines.push(`文档状态: ${summary?.readyState ?? '未知'}`)
+      if (summary?.nav) {
+        lines.push(`导航: TTFB ${summary.nav.ttfb}ms | DOMContentLoaded ${summary.nav.domContentLoaded}ms | load ${summary.nav.load}ms | 文档传输 ${formatSize(summary.nav.transfer)}`)
+      } else {
+        lines.push('导航: 无 navigation timing（页面可能尚未完成导航）')
+      }
+      const paints = Object.entries(summary?.paints ?? {}).map(([name, value]) => `${name} ${value}ms`).join(' | ')
+      lines.push(`绘制: ${paints || '暂不可用'}`)
+      const resources = Array.isArray(summary?.resources) ? summary.resources : []
+      const transfer = resources.reduce((sum, entry) => sum + (Number(entry.transfer) || 0), 0)
+      const decoded = resources.reduce((sum, entry) => sum + (Number(entry.decoded) || 0), 0)
+      lines.push(`资源: ${resources.length} 个 | 传输 ${formatSize(transfer)} | 解码 ${formatSize(decoded)}`)
+      if (resources.length) {
+        const slowest = [...resources].sort((a, b) => (Number(b.duration) || 0) - (Number(a.duration) || 0)).slice(0, limit)
+        lines.push('慢资源:')
+        for (const entry of slowest) {
+          lines.push(`  ${Number(entry.duration) || 0}ms ${formatSize(Number(entry.transfer) || 0)} ${String(entry.type ?? 'other')} ${String(entry.name ?? '').slice(0, 160)}`)
+        }
+      }
+      if (summary?.memory) lines.push(`JS 堆: 使用 ${formatSize(summary.memory.used)} / 上限 ${formatSize(summary.memory.limit)}`)
+      const dom = summary?.dom ?? { elements: 0, images: 0, pendingImages: 0, scripts: 0, stylesheets: 0 }
+      lines.push(`DOM: 元素 ${dom.elements} | 图片 ${dom.images}（未完成 ${dom.pendingImages}）| 脚本 ${dom.scripts} | 样式表 ${dom.stylesheets}`)
+      return { content: [text(lines.join('\n'))] }
     }
   })
 

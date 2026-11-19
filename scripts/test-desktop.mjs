@@ -20,6 +20,7 @@ if (!process.versions.electron) {
     AA_BROWSER_CONNECTION_FILE: path.join(runDir, 'connection.json'),
     AA_BROWSER_HISTORY_DIR: path.join(runDir, 'history'),
     AA_BROWSER_SETTINGS_FILE: path.join(runDir, 'settings.json'),
+    AA_BROWSER_SESSION_FILE: path.join(runDir, 'session.json'),
     AA_BROWSER_DOWNLOAD_DIR: path.join(runDir, 'downloads'),
     AA_DESKTOP_TEST_DIR: runDir
   }
@@ -91,6 +92,19 @@ if (!process.versions.electron) {
   })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const base = `http://127.0.0.1:${server.address().port}`
+  // Cross-session restore regression: seed a previous session before the main
+  // process starts, then assert it is restored instead of a blank new tab.
+  const sessionFile = process.env.AA_BROWSER_SESSION_FILE
+  assert.ok(sessionFile, 'desktop suite needs AA_BROWSER_SESSION_FILE')
+  fs.writeFileSync(sessionFile, JSON.stringify({
+    version: 1,
+    savedAt: Date.now(),
+    activeIndex: 1,
+    tabs: [
+      { url: base + '/restored-a', title: 'Restored A' },
+      { url: base + '/restored-b', title: 'Restored B' }
+    ]
+  }))
   let chrome
   const ui = (code) => chrome.executeJavaScript(code, true)
   const state = () => ui('window.aa.getState()')
@@ -147,7 +161,16 @@ if (!process.versions.electron) {
       if (response.ok) item.resolve(response.result)
       else item.reject(new Error(response.error))
     })
-    const initial = await state()
+    const initial = await until(async () => {
+      const current = await state()
+      const urls = current.tabs.map((tab) => tab.url)
+      return urls.includes(base + '/restored-a') && urls.includes(base + '/restored-b') ? current : null
+    }, 'restored session tabs', 20_000)
+    assert.equal(initial.tabs.length, 2)
+    assert.ok(initial.tabs.some((tab) => tab.url === base + '/restored-a'), `restored tabs: ${JSON.stringify(initial.tabs.map((tab) => tab.url))}`)
+    assert.ok(initial.tabs.some((tab) => tab.url === base + '/restored-b'))
+    assert.equal(initial.tabs.find((tab) => tab.active)?.url, base + '/restored-b')
+    pass('startup restores the previous session tabs and the saved active tab')
     if (updateUi) {
       await until(async () => (await state()).update?.status === 'downloading', 'automatic update on startup/focus')
       await until(() => ui('!document.querySelector("#update-notice").hidden && document.querySelector("#btn-update-notice").textContent.includes("40%")'), 'visible download notice')
@@ -333,6 +356,15 @@ if (!process.versions.electron) {
     for (const tab of privateTabs) await ui(`window.aa.tabClose(${JSON.stringify(tab.id)})`)
     assert.equal((await state()).canReopenClosed, false)
     pass('private navigation/SPA/popup stay isolated and never enter history or restore stack')
+    await until(() => {
+      try {
+        const persisted = JSON.parse(fs.readFileSync(sessionFile, 'utf8'))
+        return persisted.tabs.some((tab) => tab.url === base + '/normal') && !persisted.tabs.some((tab) => /private/.test(tab.url))
+      } catch {
+        return false
+      }
+    }, 'session record excludes isolated tabs')
+    pass('session record persists normal tabs and never persists isolated ones')
 
     // The right-click route must preserve the same isolation policy.
     await tool('browser_tabs', { action: 'new', url: base + '/private-context', isolated: true })
