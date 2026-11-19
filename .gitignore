@@ -35,7 +35,8 @@ PROJECT_AUDIT_REPORT.md
 /mcp.local.json
 /.zcode/
 /.codex/
-/.claude/settings.local.json
+/.claude/
+/.ccgui/
 /.aabrowser/
 /userData/
 /profiles/

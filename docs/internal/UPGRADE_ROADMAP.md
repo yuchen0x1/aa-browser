@@ -637,4 +637,4 @@
 3. 以 EV-019 至 EV-030 建立性能、并发、诊断和可回放能力。
 4. 最后推进 EV-031 至 EV-040 的桌面体验、跨平台和生态工程化。
 
-本轮实际变更状态与证据见 [`UPGRADE_REPORT.md`](./UPGRADE_REPORT.md) 和 [`docs/reports/2026-11-19-round2.md`](./docs/reports/2026-11-19-round2.md)。
+本轮实际变更状态与证据见 [`UPGRADE_REPORT.md`](./UPGRADE_REPORT.md) 和 [`docs/internal/2026-11-19-round2.md`](./2026-11-19-round2.md)。

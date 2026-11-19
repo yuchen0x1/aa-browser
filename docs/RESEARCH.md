@@ -18,7 +18,7 @@
 
 ## 项目证据
 
-每行同时附默认分支源码入口、公开 Issue 或提交证据及最新 GitHub Release。源码列使用采样提交，便于复核。既有深入对标另见 [原有报告](../COMPETITOR_ANALYSIS.md)。
+每行同时附默认分支源码入口、公开 Issue 或提交证据及最新 GitHub Release。源码列使用采样提交，便于复核。既有深入对标另见 [原有报告](internal/COMPETITOR_ANALYSIS.md)。
 
 | 项目 | 方向及参考点 | 语言／许可证 | Star／Fork | 最近推送 UTC | 30／90／180 天提交 | 版本与证据 |
 | --- | --- | --- | ---: | --- | ---: | --- |
