@@ -22,14 +22,17 @@ try {
   const preload = path.join(tmp, 'mock-release-fetch.mjs')
   fs.writeFileSync(preload, `
 const mode = process.env.AA_TEST_RELEASE_DIGEST_MODE
+const isLinux = process.platform === 'linux'
+const assetName = isLinux ? 'aa-browser-0.2.0-linux-x86_64.AppImage' : 'aa-browser-setup.exe'
+const payload = isLinux ? Buffer.from('\\x7fELF\\x02\\x01\\x01\\x00fixture', 'latin1') : Buffer.from('MZ\\0\\0fixture', 'latin1')
 globalThis.fetch = async (input) => {
   const url = String(input)
-  if (url.includes('example.invalid')) return new Response(Buffer.from('MZ\\0\\0fixture', 'latin1'), { status: 200 })
+  if (url.includes('example.invalid')) return new Response(payload, { status: 200 })
   if (!url.includes('/releases/latest')) throw new Error('unexpected network request: ' + url)
   const digest = mode === 'malformed' ? 'sha256:not-a-hex-digest' : undefined
   return new Response(JSON.stringify({
     tag_name: 'v-test',
-    assets: [{ name: 'aa-browser-setup.exe', browser_download_url: 'https://example.invalid/aa-browser-setup.exe', ...(digest ? { digest } : {}) }]
+    assets: [{ name: assetName, browser_download_url: 'https://example.invalid/' + assetName, ...(digest ? { digest } : {}) }]
   }), { status: 200, headers: { 'content-type': 'application/json' } })
 }
 `, 'utf8')
@@ -42,8 +45,9 @@ globalThis.fetch = async (input) => {
     assert.match(`${result.stdout}\n${result.stderr}`, new RegExp(phrase), `${mode} digest failure should explain the reason`)
   }
 
-  const artifact = path.join(tmp, 'fake.exe')
-  fs.writeFileSync(artifact, Buffer.from('MZ\0\0fixture', 'latin1'))
+  const isLinux = process.platform === 'linux'
+  const artifact = path.join(tmp, isLinux ? 'fake.AppImage' : 'fake.exe')
+  fs.writeFileSync(artifact, isLinux ? Buffer.from('\x7fELF\x02\x01\x01\x00fixture', 'latin1') : Buffer.from('MZ\0\0fixture', 'latin1'))
   const explicit = run(['install.mjs', '--from', artifact, '--sha256', 'not-a-hex-digest', '--no-launch'])
   assert.notEqual(explicit.status, 0, 'malformed explicit --sha256 must abort installation')
   assert.match(`${explicit.stdout}\n${explicit.stderr}`, /无法识别的 SHA-256 digest 格式/)

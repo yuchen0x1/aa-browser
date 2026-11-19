@@ -105,7 +105,10 @@ function renderNewtab(html, connectPrompt) {
 
 function writeOrCheck(file, content, label) {
   const current = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : ''
-  if (current === content) {
+  // Windows checkouts commonly materialize text with CRLF while the generator
+  // emits LF. Compare normalized text so `check:prompt` is checkout-independent.
+  const normalize = (value) => value.replace(/\r\n/g, '\n')
+  if (normalize(current) === normalize(content)) {
     console.log(`✅ ${label} 已是最新`)
     return true
   }
