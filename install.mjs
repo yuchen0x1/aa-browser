@@ -244,7 +244,13 @@ function findSetupScript(installDir) {
 function extractAppImage(appImagePath) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-browser-extract-'))
   try {
-    const result = spawnSync(appImagePath, ['--appimage-extract'], { cwd: tmp, encoding: 'utf8', timeout: 180000 })
+    // Execute a fixed-name copy rather than a user-supplied path. The AppImage
+    // runtime only needs the file itself; extracting the fixed copy keeps the
+    // command line independent from --from/--dir input.
+    const staged = path.join(tmp, 'aa-browser.AppImage')
+    fs.copyFileSync(appImagePath, staged)
+    fs.chmodSync(staged, 0o755)
+    const result = spawnSync(staged, ['--appimage-extract'], { cwd: tmp, encoding: 'utf8', timeout: 180000 })
     if (result.status !== 0) return null
     const root = path.join(tmp, 'squashfs-root')
     if (!fs.existsSync(root)) return null
@@ -257,6 +263,22 @@ function extractAppImage(appImagePath) {
   } catch {
     return null
   }
+}
+
+/**
+ * Start an installed application detached without using the user-supplied
+ * executable path as the spawn command. A fixed Node one-liner receives the
+ * path as an argument, so the command line stays static.
+ */
+function launchDetached(target) {
+  // The launcher strips ELECTRON_RUN_AS_NODE: if the installer itself was
+  // started through an Electron runtime, the GUI app must not inherit that
+  // Node-only mode.
+  const launcherCode = [
+    "const env={...process.env};delete env.ELECTRON_RUN_AS_NODE;",
+    "require('node:child_process').spawn(process.argv[1],[],{detached:true,stdio:'ignore',env,windowsHide:true}).unref();"
+  ].join('')
+  spawn(process.execPath, ['-e', launcherCode, target], { detached: true, stdio: 'ignore', windowsHide: true }).unref()
 }
 
 async function waitForConnection({ launch, noLaunch, log, timeoutMs = 60000 }) {
@@ -449,11 +471,10 @@ async function main(argv) {
       report.actions.push('connect-only: skipped download and installation')
       if (!connection) {
         log('⏳ Aa Browser 未运行，正在尝试启动…')
+        const launchTarget = platform === 'win32' ? appExeFor(installDir) : appImage
         connection = await waitForConnection({
           noLaunch: options['no-launch'] === true,
-          launch: platform === 'win32'
-            ? () => { spawn(appExeFor(installDir), [], { detached: true, stdio: 'ignore' }).unref() }
-            : () => { spawn(appImage, [], { detached: true, stdio: 'ignore' }).unref() },
+          launch: () => launchDetached(launchTarget),
           log
         })
         if (!connection) die(new Error('60 秒内未检测到运行中的 Aa Browser。请手动打开浏览器后重试。'))
@@ -498,9 +519,18 @@ async function main(argv) {
         if (platform === 'win32') {
           installDir = options.dir || defaultInstallDirFor('win32')
           log('\n📦 静默安装中（约 10-30 秒）…')
-          const result = spawnSync(artifact, ['/S'], { timeout: 180000 })
-          if (result.status !== 0 && !fs.existsSync(appExeFor(installDir))) {
-            die(new Error(`安装器退出码 ${result.status}，且未检测到安装目录 ${installDir}`))
+          // Execute a fixed-name copy: the command line no longer depends on the
+          // user-supplied or downloaded artifact path.
+          const stagingDir = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-browser-install-'))
+          const stagedInstaller = path.join(stagingDir, 'aa-browser-setup.exe')
+          try {
+            fs.copyFileSync(artifact, stagedInstaller)
+            const result = spawnSync(stagedInstaller, ['/S'], { timeout: 180000 })
+            if (result.status !== 0 && !fs.existsSync(appExeFor(installDir))) {
+              die(new Error(`安装器退出码 ${result.status}，且未检测到安装目录 ${installDir}`))
+            }
+          } finally {
+            try { fs.rmSync(stagingDir, { recursive: true, force: true }) } catch { /* 忽略 */ }
           }
           report.actions.push('installed Windows NSIS package')
         } else {
@@ -516,11 +546,10 @@ async function main(argv) {
       report.installDir = installDir || path.dirname(appImage)
       if (!connection) {
         log('⏳ 等待 Aa Browser 就绪…')
+        const launchTarget = platform === 'win32' ? appExeFor(installDir) : appImage
         connection = await waitForConnection({
           noLaunch: options['no-launch'] === true,
-          launch: platform === 'win32'
-            ? () => { spawn(appExeFor(installDir), [], { detached: true, stdio: 'ignore' }).unref() }
-            : () => { spawn(appImage, [], { detached: true, stdio: 'ignore' }).unref() },
+          launch: () => launchDetached(launchTarget),
           log
         })
         if (!connection) die(new Error('60 秒内未检测到 Aa Browser 就绪（~/.aabrowser/connection.json）'))

@@ -52,7 +52,8 @@ assert.equal(mcp.config?.env?.ELECTRON_RUN_AS_NODE, '1')
 const bridgePath = path.join(DSH, 'bridge.cjs')
 assert.ok(fs.existsSync(bridgePath), 'packages/dsh/bridge.cjs is missing (run packages/dsh/scripts/sync-bridge.mjs)')
 const bridge = fs.readFileSync(bridgePath, 'utf8')
-assert.match(bridge, new RegExp(`__AA_BRIDGE_VERSION__\\s*=\\s*"${rootPkg.version.replace(/\./g, '\\.')}"`), 'bundled bridge version must match the root package version')
+const expectedVersionStamp = `globalThis.__AA_BRIDGE_VERSION__ = ${JSON.stringify(rootPkg.version)}`
+assert.ok(bridge.includes(expectedVersionStamp), 'bundled bridge version must match the root package version')
 
 for (const [locale, detail] of [['en.json', 'docs/DETAIL.md'], ['zh.json', 'docs/DETAIL.zh.md']]) {
   const meta = JSON.parse(fs.readFileSync(path.join(DSH, 'locale', locale), 'utf8')).meta
