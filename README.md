@@ -34,7 +34,7 @@ Official builds: Windows x64 (NSIS) and Linux x86_64 (AppImage), MIT licensed. I
 
 **[v0.3.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.3.0)** · 2026-11-19
 
-设置面板改为宽版分区布局，应用图标重做为透明满幅并修复白边；Agent 注入脚本的数据字面量统一加固。
+本版改善日常使用的观感与安全边界：设置面板从窄单列改成 960px 宽的分区布局，控件、排版和窗口自适应一并调整；应用图标重做为透明满幅，桌面快捷方式、任务栏和 favicon 不再出现白边；Agent 注入脚本的数据字面量统一加固，特殊字符不会再截断脚本。功能面与 MCP 工具集（34 个）保持不变。
 
 [全部发行记录](https://github.com/yuchen0x1/aa-browser/releases)
 
