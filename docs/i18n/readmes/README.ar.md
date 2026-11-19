@@ -3,7 +3,7 @@
 **متصفح سطح المكتب المصمَّم من الأساس للوكلاء — مفتوح المصدر بترخيص MIT.**
 
 <p align="center">
-  <a href="./README.md">简体中文</a> ·
+  <a href="../../../README.md">简体中文</a> ·
   <a href="./README.en.md">English</a> ·
   <a href="./README.zh-TW.md">繁體中文</a> ·
   <a href="./README.ja.md">日本語</a> ·
@@ -22,10 +22,10 @@
 > متصفح تستخدمه أنت كإنسان، ويقوده الوكيل كمهندس.
 
 <p align="center">
-  <img src="./site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
+  <img src="../../../site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
 </p>
 
-هذه **ترجمة مختصرة**. التوثيق الكامل والمرجعي مكتوب بالصينية: [README.md](./README.md) و[`docs/`](./docs).
+هذه **ترجمة مختصرة**. التوثيق الكامل والمرجعي مكتوب بالصينية: [README.md](../../../README.md) و[`docs/`](../../).
 
 ## ما هو
 
@@ -76,7 +76,7 @@ title: 搜索 - Microsoft 必应
 
 ### أمر واحد (موصى به)
 
-أرسل الأمر النصي الموجود في [PROMPT.md](./PROMPT.md) إلى أي ذكاء اصطناعي قادر على تنفيذ أوامر محلية. إذا لم يكن Aa Browser مثبتًا بعد، فإنه ينزّل المثبّت الرسمي ويتحقق من SHA-256 ويثبّت ويشغّل ويكتب إعداد MCP ويستدعي `browser_tabs` فعليًا للتحقق. وإذا كان Aa Browser يعمل بالفعل، فإنه يكتب الإعداد فقط ثم يتحقق منه.
+أرسل الأمر النصي الموجود في [PROMPT.md](../../../PROMPT.md) إلى أي ذكاء اصطناعي قادر على تنفيذ أوامر محلية. إذا لم يكن Aa Browser مثبتًا بعد، فإنه ينزّل المثبّت الرسمي ويتحقق من SHA-256 ويثبّت ويشغّل ويكتب إعداد MCP ويستدعي `browser_tabs` فعليًا للتحقق. وإذا كان Aa Browser يعمل بالفعل، فإنه يكتب الإعداد فقط ثم يتحقق منه.
 
 ```bash
 node install.mjs --repo yuchen0x1/aa-browser --verify --json   # download, verify, install, connect, verify
@@ -102,7 +102,7 @@ chmod u+x ~/Applications/AaBrowser.AppImage
 ~/Applications/AaBrowser.AppImage
 ```
 
-بدون FUSE شغّله بـ `APPIMAGE_EXTRACT_AND_RUN=1 ~/Applications/AaBrowser.AppImage`. راجع [دليل المنصّات](./docs/PLATFORMS.md) لحالة كل توزيعة وخطوات الاستعادة.
+بدون FUSE شغّله بـ `APPIMAGE_EXTRACT_AND_RUN=1 ~/Applications/AaBrowser.AppImage`. راجع [دليل المنصّات](../../../docs/PLATFORMS.md) لحالة كل توزيعة وخطوات الاستعادة.
 
 ### من الشيفرة المصدرية
 
@@ -147,7 +147,7 @@ npm start          # launch the built app
 | الشبكة وMock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
 | التشخيص وعلامات التبويب | `browser_performance`, `browser_resize`, `browser_tabs` |
 
-السلوك المشترك: معظم الأدوات تُعيد لقطة مع نتيجتها (`snapshot: false` يتخطاها)، وكل أداة عدا `browser_resize` و`browser_downloads` تقبل `tabId`، وينتهي الاستدعاء الواحد بمهلة بعد 180 ثانية، وتنتظر الموافقة حتى 120 ثانية، وتُعقَّم تفاصيل الشبكة افتراضيًا. الدليل الكامل للأدوات في [site/tools.html](./site/tools.html).
+السلوك المشترك: معظم الأدوات تُعيد لقطة مع نتيجتها (`snapshot: false` يتخطاها)، وكل أداة عدا `browser_resize` و`browser_downloads` تقبل `tabId`، وينتهي الاستدعاء الواحد بمهلة بعد 180 ثانية، وتنتظر الموافقة حتى 120 ثانية، وتُعقَّم تفاصيل الشبكة افتراضيًا. الدليل الكامل للأدوات في [site/tools.html](../../../site/tools.html).
 
 ## الأمان
 
@@ -160,7 +160,7 @@ npm start          # launch the built app
 - تستخدم علامات التبويب المعزولة قسم جلسة منفصلًا: بلا مشاركة ملفات تعريف الارتباط أو جلسات الدخول، وتُمسح عند الإغلاق، وتُستبعد من السجل العام وقائمة المغلقة حديثًا واستعادة الجلسة.
 - **الحدود**: يستطيع الوكيل رؤية محتوى الصفحة وحركة الشبكة، بما في ذلك ملفات تعريف الارتباط والتخزين والترويسات وأجسام الاستجابات. هذه الضوابط تخفيف للمخاطر وليست DLP عامًا — لا توجّه وكيلًا غير موثوق إلى مواقع عالية الحساسية.
 
-أبلغ عن الثغرات عبر الإبلاغ الخاص في [SECURITY.md](./SECURITY.md)، ولا تفعل ذلك في issue عام أبدًا.
+أبلغ عن الثغرات عبر الإبلاغ الخاص في [SECURITY.md](../../../SECURITY.md)، ولا تفعل ذلك في issue عام أبدًا.
 
 ## المنصّات والحدود
 
@@ -186,18 +186,18 @@ npm start          # launch the built app
 
 | المستند | المحتوى |
 | --- | --- |
-| [docs/CONNECT.md](./docs/CONNECT.md) | مصفوفة المنصّات والعملاء، وخيارات المثبّت، والخطوات اليدوية، واستكشاف الأخطاء |
-| [docs/PLATFORMS.md](./docs/PLATFORMS.md) | مصفوفة الإصدارات، وتبعيات Linux، وإزالة التثبيت واستعادة البيانات |
-| [docs/AUTO_UPDATE.md](./docs/AUTO_UPDATE.md) | فحص التحديث والتنزيل وإعادة التشغيل للتثبيت وSHA-512 والتراجع |
-| [docs/MARKETPLACE.md](./docs/MARKETPLACE.md) | تثبيت إضافة DeepSeek Harness والتحقق منها |
-| [docs/MAINTENANCE.md](./docs/MAINTENANCE.md) | أدلة الإصدار وسجلات الاختبارات وحدود الصيانة |
-| [ملاحظات الإصدار](./docs/releases/release-notes.md) / [CHANGELOG](./CHANGELOG.md) | سجل التغييرات حسب الإصدار |
-| [site/tools.html](./site/tools.html) | الدليل الكامل للأدوات الـ34 (يُفتح محليًا دون حاجة إلى نشر) |
+| [docs/CONNECT.md](../../../docs/CONNECT.md) | مصفوفة المنصّات والعملاء، وخيارات المثبّت، والخطوات اليدوية، واستكشاف الأخطاء |
+| [docs/PLATFORMS.md](../../../docs/PLATFORMS.md) | مصفوفة الإصدارات، وتبعيات Linux، وإزالة التثبيت واستعادة البيانات |
+| [docs/AUTO_UPDATE.md](../../../docs/AUTO_UPDATE.md) | فحص التحديث والتنزيل وإعادة التشغيل للتثبيت وSHA-512 والتراجع |
+| [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | تثبيت إضافة DeepSeek Harness والتحقق منها |
+| [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | أدلة الإصدار وسجلات الاختبارات وحدود الصيانة |
+| [ملاحظات الإصدار](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | سجل التغييرات حسب الإصدار |
+| [site/tools.html](../../../site/tools.html) | الدليل الكامل للأدوات الـ34 (يُفتح محليًا دون حاجة إلى نشر) |
 
 ## المساهمة والترخيص
 
-نرحّب بتقارير الأخطاء ونقاشات الميزات وتصحيحات التوثيق وطلبات السحب (PR) — يُرجى قراءة [CONTRIBUTING.md](./CONTRIBUTING.md) أولًا. وعند إضافة أداة MCP، حدّث `src/main/tools.ts` و`cli/mcp.mjs` وجدول الأدوات في هذا الملف و`site/tools.html` معًا؛ ويتحقق `npm run check` من بقاء الثلاثة الأولى متزامنة.
+نرحّب بتقارير الأخطاء ونقاشات الميزات وتصحيحات التوثيق وطلبات السحب (PR) — يُرجى قراءة [CONTRIBUTING.md](../../../CONTRIBUTING.md) أولًا. وعند إضافة أداة MCP، حدّث `src/main/tools.ts` و`cli/mcp.mjs` وجدول الأدوات في هذا الملف و`site/tools.html` معًا؛ ويتحقق `npm run check` من بقاء الثلاثة الأولى متزامنة.
 
-MIT licensed — راجع [LICENSE](./LICENSE) © Aa Browser contributors.
+MIT licensed — راجع [LICENSE](../../../LICENSE) © Aa Browser contributors.
 
-قد تتأخر هذه الترجمة عن النص الصيني الأصلي. تُصان ترجمات هذا الملف في [README.md](./README.md) (简体中文) إضافةً إلى ملفات `README.<language>.md`؛ والقائمة الكاملة في `docs/i18n/readme-languages.json`.
+قد تتأخر هذه الترجمة عن النص الصيني الأصلي. تُصان ترجمات هذا الملف في [README.md](../../../README.md) (简体中文) إضافةً إلى ملفات `docs/i18n/readmes/README.<language>.md`؛ والقائمة الكاملة في `../readme-languages.json`.

@@ -3,7 +3,7 @@
 **為 AI Agent 而生的桌面瀏覽器 —— 開源、MIT 授權。**
 
 <p align="center">
-  <a href="./README.md">简体中文</a> ·
+  <a href="../../../README.md">简体中文</a> ·
   <a href="./README.en.md">English</a> ·
   <b>繁體中文</b> ·
   <a href="./README.ja.md">日本語</a> ·
@@ -22,10 +22,10 @@
 > 人像人一樣瀏覽網頁，Agent 像工程師一樣驅動它。
 
 <p align="center">
-  <img src="./site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
+  <img src="../../../site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
 </p>
 
-這是**精簡導讀**。完整、權威的文件以中文撰寫：[README.md](./README.md) 與 [`docs/`](./docs)。
+這是**精簡導讀**。完整、權威的文件以中文撰寫：[README.md](../../../README.md) 與 [`docs/`](../../)。
 
 ## 這是什麼
 
@@ -76,7 +76,7 @@ Agent 隨後對某個 `ref` 執行動作：
 
 ### 一句提示詞（建議）
 
-把 [PROMPT.md](./PROMPT.md) 中的提示詞送給任何能執行本機指令的 AI。若 Aa Browser 尚未安裝，它會下載官方安裝程式、驗證 SHA-256、安裝、啟動、寫入 MCP 設定，並實際呼叫 `browser_tabs` 驗證。若 Aa Browser 已在執行，則只寫入設定並驗證。
+把 [PROMPT.md](../../../PROMPT.md) 中的提示詞送給任何能執行本機指令的 AI。若 Aa Browser 尚未安裝，它會下載官方安裝程式、驗證 SHA-256、安裝、啟動、寫入 MCP 設定，並實際呼叫 `browser_tabs` 驗證。若 Aa Browser 已在執行，則只寫入設定並驗證。
 
 ```bash
 node install.mjs --repo yuchen0x1/aa-browser --verify --json   # download, verify, install, connect, verify
@@ -102,7 +102,7 @@ chmod u+x ~/Applications/AaBrowser.AppImage
 ~/Applications/AaBrowser.AppImage
 ```
 
-沒有 FUSE 時，改用 `APPIMAGE_EXTRACT_AND_RUN=1 ~/Applications/AaBrowser.AppImage` 啟動。各發行版的支援狀態與修復步驟見[平台指南](./docs/PLATFORMS.md)。
+沒有 FUSE 時，改用 `APPIMAGE_EXTRACT_AND_RUN=1 ~/Applications/AaBrowser.AppImage` 啟動。各發行版的支援狀態與修復步驟見[平台指南](../../../docs/PLATFORMS.md)。
 
 ### 從原始碼建置
 
@@ -147,7 +147,7 @@ npm start          # launch the built app
 | 網路與 Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
 | 診斷與分頁 | `browser_performance`, `browser_resize`, `browser_tabs` |
 
-共用行為：多數工具會隨結果回傳一份快照（`snapshot: false` 可跳過），除 `browser_resize` 與 `browser_downloads` 外所有工具都接受 `tabId`，單次呼叫 180 秒後逾時，審批最多等待 120 秒，網路詳情預設脫敏。完整的工具手冊見 [site/tools.html](./site/tools.html)。
+共用行為：多數工具會隨結果回傳一份快照（`snapshot: false` 可跳過），除 `browser_resize` 與 `browser_downloads` 外所有工具都接受 `tabId`，單次呼叫 180 秒後逾時，審批最多等待 120 秒，網路詳情預設脫敏。完整的工具手冊見 [site/tools.html](../../../site/tools.html)。
 
 ## 安全性
 
@@ -160,7 +160,7 @@ npm start          # launch the built app
 - 隔離分頁使用獨立的 session 分割區：不共用 Cookie 與登入狀態，關閉時清除，且不計入全域歷史、最近關閉清單與工作階段還原。
 - **邊界**：Agent 能看到頁面內容與流量，包括 Cookie、儲存空間、標頭與回應內容。這些控制是緩解措施，不是通用 DLP —— 不要讓不受信任的 Agent 造訪高敏感站點。
 
-請透過 [SECURITY.md](./SECURITY.md) 的私密回報管道通報漏洞，切勿在公開 issue 中提出。
+請透過 [SECURITY.md](../../../SECURITY.md) 的私密回報管道通報漏洞，切勿在公開 issue 中提出。
 
 ## 平台與限制
 
@@ -186,18 +186,18 @@ npm start          # launch the built app
 
 | 文件 | 內容 |
 | --- | --- |
-| [docs/CONNECT.md](./docs/CONNECT.md) | 平台與用戶端矩陣、安裝程式參數、手動步驟、疑難排解 |
-| [docs/PLATFORMS.md](./docs/PLATFORMS.md) | 發行矩陣、Linux 相依套件、解除安裝與資料還原 |
-| [docs/AUTO_UPDATE.md](./docs/AUTO_UPDATE.md) | 更新檢查、下載、重新啟動安裝、SHA-512 與回滾 |
-| [docs/MARKETPLACE.md](./docs/MARKETPLACE.md) | DeepSeek Harness 外掛安裝與驗證 |
-| [docs/MAINTENANCE.md](./docs/MAINTENANCE.md) | 發行證據、回歸紀錄與維護邊界 |
-| [版本說明](./docs/releases/release-notes.md) / [CHANGELOG](./CHANGELOG.md) | 各版本的變更歷史 |
-| [site/tools.html](./site/tools.html) | 完整的 34 工具手冊（本機開啟，無須部署） |
+| [docs/CONNECT.md](../../../docs/CONNECT.md) | 平台與用戶端矩陣、安裝程式參數、手動步驟、疑難排解 |
+| [docs/PLATFORMS.md](../../../docs/PLATFORMS.md) | 發行矩陣、Linux 相依套件、解除安裝與資料還原 |
+| [docs/AUTO_UPDATE.md](../../../docs/AUTO_UPDATE.md) | 更新檢查、下載、重新啟動安裝、SHA-512 與回滾 |
+| [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | DeepSeek Harness 外掛安裝與驗證 |
+| [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | 發行證據、回歸紀錄與維護邊界 |
+| [版本說明](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | 各版本的變更歷史 |
+| [site/tools.html](../../../site/tools.html) | 完整的 34 工具手冊（本機開啟，無須部署） |
 
 ## 參與貢獻與授權
 
-歡迎回報 bug、討論功能、修正文件與提交 PR —— 開始前請先讀 [CONTRIBUTING.md](./CONTRIBUTING.md)。新增 MCP 工具時，請一併更新 `src/main/tools.ts`、`cli/mcp.mjs`、本 README 的工具表以及 `site/tools.html`；`npm run check` 會檢查前三者是否保持一致。
+歡迎回報 bug、討論功能、修正文件與提交 PR —— 開始前請先讀 [CONTRIBUTING.md](../../../CONTRIBUTING.md)。新增 MCP 工具時，請一併更新 `src/main/tools.ts`、`cli/mcp.mjs`、本 README 的工具表以及 `site/tools.html`；`npm run check` 會檢查前三者是否保持一致。
 
-MIT licensed —— 詳見 [LICENSE](./LICENSE) © Aa Browser contributors。
+MIT licensed —— 詳見 [LICENSE](../../../LICENSE) © Aa Browser contributors。
 
-本譯文可能落後於中文原文。本 README 的翻譯維護於 [README.md](./README.md)（简体中文）與 `README.<language>.md`；完整清單見 `docs/i18n/readme-languages.json`。
+本譯文可能落後於中文原文。本 README 的翻譯維護於 [README.md](../../../README.md)（简体中文）與 `docs/i18n/readmes/README.<language>.md`；完整清單見 `../readme-languages.json`。

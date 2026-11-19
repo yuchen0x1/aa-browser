@@ -3,7 +3,7 @@
 **Der agent-native Desktop-Browser — Open Source, MIT-lizenziert.**
 
 <p align="center">
-  <a href="./README.md">简体中文</a> ·
+  <a href="../../../README.md">简体中文</a> ·
   <a href="./README.en.md">English</a> ·
   <a href="./README.zh-TW.md">繁體中文</a> ·
   <a href="./README.ja.md">日本語</a> ·
@@ -22,10 +22,10 @@
 > Ein Browser, den du wie ein Mensch benutzt und den ein Agent wie ein Ingenieur steuert.
 
 <p align="center">
-  <img src="./site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
+  <img src="../../../site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
 </p>
 
-Dies ist eine **gekürzte Übersetzung**. Die vollständige, maßgebliche Dokumentation ist auf Chinesisch verfasst: [README.md](./README.md) und [`docs/`](./docs).
+Dies ist eine **gekürzte Übersetzung**. Die vollständige, maßgebliche Dokumentation ist auf Chinesisch verfasst: [README.md](../../../README.md) und [`docs/`](../../).
 
 ## Was es ist
 
@@ -76,7 +76,7 @@ Nach einer Aktion erhältst du einen **inkrementellen Snapshot** — nur die ge�
 
 ### Ein Prompt (empfohlen)
 
-Sende den Prompt aus [PROMPT.md](./PROMPT.md) an jede KI, die lokale Befehle ausführen kann. Ist Aa Browser noch nicht installiert, lädt sie das offizielle Installationsprogramm herunter, prüft die SHA-256-Summe, installiert, startet, schreibt die MCP-Konfiguration und ruft tatsächlich `browser_tabs` auf, um zu verifizieren. Läuft Aa Browser bereits, schreibt sie nur die Konfiguration und verifiziert.
+Sende den Prompt aus [PROMPT.md](../../../PROMPT.md) an jede KI, die lokale Befehle ausführen kann. Ist Aa Browser noch nicht installiert, lädt sie das offizielle Installationsprogramm herunter, prüft die SHA-256-Summe, installiert, startet, schreibt die MCP-Konfiguration und ruft tatsächlich `browser_tabs` auf, um zu verifizieren. Läuft Aa Browser bereits, schreibt sie nur die Konfiguration und verifiziert.
 
 ```bash
 node install.mjs --repo yuchen0x1/aa-browser --verify --json   # download, verify, install, connect, verify
@@ -102,7 +102,7 @@ chmod u+x ~/Applications/AaBrowser.AppImage
 ~/Applications/AaBrowser.AppImage
 ```
 
-Ohne FUSE startest du sie mit `APPIMAGE_EXTRACT_AND_RUN=1 ~/Applications/AaBrowser.AppImage`. Distributionsspezifischen Status und Wiederherstellungsschritte findest du im [Plattform-Leitfaden](./docs/PLATFORMS.md).
+Ohne FUSE startest du sie mit `APPIMAGE_EXTRACT_AND_RUN=1 ~/Applications/AaBrowser.AppImage`. Distributionsspezifischen Status und Wiederherstellungsschritte findest du im [Plattform-Leitfaden](../../../docs/PLATFORMS.md).
 
 ### Aus dem Quellcode
 
@@ -147,7 +147,7 @@ Eine geschriebene Konfiguration ist **keine** funktionierende Verbindung. Verifi
 | Netzwerk & Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
 | Diagnose & Tabs | `browser_performance`, `browser_resize`, `browser_tabs` |
 
-Gemeinsames Verhalten: Die meisten Tools geben zusammen mit ihrem Ergebnis einen Snapshot zurück (`snapshot: false` überspringt ihn), jedes Tool außer `browser_resize` und `browser_downloads` akzeptiert eine `tabId`, ein einzelner Aufruf läuft nach 180 Sekunden in einen Timeout, eine Freigabe wartet bis zu 120 Sekunden, und Netzwerkdetails werden standardmäßig redigiert. Das vollständige Tool-Handbuch steht in [site/tools.html](./site/tools.html).
+Gemeinsames Verhalten: Die meisten Tools geben zusammen mit ihrem Ergebnis einen Snapshot zurück (`snapshot: false` überspringt ihn), jedes Tool außer `browser_resize` und `browser_downloads` akzeptiert eine `tabId`, ein einzelner Aufruf läuft nach 180 Sekunden in einen Timeout, eine Freigabe wartet bis zu 120 Sekunden, und Netzwerkdetails werden standardmäßig redigiert. Das vollständige Tool-Handbuch steht in [site/tools.html](../../../site/tools.html).
 
 ## Sicherheit
 
@@ -160,7 +160,7 @@ Gemeinsames Verhalten: Die meisten Tools geben zusammen mit ihrem Ergebnis einen
 - Isolierte Tabs nutzen eine eigene Session-Partition: keine gemeinsamen Cookies oder Anmeldungen, beim Schließen gelöscht und vom globalen Verlauf, der Liste zuletzt geschlossener Tabs und der Sitzungswiederherstellung ausgeschlossen.
 - **Grenze**: Ein Agent kann Seiteninhalte und Datenverkehr sehen, einschließlich Cookies, Storage, Headern und Antwortkörpern. Diese Kontrollen sind Minderungsmaßnahmen, kein allgemeines DLP — richte keinen nicht vertrauenswürdigen Agenten auf hochsensible Websites.
 
-Melde Schwachstellen über die private Meldung in [SECURITY.md](./SECURITY.md), niemals in einem öffentlichen Issue.
+Melde Schwachstellen über die private Meldung in [SECURITY.md](../../../SECURITY.md), niemals in einem öffentlichen Issue.
 
 ## Plattformen und Grenzen
 
@@ -186,18 +186,18 @@ Die ausführliche Dokumentation ist derzeit auf Chinesisch verfügbar:
 
 | Dokument | Inhalt |
 | --- | --- |
-| [docs/CONNECT.md](./docs/CONNECT.md) | Plattform- und Client-Matrix, Installer-Flags, manuelle Schritte, Fehlerbehebung |
-| [docs/PLATFORMS.md](./docs/PLATFORMS.md) | Release-Matrix, Linux-Abhängigkeiten, Deinstallation und Datenwiederherstellung |
-| [docs/AUTO_UPDATE.md](./docs/AUTO_UPDATE.md) | Update-Prüfung, Download, Neustart zum Installieren, SHA-512 und Rollback |
-| [docs/MARKETPLACE.md](./docs/MARKETPLACE.md) | Installation und Verifikation des DeepSeek-Harness-Plugins |
-| [docs/MAINTENANCE.md](./docs/MAINTENANCE.md) | Release-Nachweise, Regressionsprotokolle und Wartungsgrenzen |
-| [Versionshinweise](./docs/releases/release-notes.md) / [CHANGELOG](./CHANGELOG.md) | Änderungsverlauf je Version |
-| [site/tools.html](./site/tools.html) | Vollständiges Handbuch der 34 Tools (lokal öffnen, kein Deployment nötig) |
+| [docs/CONNECT.md](../../../docs/CONNECT.md) | Plattform- und Client-Matrix, Installer-Flags, manuelle Schritte, Fehlerbehebung |
+| [docs/PLATFORMS.md](../../../docs/PLATFORMS.md) | Release-Matrix, Linux-Abhängigkeiten, Deinstallation und Datenwiederherstellung |
+| [docs/AUTO_UPDATE.md](../../../docs/AUTO_UPDATE.md) | Update-Prüfung, Download, Neustart zum Installieren, SHA-512 und Rollback |
+| [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | Installation und Verifikation des DeepSeek-Harness-Plugins |
+| [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | Release-Nachweise, Regressionsprotokolle und Wartungsgrenzen |
+| [Versionshinweise](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | Änderungsverlauf je Version |
+| [site/tools.html](../../../site/tools.html) | Vollständiges Handbuch der 34 Tools (lokal öffnen, kein Deployment nötig) |
 
 ## Mitwirken und Lizenz
 
-Fehlerberichte, Funktionsdiskussionen, Dokumentationskorrekturen und PRs sind willkommen — bitte lies zuerst [CONTRIBUTING.md](./CONTRIBUTING.md). Wenn du ein MCP-Tool hinzufügst, aktualisiere `src/main/tools.ts`, `cli/mcp.mjs`, die Tool-Tabelle in dieser README und `site/tools.html` gemeinsam; `npm run check` prüft, dass die ersten drei synchron bleiben.
+Fehlerberichte, Funktionsdiskussionen, Dokumentationskorrekturen und PRs sind willkommen — bitte lies zuerst [CONTRIBUTING.md](../../../CONTRIBUTING.md). Wenn du ein MCP-Tool hinzufügst, aktualisiere `src/main/tools.ts`, `cli/mcp.mjs`, die Tool-Tabelle in dieser README und `site/tools.html` gemeinsam; `npm run check` prüft, dass die ersten drei synchron bleiben.
 
-MIT licensed — siehe [LICENSE](./LICENSE) © Aa Browser contributors.
+MIT licensed — siehe [LICENSE](../../../LICENSE) © Aa Browser contributors.
 
-Diese Übersetzung kann hinter dem chinesischen Original zurückbleiben. Übersetzungen dieser README werden in [README.md](./README.md) (简体中文) sowie `README.<Sprache>.md` gepflegt; die vollständige Liste findest du in `docs/i18n/readme-languages.json`.
+Diese Übersetzung kann hinter dem chinesischen Original zurückbleiben. Übersetzungen dieser README werden in [README.md](../../../README.md) (简体中文) sowie `README.<Sprache>.md` gepflegt; die vollständige Liste findest du in `../readme-languages.json`.

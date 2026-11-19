@@ -30,12 +30,12 @@ const REQUIRED_TOKENS = [
   '127.0.0.1',
   '34',
   'MIT',
-  './PROMPT.md',
-  './docs/CONNECT.md',
-  './docs/PLATFORMS.md',
-  './LICENSE',
-  './SECURITY.md',
-  './CONTRIBUTING.md',
+  'PROMPT.md',
+  'docs/CONNECT.md',
+  'docs/PLATFORMS.md',
+  'LICENSE',
+  'SECURITY.md',
+  'CONTRIBUTING.md',
   // 安装与构建命令
   'git clone',
   'npm ci',
@@ -101,12 +101,21 @@ for (const item of languages) {
   if (item.dir && item.dir !== 'ltr' && item.dir !== 'rtl') {
     fail(MANIFEST, `${item.code}: dir 只能是 ltr 或 rtl，实际 ${item.dir}`)
   }
-  if (item.file && !/^README(\.[A-Za-z-]+)?\.md$/.test(item.file)) {
-    fail(MANIFEST, `${item.code}: 文件名应形如 README.md 或 README.<lang>.md，实际 ${item.file}`)
+  if (item.file) {
+    const validRootReadme = /^README(\.[A-Za-z-]+)?\.md$/.test(item.file)
+    const validTranslationReadme = /^docs\/i18n\/readmes\/README\.[A-Za-z-]+\.md$/.test(item.file)
+    if (!validRootReadme && !validTranslationReadme) {
+      fail(MANIFEST, `${item.code}: file 必须是 README.md 或 docs/i18n/readmes/README.<lang>.md，实际 ${item.file}`)
+    }
   }
 }
 
 const files = new Set(languages.map((item) => item.file))
+
+function relativeHref(fromFile, targetFile) {
+  const relative = path.posix.relative(path.posix.dirname(fromFile), targetFile)
+  return relative.startsWith('.') ? relative : `./${relative}`
+}
 
 // ---- 2. 逐个语言文件检查 ----
 for (const lang of languages) {
@@ -130,13 +139,15 @@ for (const lang of languages) {
     }
     for (const other of languages) {
       if (other.code === lang.code) continue
-      const link = `<a href="./${other.file}">${other.nativeName}</a>`
+      const href = relativeHref(lang.file, other.file)
+      const link = `<a href="${href}">${other.nativeName}</a>`
       if (!body.includes(link)) fail(lang.file, `语言栏缺少条目：${link}`)
     }
-    // 反向：语言栏里不应出现清单之外的语言链接
-    for (const [, href] of body.matchAll(/<a href="(\.\/README[^"]*\.md)"/g)) {
-      const target = href.replace('./', '')
-      if (!files.has(target)) fail(lang.file, `语言栏链接不在清单中：${href}`)
+    // 反向：语言栏中的每个相对路径都必须解析到已登记语言文件
+    for (const [, href] of body.matchAll(/<a href="([^"]+\.md)"/g)) {
+      if (/^[a-z]+:\/\//i.test(href)) continue
+      const target = path.posix.normalize(path.posix.join(path.posix.dirname(lang.file), href))
+      if (!files.has(target)) fail(lang.file, `语言栏链接不在清单中：${href} -> ${target}`)
     }
   }
 
@@ -148,18 +159,30 @@ for (const lang of languages) {
 
   // 相对链接可达性
   const localLinks = new Set()
-  for (const [, target] of text.matchAll(/\]\((\.\/[^)\s]+)\)/g)) localLinks.add(target)
-  for (const [, target] of text.matchAll(/<img[^>]+src="(\.\/[^"]+)"/g)) localLinks.add(target)
+  for (const [, target] of text.matchAll(/\]\(((?:\.\/|\.\.\/)[^)\s]+)\)/g)) localLinks.add(target)
+  for (const [, target] of text.matchAll(/<img[^>]+src="((?:\.\/|\.\.\/)[^"]+)"/g)) localLinks.add(target)
   for (const link of localLinks) {
-    const clean = decodeURI(link.replace(/^\.\//, '').split('#')[0])
-    if (!fs.existsSync(path.join(ROOT, clean))) fail(lang.file, `相对链接指向不存在的路径：${link}`)
+    const clean = decodeURI(link.split('#')[0])
+    const absolute = path.resolve(ROOT, path.dirname(lang.file), clean)
+    if (!absolute.startsWith(`${ROOT}${path.sep}`) && absolute !== ROOT) {
+      fail(lang.file, `相对链接越出仓库：${link}`)
+    } else if (!fs.existsSync(absolute)) {
+      fail(lang.file, `相对链接指向不存在的路径：${link}`)
+    }
   }
 }
 
 // ---- 3. 清单与磁盘上的 README 语言文件互相对齐 ----
-const onDisk = fs
+const translationDir = path.join(ROOT, 'docs', 'i18n', 'readmes')
+const rootReadmes = fs
   .readdirSync(ROOT)
   .filter((name) => /^README(\.[A-Za-z-]+)?\.md$/.test(name))
+const translatedReadmes = fs.existsSync(translationDir)
+  ? fs.readdirSync(translationDir)
+      .filter((name) => /^README\.[A-Za-z-]+\.md$/.test(name))
+      .map((name) => path.posix.join('docs/i18n/readmes', name))
+  : []
+const onDisk = [...rootReadmes, ...translatedReadmes]
 const untracked = onDisk.filter((name) => !files.has(name))
 for (const name of untracked) fail(name, `磁盘上存在多语言 README，但未登记在 ${MANIFEST}`)
 

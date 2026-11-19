@@ -3,7 +3,7 @@
 **에이전트를 위한 데스크톱 브라우저 — 오픈 소스, MIT 라이선스.**
 
 <p align="center">
-  <a href="./README.md">简体中文</a> ·
+  <a href="../../../README.md">简体中文</a> ·
   <a href="./README.en.md">English</a> ·
   <a href="./README.zh-TW.md">繁體中文</a> ·
   <a href="./README.ja.md">日本語</a> ·
@@ -22,10 +22,10 @@
 > 사람은 사람처럼 브라우징하고, 에이전트는 엔지니어처럼 구동한다.
 
 <p align="center">
-  <img src="./site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
+  <img src="../../../site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
 </p>
 
-이 문서는 **요약 번역본**입니다. 완전하고 권위 있는 문서는 중국어로 작성되어 있습니다: [README.md](./README.md)와 [`docs/`](./docs).
+이 문서는 **요약 번역본**입니다. 완전하고 권위 있는 문서는 중국어로 작성되어 있습니다: [README.md](../../../README.md)와 [`docs/`](../../).
 
 ## 이것은 무엇인가
 
@@ -76,7 +76,7 @@ title: 搜索 - Microsoft 必应
 
 ### 프롬프트 하나 (권장)
 
-[PROMPT.md](./PROMPT.md)의 프롬프트를 로컬 명령을 실행할 수 있는 어떤 AI에게든 보내세요. Aa Browser가 아직 설치되지 않았다면 공식 설치 프로그램을 내려받아 SHA-256을 검증하고 설치, 실행, MCP 설정 작성을 수행한 뒤 `browser_tabs`를 실제로 호출해 검증합니다. 이미 실행 중이라면 설정만 작성하고 검증합니다.
+[PROMPT.md](../../../PROMPT.md)의 프롬프트를 로컬 명령을 실행할 수 있는 어떤 AI에게든 보내세요. Aa Browser가 아직 설치되지 않았다면 공식 설치 프로그램을 내려받아 SHA-256을 검증하고 설치, 실행, MCP 설정 작성을 수행한 뒤 `browser_tabs`를 실제로 호출해 검증합니다. 이미 실행 중이라면 설정만 작성하고 검증합니다.
 
 ```bash
 node install.mjs --repo yuchen0x1/aa-browser --verify --json   # download, verify, install, connect, verify
@@ -102,7 +102,7 @@ chmod u+x ~/Applications/AaBrowser.AppImage
 ~/Applications/AaBrowser.AppImage
 ```
 
-FUSE가 없다면 `APPIMAGE_EXTRACT_AND_RUN=1 ~/Applications/AaBrowser.AppImage`로 실행하세요. 배포판별 상태와 복구 단계는 [플랫폼 가이드](./docs/PLATFORMS.md)를 참고하세요.
+FUSE가 없다면 `APPIMAGE_EXTRACT_AND_RUN=1 ~/Applications/AaBrowser.AppImage`로 실행하세요. 배포판별 상태와 복구 단계는 [플랫폼 가이드](../../../docs/PLATFORMS.md)를 참고하세요.
 
 ### 소스에서 실행
 
@@ -147,7 +147,7 @@ npm start          # launch the built app
 | 네트워크와 Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
 | 진단과 탭 | `browser_performance`, `browser_resize`, `browser_tabs` |
 
-공통 동작: 대부분의 도구는 결과와 함께 스냅샷을 반환합니다(`snapshot: false`로 생략). `browser_resize`와 `browser_downloads`를 제외한 모든 도구는 `tabId`를 받으며, 단일 호출은 180초 후 시간 초과되고, 승인은 최대 120초 대기하며, 네트워크 세부 정보는 기본적으로 마스킹됩니다. 전체 도구 설명서는 [site/tools.html](./site/tools.html)에 있습니다.
+공통 동작: 대부분의 도구는 결과와 함께 스냅샷을 반환합니다(`snapshot: false`로 생략). `browser_resize`와 `browser_downloads`를 제외한 모든 도구는 `tabId`를 받으며, 단일 호출은 180초 후 시간 초과되고, 승인은 최대 120초 대기하며, 네트워크 세부 정보는 기본적으로 마스킹됩니다. 전체 도구 설명서는 [site/tools.html](../../../site/tools.html)에 있습니다.
 
 ## 보안
 
@@ -160,7 +160,7 @@ npm start          # launch the built app
 - 격리 탭은 별도 세션 파티션을 사용합니다: 쿠키와 로그인을 공유하지 않고, 닫으면 삭제되며, 전역 기록, 최근 닫은 항목 목록, 세션 복원에서 제외됩니다.
 - **경계**: 에이전트는 쿠키, 스토리지, 헤더, 응답 본문을 포함한 페이지 내용과 트래픽을 볼 수 있습니다. 이러한 제어는 완화 수단이며 범용 DLP가 아닙니다 — 신뢰할 수 없는 에이전트를 고민감 사이트에 연결하지 마세요.
 
-취약점은 [SECURITY.md](./SECURITY.md)의 비공개 제보로 보고하고, 공개 이슈에는 절대 작성하지 마세요.
+취약점은 [SECURITY.md](../../../SECURITY.md)의 비공개 제보로 보고하고, 공개 이슈에는 절대 작성하지 마세요.
 
 ## 플랫폼과 제한
 
@@ -186,18 +186,18 @@ npm start          # launch the built app
 
 | 문서 | 내용 |
 | --- | --- |
-| [docs/CONNECT.md](./docs/CONNECT.md) | 플랫폼과 클라이언트 매트릭스, 설치 프로그램 플래그, 수동 단계, 문제 해결 |
-| [docs/PLATFORMS.md](./docs/PLATFORMS.md) | 릴리스 매트릭스, Linux 의존성, 제거와 데이터 복구 |
-| [docs/AUTO_UPDATE.md](./docs/AUTO_UPDATE.md) | 업데이트 확인, 다운로드, 재시작 설치, SHA-512와 롤백 |
-| [docs/MARKETPLACE.md](./docs/MARKETPLACE.md) | DeepSeek Harness 플러그인 설치와 검증 |
-| [docs/MAINTENANCE.md](./docs/MAINTENANCE.md) | 릴리스 증거, 회귀 기록, 유지 관리 경계 |
-| [릴리스 노트](./docs/releases/release-notes.md) / [CHANGELOG](./CHANGELOG.md) | 버전별 변경 이력 |
-| [site/tools.html](./site/tools.html) | 34개 도구 전체 설명서(로컬에서 열면 되고 배포는 필요 없음) |
+| [docs/CONNECT.md](../../../docs/CONNECT.md) | 플랫폼과 클라이언트 매트릭스, 설치 프로그램 플래그, 수동 단계, 문제 해결 |
+| [docs/PLATFORMS.md](../../../docs/PLATFORMS.md) | 릴리스 매트릭스, Linux 의존성, 제거와 데이터 복구 |
+| [docs/AUTO_UPDATE.md](../../../docs/AUTO_UPDATE.md) | 업데이트 확인, 다운로드, 재시작 설치, SHA-512와 롤백 |
+| [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | DeepSeek Harness 플러그인 설치와 검증 |
+| [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | 릴리스 증거, 회귀 기록, 유지 관리 경계 |
+| [릴리스 노트](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | 버전별 변경 이력 |
+| [site/tools.html](../../../site/tools.html) | 34개 도구 전체 설명서(로컬에서 열면 되고 배포는 필요 없음) |
 
 ## 기여와 라이선스
 
-버그 보고, 기능 논의, 문서 수정, PR을 환영합니다 — 먼저 [CONTRIBUTING.md](./CONTRIBUTING.md)를 읽어 주세요. MCP 도구를 추가할 때는 `src/main/tools.ts`, `cli/mcp.mjs`, 이 README의 도구 표, `site/tools.html`을 함께 갱신하세요. `npm run check`가 앞의 세 가지가 동기화되었는지 검증합니다.
+버그 보고, 기능 논의, 문서 수정, PR을 환영합니다 — 먼저 [CONTRIBUTING.md](../../../CONTRIBUTING.md)를 읽어 주세요. MCP 도구를 추가할 때는 `src/main/tools.ts`, `cli/mcp.mjs`, 이 README의 도구 표, `site/tools.html`을 함께 갱신하세요. `npm run check`가 앞의 세 가지가 동기화되었는지 검증합니다.
 
-MIT licensed — 자세한 내용은 [LICENSE](./LICENSE) © Aa Browser contributors.
+MIT licensed — 자세한 내용은 [LICENSE](../../../LICENSE) © Aa Browser contributors.
 
-이 번역은 중국어 원문보다 늦을 수 있습니다. 이 README의 번역은 [README.md](./README.md)(简体中文)와 `README.<language>.md`에서 관리되며, 전체 목록은 `docs/i18n/readme-languages.json`을 참고하세요.
+이 번역은 중국어 원문보다 늦을 수 있습니다. 이 README의 번역은 [README.md](../../../README.md)(简体中文)와 `docs/i18n/readmes/README.<language>.md`에서 관리되며, 전체 목록은 `../readme-languages.json`을 참고하세요.

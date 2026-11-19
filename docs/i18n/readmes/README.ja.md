@@ -3,7 +3,7 @@
 **AI エージェントのためのデスクトップブラウザ —— オープンソース、MIT ライセンス。**
 
 <p align="center">
-  <a href="./README.md">简体中文</a> ·
+  <a href="../../../README.md">简体中文</a> ·
   <a href="./README.en.md">English</a> ·
   <a href="./README.zh-TW.md">繁體中文</a> ·
   <b>日本語</b> ·
@@ -22,10 +22,10 @@
 > 人が人のようにページを閲覧し、エージェントがエンジニアのように操作する。
 
 <p align="center">
-  <img src="./site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
+  <img src="../../../site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
 </p>
 
-これは**要約版の翻訳**です。完全で正式なドキュメントは中国語で書かれています：[README.md](./README.md) と [`docs/`](./docs)。
+これは**要約版の翻訳**です。完全で正式なドキュメントは中国語で書かれています：[README.md](../../../README.md) と [`docs/`](../../)。
 
 ## これは何か
 
@@ -76,7 +76,7 @@ title: 搜索 - Microsoft 必应
 
 ### プロンプト 1 つ（推奨）
 
-[PROMPT.md](./PROMPT.md) のプロンプトを、ローカルコマンドを実行できる任意の AI に送ってください。Aa Browser が未インストールなら、公式インストーラーをダウンロードし、SHA-256 を検証し、インストール、起動、MCP 設定の書き込みを行い、実際に `browser_tabs` を呼び出して検証します。すでに実行中なら、設定の書き込みと検証だけを行います。
+[PROMPT.md](../../../PROMPT.md) のプロンプトを、ローカルコマンドを実行できる任意の AI に送ってください。Aa Browser が未インストールなら、公式インストーラーをダウンロードし、SHA-256 を検証し、インストール、起動、MCP 設定の書き込みを行い、実際に `browser_tabs` を呼び出して検証します。すでに実行中なら、設定の書き込みと検証だけを行います。
 
 ```bash
 node install.mjs --repo yuchen0x1/aa-browser --verify --json   # download, verify, install, connect, verify
@@ -102,7 +102,7 @@ chmod u+x ~/Applications/AaBrowser.AppImage
 ~/Applications/AaBrowser.AppImage
 ```
 
-FUSE がない場合は `APPIMAGE_EXTRACT_AND_RUN=1 ~/Applications/AaBrowser.AppImage` で起動します。ディストリビューション別の対応状況と復旧手順は[プラットフォームガイド](./docs/PLATFORMS.md)を参照してください。
+FUSE がない場合は `APPIMAGE_EXTRACT_AND_RUN=1 ~/Applications/AaBrowser.AppImage` で起動します。ディストリビューション別の対応状況と復旧手順は[プラットフォームガイド](../../../docs/PLATFORMS.md)を参照してください。
 
 ### ソースから
 
@@ -147,7 +147,7 @@ npm start          # launch the built app
 | ネットワークと Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
 | 診断とタブ | `browser_performance`, `browser_resize`, `browser_tabs` |
 
-共通の動作：ほとんどのツールは結果と一緒にスナップショットを返します（`snapshot: false` で省略できます）。`browser_resize` と `browser_downloads` を除くすべてのツールは `tabId` を受け付け、1 回の呼び出しは 180 秒でタイムアウトし、承認は最大 120 秒待機し、ネットワーク詳細は既定でマスキングされます。ツールの完全なマニュアルは [site/tools.html](./site/tools.html) にあります。
+共通の動作：ほとんどのツールは結果と一緒にスナップショットを返します（`snapshot: false` で省略できます）。`browser_resize` と `browser_downloads` を除くすべてのツールは `tabId` を受け付け、1 回の呼び出しは 180 秒でタイムアウトし、承認は最大 120 秒待機し、ネットワーク詳細は既定でマスキングされます。ツールの完全なマニュアルは [site/tools.html](../../../site/tools.html) にあります。
 
 ## セキュリティ
 
@@ -160,7 +160,7 @@ npm start          # launch the built app
 - 分離タブは別のセッションパーティションを使います：Cookie とログインを共有せず、閉じると削除され、グローバル履歴、最近閉じたタブの一覧、セッション復元から除外されます。
 - **境界**：エージェントは Cookie、ストレージ、ヘッダー、レスポンスボディを含むページ内容と通信を閲覧できます。これらの制御は緩和策であり、汎用 DLP ではありません —— 信頼できないエージェントを高機密サイトに向けないでください。
 
-脆弱性は [SECURITY.md](./SECURITY.md) の非公開報告で報告してください。公開 issue には書かないでください。
+脆弱性は [SECURITY.md](../../../SECURITY.md) の非公開報告で報告してください。公開 issue には書かないでください。
 
 ## プラットフォームと制限
 
@@ -186,18 +186,18 @@ npm start          # launch the built app
 
 | ドキュメント | 内容 |
 | --- | --- |
-| [docs/CONNECT.md](./docs/CONNECT.md) | プラットフォームとクライアントのマトリクス、インストーラーのフラグ、手動手順、トラブルシューティング |
-| [docs/PLATFORMS.md](./docs/PLATFORMS.md) | リリースマトリクス、Linux の依存関係、アンインストールとデータ復旧 |
-| [docs/AUTO_UPDATE.md](./docs/AUTO_UPDATE.md) | 更新確認、ダウンロード、再起動してインストール、SHA-512 とロールバック |
-| [docs/MARKETPLACE.md](./docs/MARKETPLACE.md) | DeepSeek Harness プラグインのインストールと検証 |
-| [docs/MAINTENANCE.md](./docs/MAINTENANCE.md) | リリース証跡、回帰記録、保守の境界 |
-| [リリースノート](./docs/releases/release-notes.md) / [CHANGELOG](./CHANGELOG.md) | バージョンごとの変更履歴 |
-| [site/tools.html](./site/tools.html) | 34 ツールの完全なマニュアル（ローカルで開けばよく、デプロイ不要） |
+| [docs/CONNECT.md](../../../docs/CONNECT.md) | プラットフォームとクライアントのマトリクス、インストーラーのフラグ、手動手順、トラブルシューティング |
+| [docs/PLATFORMS.md](../../../docs/PLATFORMS.md) | リリースマトリクス、Linux の依存関係、アンインストールとデータ復旧 |
+| [docs/AUTO_UPDATE.md](../../../docs/AUTO_UPDATE.md) | 更新確認、ダウンロード、再起動してインストール、SHA-512 とロールバック |
+| [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | DeepSeek Harness プラグインのインストールと検証 |
+| [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | リリース証跡、回帰記録、保守の境界 |
+| [リリースノート](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | バージョンごとの変更履歴 |
+| [site/tools.html](../../../site/tools.html) | 34 ツールの完全なマニュアル（ローカルで開けばよく、デプロイ不要） |
 
 ## コントリビューションとライセンス
 
-バグ報告、機能の議論、ドキュメント修正、PR を歓迎します —— まず [CONTRIBUTING.md](./CONTRIBUTING.md) をお読みください。MCP ツールを追加するときは、`src/main/tools.ts`、`cli/mcp.mjs`、この README のツール表、`site/tools.html` をまとめて更新してください。`npm run check` が最初の 3 つが同期しているかを検証します。
+バグ報告、機能の議論、ドキュメント修正、PR を歓迎します —— まず [CONTRIBUTING.md](../../../CONTRIBUTING.md) をお読みください。MCP ツールを追加するときは、`src/main/tools.ts`、`cli/mcp.mjs`、この README のツール表、`site/tools.html` をまとめて更新してください。`npm run check` が最初の 3 つが同期しているかを検証します。
 
-MIT licensed —— 詳細は [LICENSE](./LICENSE) © Aa Browser contributors。
+MIT licensed —— 詳細は [LICENSE](../../../LICENSE) © Aa Browser contributors。
 
-この翻訳は中国語の原文より遅れることがあります。この README の翻訳は [README.md](./README.md)（简体中文）と `README.<language>.md` で管理されています。完全な一覧は `docs/i18n/readme-languages.json` を参照してください。
+この翻訳は中国語の原文より遅れることがあります。この README の翻訳は [README.md](../../../README.md)（简体中文）と `docs/i18n/readmes/README.<language>.md` で管理されています。完全な一覧は `../readme-languages.json` を参照してください。

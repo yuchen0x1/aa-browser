@@ -3,7 +3,7 @@
 **एजेंट-नेटिव डेस्कटॉप ब्राउज़र — ओपन सोर्स, MIT लाइसेंस।**
 
 <p align="center">
-  <a href="./README.md">简体中文</a> ·
+  <a href="../../../README.md">简体中文</a> ·
   <a href="./README.en.md">English</a> ·
   <a href="./README.zh-TW.md">繁體中文</a> ·
   <a href="./README.ja.md">日本語</a> ·
@@ -22,10 +22,10 @@
 > ऐसा ब्राउज़र जिसे आप इंसान की तरह इस्तेमाल करते हैं, और एजेंट उसे इंजीनियर की तरह चलाता है।
 
 <p align="center">
-  <img src="./site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
+  <img src="../../../site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
 </p>
 
-यह एक **संक्षिप्त अनुवाद** है। पूरा और आधिकारिक दस्तावेज़ चीनी भाषा में लिखा गया है: [README.md](./README.md) और [`docs/`](./docs)।
+यह एक **संक्षिप्त अनुवाद** है। पूरा और आधिकारिक दस्तावेज़ चीनी भाषा में लिखा गया है: [README.md](../../../README.md) और [`docs/`](../../)।
 
 ## यह क्या है
 
@@ -76,7 +76,7 @@ title: 搜索 - Microsoft 必应
 
 ### एक प्रॉम्प्ट (अनुशंसित)
 
-[PROMPT.md](./PROMPT.md) का प्रॉम्प्ट किसी भी ऐसे AI को भेजें जो स्थानीय कमांड चला सकता हो। अगर Aa Browser अभी इंस्टॉल नहीं है, तो यह आधिकारिक इंस्टॉलर डाउनलोड करता है, SHA-256 जाँचता है, इंस्टॉल और लॉन्च करता है, MCP कॉन्फ़िग लिखता है और सत्यापन के लिए सचमुच `browser_tabs` कॉल करता है। अगर Aa Browser पहले से चल रहा है, तो यह सिर्फ़ कॉन्फ़िग लिखता है और सत्यापन करता है।
+[PROMPT.md](../../../PROMPT.md) का प्रॉम्प्ट किसी भी ऐसे AI को भेजें जो स्थानीय कमांड चला सकता हो। अगर Aa Browser अभी इंस्टॉल नहीं है, तो यह आधिकारिक इंस्टॉलर डाउनलोड करता है, SHA-256 जाँचता है, इंस्टॉल और लॉन्च करता है, MCP कॉन्फ़िग लिखता है और सत्यापन के लिए सचमुच `browser_tabs` कॉल करता है। अगर Aa Browser पहले से चल रहा है, तो यह सिर्फ़ कॉन्फ़िग लिखता है और सत्यापन करता है।
 
 ```bash
 node install.mjs --repo yuchen0x1/aa-browser --verify --json   # download, verify, install, connect, verify
@@ -102,7 +102,7 @@ chmod u+x ~/Applications/AaBrowser.AppImage
 ~/Applications/AaBrowser.AppImage
 ```
 
-FUSE के बिना इसे `APPIMAGE_EXTRACT_AND_RUN=1 ~/Applications/AaBrowser.AppImage` से शुरू करें। वितरण-विशेष स्थिति और रिकवरी के कदम [प्लेटफ़ॉर्म गाइड](./docs/PLATFORMS.md) में देखें।
+FUSE के बिना इसे `APPIMAGE_EXTRACT_AND_RUN=1 ~/Applications/AaBrowser.AppImage` से शुरू करें। वितरण-विशेष स्थिति और रिकवरी के कदम [प्लेटफ़ॉर्म गाइड](../../../docs/PLATFORMS.md) में देखें।
 
 ### सोर्स से
 
@@ -147,7 +147,7 @@ npm start          # launch the built app
 | नेटवर्क और Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
 | डायग्नोस्टिक्स और टैब | `browser_performance`, `browser_resize`, `browser_tabs` |
 
-साझा व्यवहार: ज़्यादातर टूल अपने नतीजे के साथ एक स्नैपशॉट लौटाते हैं (`snapshot: false` उसे छोड़ देता है), `browser_resize` और `browser_downloads` के अलावा हर टूल `tabId` स्वीकार करता है, एक कॉल 180 सेकंड बाद टाइम-आउट हो जाती है, मंज़ूरी 120 सेकंड तक प्रतीक्षा करती है, और नेटवर्क विवरण डिफ़ॉल्ट रूप से रीडैक्ट रहते हैं। पूरा टूल मैनुअल [site/tools.html](./site/tools.html) में है।
+साझा व्यवहार: ज़्यादातर टूल अपने नतीजे के साथ एक स्नैपशॉट लौटाते हैं (`snapshot: false` उसे छोड़ देता है), `browser_resize` और `browser_downloads` के अलावा हर टूल `tabId` स्वीकार करता है, एक कॉल 180 सेकंड बाद टाइम-आउट हो जाती है, मंज़ूरी 120 सेकंड तक प्रतीक्षा करती है, और नेटवर्क विवरण डिफ़ॉल्ट रूप से रीडैक्ट रहते हैं। पूरा टूल मैनुअल [site/tools.html](../../../site/tools.html) में है।
 
 ## सुरक्षा
 
@@ -160,7 +160,7 @@ npm start          # launch the built app
 - अलग-थलग टैब अलग सेशन पार्टिशन इस्तेमाल करते हैं: कोई साझा कुकी या लॉगिन नहीं, बंद होने पर साफ़, और ग्लोबल इतिहास, हाल में बंद सूची तथा सेशन रीस्टोर से बाहर।
 - **सीमा**: एजेंट पेज सामग्री और ट्रैफ़िक देख सकता है, जिसमें कुकी, स्टोरेज, हेडर और रिस्पॉन्स बॉडी शामिल हैं। ये नियंत्रण राहत के उपाय हैं, सामान्य DLP नहीं — किसी अविश्वसनीय एजेंट को अति-संवेदनशील साइटों पर न लगाएँ।
 
-कमज़ोरियों की सूचना [SECURITY.md](./SECURITY.md) की निजी रिपोर्टिंग से दें, कभी सार्वजनिक issue में नहीं।
+कमज़ोरियों की सूचना [SECURITY.md](../../../SECURITY.md) की निजी रिपोर्टिंग से दें, कभी सार्वजनिक issue में नहीं।
 
 ## प्लेटफ़ॉर्म और सीमाएँ
 
@@ -186,18 +186,18 @@ npm start          # launch the built app
 
 | दस्तावेज़ | सामग्री |
 | --- | --- |
-| [docs/CONNECT.md](./docs/CONNECT.md) | प्लेटफ़ॉर्म और क्लाइंट मैट्रिक्स, इंस्टॉलर फ़्लैग, मैन्युअल कदम, समस्या-निवारण |
-| [docs/PLATFORMS.md](./docs/PLATFORMS.md) | रिलीज़ मैट्रिक्स, Linux निर्भरताएँ, अनइंस्टॉल और डेटा रिकवरी |
-| [docs/AUTO_UPDATE.md](./docs/AUTO_UPDATE.md) | अपडेट जाँच, डाउनलोड, इंस्टॉल के लिए रीस्टार्ट, SHA-512 और रोलबैक |
-| [docs/MARKETPLACE.md](./docs/MARKETPLACE.md) | DeepSeek Harness प्लगइन का इंस्टॉल और सत्यापन |
-| [docs/MAINTENANCE.md](./docs/MAINTENANCE.md) | रिलीज़ प्रमाण, रिग्रेशन रिकॉर्ड और मेंटेनेंस सीमाएँ |
-| [रिलीज़ नोट्स](./docs/releases/release-notes.md) / [CHANGELOG](./CHANGELOG.md) | प्रति वर्शन बदलावों का इतिहास |
-| [site/tools.html](./site/tools.html) | 34 टूल का पूरा मैनुअल (स्थानीय रूप से खोलें, डिप्लॉय की ज़रूरत नहीं) |
+| [docs/CONNECT.md](../../../docs/CONNECT.md) | प्लेटफ़ॉर्म और क्लाइंट मैट्रिक्स, इंस्टॉलर फ़्लैग, मैन्युअल कदम, समस्या-निवारण |
+| [docs/PLATFORMS.md](../../../docs/PLATFORMS.md) | रिलीज़ मैट्रिक्स, Linux निर्भरताएँ, अनइंस्टॉल और डेटा रिकवरी |
+| [docs/AUTO_UPDATE.md](../../../docs/AUTO_UPDATE.md) | अपडेट जाँच, डाउनलोड, इंस्टॉल के लिए रीस्टार्ट, SHA-512 और रोलबैक |
+| [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | DeepSeek Harness प्लगइन का इंस्टॉल और सत्यापन |
+| [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | रिलीज़ प्रमाण, रिग्रेशन रिकॉर्ड और मेंटेनेंस सीमाएँ |
+| [रिलीज़ नोट्स](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | प्रति वर्शन बदलावों का इतिहास |
+| [site/tools.html](../../../site/tools.html) | 34 टूल का पूरा मैनुअल (स्थानीय रूप से खोलें, डिप्लॉय की ज़रूरत नहीं) |
 
 ## योगदान और लाइसेंस
 
-बग रिपोर्ट, फ़ीचर चर्चा, दस्तावेज़ सुधार और PR का स्वागत है — पहले [CONTRIBUTING.md](./CONTRIBUTING.md) पढ़ें। MCP टूल जोड़ते समय `src/main/tools.ts`, `cli/mcp.mjs`, इस README की टूल तालिका और `site/tools.html` को साथ-साथ अपडेट करें; `npm run check` जाँचता है कि पहले तीन तालमेल में रहें।
+बग रिपोर्ट, फ़ीचर चर्चा, दस्तावेज़ सुधार और PR का स्वागत है — पहले [CONTRIBUTING.md](../../../CONTRIBUTING.md) पढ़ें। MCP टूल जोड़ते समय `src/main/tools.ts`, `cli/mcp.mjs`, इस README की टूल तालिका और `site/tools.html` को साथ-साथ अपडेट करें; `npm run check` जाँचता है कि पहले तीन तालमेल में रहें।
 
-MIT licensed — देखें [LICENSE](./LICENSE) © Aa Browser contributors.
+MIT licensed — देखें [LICENSE](../../../LICENSE) © Aa Browser contributors.
 
-यह अनुवाद चीनी मूल से पीछे रह सकता है। इस README के अनुवाद [README.md](./README.md) (简体中文) और `README.<language>.md` फ़ाइलों में मेंटेन किए जाते हैं; पूरी सूची `docs/i18n/readme-languages.json` में है।
+यह अनुवाद चीनी मूल से पीछे रह सकता है। इस README के अनुवाद [README.md](../../../README.md) (简体中文) और `docs/i18n/readmes/README.<language>.md` फ़ाइलों में मेंटेन किए जाते हैं; पूरी सूची `../readme-languages.json` में है।

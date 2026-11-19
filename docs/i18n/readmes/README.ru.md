@@ -3,7 +3,7 @@
 **Настольный браузер, изначально созданный для агентов — открытый исходный код, лицензия MIT.**
 
 <p align="center">
-  <a href="./README.md">简体中文</a> ·
+  <a href="../../../README.md">简体中文</a> ·
   <a href="./README.en.md">English</a> ·
   <a href="./README.zh-TW.md">繁體中文</a> ·
   <a href="./README.ja.md">日本語</a> ·
@@ -22,10 +22,10 @@
 > Браузер, которым вы пользуетесь как человек, а агент управляет им как инженер.
 
 <p align="center">
-  <img src="./site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
+  <img src="../../../site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
 </p>
 
-Это **сокращённый перевод**. Полная и авторитетная документация написана на китайском языке: [README.md](./README.md) и [`docs/`](./docs).
+Это **сокращённый перевод**. Полная и авторитетная документация написана на китайском языке: [README.md](../../../README.md) и [`docs/`](../../).
 
 ## Что это
 
@@ -76,7 +76,7 @@ title: 搜索 - Microsoft 必应
 
 ### Одна инструкция (рекомендуется)
 
-Отправьте промпт из [PROMPT.md](./PROMPT.md) любому ИИ, который умеет выполнять локальные команды. Если Aa Browser ещё не установлен, он скачает официальный установщик, проверит SHA-256, установит, запустит, запишет конфигурацию MCP и действительно вызовет `browser_tabs` для проверки. Если Aa Browser уже запущен, он только запишет конфигурацию и проверит её.
+Отправьте промпт из [PROMPT.md](../../../PROMPT.md) любому ИИ, который умеет выполнять локальные команды. Если Aa Browser ещё не установлен, он скачает официальный установщик, проверит SHA-256, установит, запустит, запишет конфигурацию MCP и действительно вызовет `browser_tabs` для проверки. Если Aa Browser уже запущен, он только запишет конфигурацию и проверит её.
 
 ```bash
 node install.mjs --repo yuchen0x1/aa-browser --verify --json   # download, verify, install, connect, verify
@@ -102,7 +102,7 @@ chmod u+x ~/Applications/AaBrowser.AppImage
 ~/Applications/AaBrowser.AppImage
 ```
 
-Без FUSE запускайте так: `APPIMAGE_EXTRACT_AND_RUN=1 ~/Applications/AaBrowser.AppImage`. Статус по дистрибутивам и шаги восстановления — в [руководстве по платформам](./docs/PLATFORMS.md).
+Без FUSE запускайте так: `APPIMAGE_EXTRACT_AND_RUN=1 ~/Applications/AaBrowser.AppImage`. Статус по дистрибутивам и шаги восстановления — в [руководстве по платформам](../../../docs/PLATFORMS.md).
 
 ### Из исходного кода
 
@@ -147,7 +147,7 @@ npm start          # launch the built app
 | Сеть и Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
 | Диагностика и вкладки | `browser_performance`, `browser_resize`, `browser_tabs` |
 
-Общее поведение: большинство инструментов возвращают снапшот вместе с результатом (`snapshot: false` пропускает его), каждый инструмент, кроме `browser_resize` и `browser_downloads`, принимает `tabId`, один вызов завершается по тайм-ауту через 180 секунд, подтверждение ожидается до 120 секунд, а сетевые детали по умолчанию маскируются. Полное руководство по инструментам — [site/tools.html](./site/tools.html).
+Общее поведение: большинство инструментов возвращают снапшот вместе с результатом (`snapshot: false` пропускает его), каждый инструмент, кроме `browser_resize` и `browser_downloads`, принимает `tabId`, один вызов завершается по тайм-ауту через 180 секунд, подтверждение ожидается до 120 секунд, а сетевые детали по умолчанию маскируются. Полное руководство по инструментам — [site/tools.html](../../../site/tools.html).
 
 ## Безопасность
 
@@ -160,7 +160,7 @@ npm start          # launch the built app
 - Изолированные вкладки используют отдельный раздел сессии: без общих cookie и сессий входа, очищаются при закрытии и исключаются из глобальной истории, списка недавно закрытых вкладок и восстановления сессии.
 - **Граница**: агент может видеть содержимое страниц и трафик, включая cookie, storage, заголовки и тела ответов. Эти меры — смягчение рисков, а не универсальный DLP; не направляйте недоверенного агента на высокочувствительные сайты.
 
-Сообщайте об уязвимостях через приватную форму в [SECURITY.md](./SECURITY.md), никогда — в публичном issue.
+Сообщайте об уязвимостях через приватную форму в [SECURITY.md](../../../SECURITY.md), никогда — в публичном issue.
 
 ## Платформы и ограничения
 
@@ -186,18 +186,18 @@ npm start          # launch the built app
 
 | Документ | Содержание |
 | --- | --- |
-| [docs/CONNECT.md](./docs/CONNECT.md) | Матрица платформ и клиентов, флаги установщика, ручные шаги, устранение неполадок |
-| [docs/PLATFORMS.md](./docs/PLATFORMS.md) | Матрица выпусков, зависимости Linux, удаление и восстановление данных |
-| [docs/AUTO_UPDATE.md](./docs/AUTO_UPDATE.md) | Проверка обновлений, загрузка, перезапуск для установки, SHA-512 и откат |
-| [docs/MARKETPLACE.md](./docs/MARKETPLACE.md) | Установка и проверка плагина DeepSeek Harness |
-| [docs/MAINTENANCE.md](./docs/MAINTENANCE.md) | Доказательства выпусков, записи регрессий и границы поддержки |
-| [примечания к выпуску](./docs/releases/release-notes.md) / [CHANGELOG](./CHANGELOG.md) | История изменений по версиям |
-| [site/tools.html](./site/tools.html) | Полное руководство по 34 инструментам (открывается локально, развёртывание не нужно) |
+| [docs/CONNECT.md](../../../docs/CONNECT.md) | Матрица платформ и клиентов, флаги установщика, ручные шаги, устранение неполадок |
+| [docs/PLATFORMS.md](../../../docs/PLATFORMS.md) | Матрица выпусков, зависимости Linux, удаление и восстановление данных |
+| [docs/AUTO_UPDATE.md](../../../docs/AUTO_UPDATE.md) | Проверка обновлений, загрузка, перезапуск для установки, SHA-512 и откат |
+| [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | Установка и проверка плагина DeepSeek Harness |
+| [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | Доказательства выпусков, записи регрессий и границы поддержки |
+| [примечания к выпуску](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | История изменений по версиям |
+| [site/tools.html](../../../site/tools.html) | Полное руководство по 34 инструментам (открывается локально, развёртывание не нужно) |
 
 ## Участие и лицензия
 
-Сообщения об ошибках, обсуждение функций, исправления документации и PR приветствуются — сначала прочитайте [CONTRIBUTING.md](./CONTRIBUTING.md). При добавлении инструмента MCP обновляйте `src/main/tools.ts`, `cli/mcp.mjs`, таблицу инструментов в этом README и `site/tools.html` вместе; `npm run check` проверяет, что первые три остаются синхронными.
+Сообщения об ошибках, обсуждение функций, исправления документации и PR приветствуются — сначала прочитайте [CONTRIBUTING.md](../../../CONTRIBUTING.md). При добавлении инструмента MCP обновляйте `src/main/tools.ts`, `cli/mcp.mjs`, таблицу инструментов в этом README и `site/tools.html` вместе; `npm run check` проверяет, что первые три остаются синхронными.
 
-MIT licensed — см. [LICENSE](./LICENSE) © Aa Browser contributors.
+MIT licensed — см. [LICENSE](../../../LICENSE) © Aa Browser contributors.
 
-Этот перевод может отставать от китайского оригинала. Переводы этого README ведутся в [README.md](./README.md) (简体中文) и файлах `README.<язык>.md`; полный список — в `docs/i18n/readme-languages.json`.
+Этот перевод может отставать от китайского оригинала. Переводы этого README ведутся в [README.md](../../../README.md) (简体中文) и файлах `README.<язык>.md`; полный список — в `../readme-languages.json`.

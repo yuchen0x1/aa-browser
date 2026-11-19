@@ -9,17 +9,17 @@
 
 <p align="center">
   <b>简体中文</b> ·
-  <a href="./README.en.md">English</a> ·
-  <a href="./README.zh-TW.md">繁體中文</a> ·
-  <a href="./README.ja.md">日本語</a> ·
-  <a href="./README.ko.md">한국어</a> ·
-  <a href="./README.es.md">Español</a> ·
-  <a href="./README.pt-BR.md">Português (BR)</a> ·
-  <a href="./README.fr.md">Français</a> ·
-  <a href="./README.de.md">Deutsch</a> ·
-  <a href="./README.ru.md">Русский</a> ·
-  <a href="./README.ar.md">العربية</a> ·
-  <a href="./README.hi.md">हिन्दी</a>
+  <a href="./docs/i18n/readmes/README.en.md">English</a> ·
+  <a href="./docs/i18n/readmes/README.zh-TW.md">繁體中文</a> ·
+  <a href="./docs/i18n/readmes/README.ja.md">日本語</a> ·
+  <a href="./docs/i18n/readmes/README.ko.md">한국어</a> ·
+  <a href="./docs/i18n/readmes/README.es.md">Español</a> ·
+  <a href="./docs/i18n/readmes/README.pt-BR.md">Português (BR)</a> ·
+  <a href="./docs/i18n/readmes/README.fr.md">Français</a> ·
+  <a href="./docs/i18n/readmes/README.de.md">Deutsch</a> ·
+  <a href="./docs/i18n/readmes/README.ru.md">Русский</a> ·
+  <a href="./docs/i18n/readmes/README.ar.md">العربية</a> ·
+  <a href="./docs/i18n/readmes/README.hi.md">हिन्दी</a>
 </p>
 
 > 其他语言版本是精简导读，安装、接入、安全与工具的权威细节以本文件为准。语言清单见 [`docs/i18n/readme-languages.json`](./docs/i18n/readme-languages.json)。

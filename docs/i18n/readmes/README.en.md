@@ -3,7 +3,7 @@
 **The agent-native desktop browser — open source, MIT licensed.**
 
 <p align="center">
-  <a href="./README.md">简体中文</a> ·
+  <a href="../../../README.md">简体中文</a> ·
   <b>English</b> ·
   <a href="./README.zh-TW.md">繁體中文</a> ·
   <a href="./README.ja.md">日本語</a> ·
@@ -22,10 +22,10 @@
 > A browser you use like a human, driven by an agent like an engineer.
 
 <p align="center">
-  <img src="./site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
+  <img src="../../../site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
 </p>
 
-This is a **condensed translation**. The complete, authoritative documentation is written in Chinese: [README.md](./README.md) and [`docs/`](./docs).
+This is a **condensed translation**. The complete, authoritative documentation is written in Chinese: [README.md](../../../README.md) and [`docs/`](../../).
 
 ## What it is
 
@@ -76,7 +76,7 @@ After an action you get an **incremental snapshot** — only the changed blocks,
 
 ### One prompt (recommended)
 
-Send the prompt in [PROMPT.md](./PROMPT.md) to any AI that can run local commands. If Aa Browser is not installed yet, it downloads the official installer, verifies the SHA-256, installs, launches, writes the MCP config and actually calls `browser_tabs` to verify. If Aa Browser is already running, it only writes the config and verifies.
+Send the prompt in [PROMPT.md](../../../PROMPT.md) to any AI that can run local commands. If Aa Browser is not installed yet, it downloads the official installer, verifies the SHA-256, installs, launches, writes the MCP config and actually calls `browser_tabs` to verify. If Aa Browser is already running, it only writes the config and verifies.
 
 ```bash
 node install.mjs --repo yuchen0x1/aa-browser --verify --json   # download, verify, install, connect, verify
@@ -102,7 +102,7 @@ chmod u+x ~/Applications/AaBrowser.AppImage
 ~/Applications/AaBrowser.AppImage
 ```
 
-Without FUSE, start it with `APPIMAGE_EXTRACT_AND_RUN=1 ~/Applications/AaBrowser.AppImage`. See the [platform guide](./docs/PLATFORMS.md) for distribution-specific status and recovery steps.
+Without FUSE, start it with `APPIMAGE_EXTRACT_AND_RUN=1 ~/Applications/AaBrowser.AppImage`. See the [platform guide](../../../docs/PLATFORMS.md) for distribution-specific status and recovery steps.
 
 ### From source
 
@@ -147,7 +147,7 @@ A written config is **not** a working connection. Verify with `node install.mjs 
 | Network & Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
 | Diagnostics & tabs | `browser_performance`, `browser_resize`, `browser_tabs` |
 
-Shared behaviour: most tools return a snapshot with their result (`snapshot: false` skips it), every tool except `browser_resize` and `browser_downloads` accepts a `tabId`, a single call times out after 180 seconds, approval waits up to 120 seconds, and network details are redacted by default. The full tool manual is [site/tools.html](./site/tools.html).
+Shared behaviour: most tools return a snapshot with their result (`snapshot: false` skips it), every tool except `browser_resize` and `browser_downloads` accepts a `tabId`, a single call times out after 180 seconds, approval waits up to 120 seconds, and network details are redacted by default. The full tool manual is [site/tools.html](../../../site/tools.html).
 
 ## Security
 
@@ -160,7 +160,7 @@ Shared behaviour: most tools return a snapshot with their result (`snapshot: fal
 - Isolated tabs use a separate session partition: no shared cookies or logins, cleared on close, and excluded from global history, the recently-closed list and session restore.
 - **Boundary**: an agent can see page content and traffic, including cookies, storage, headers and response bodies. These controls are mitigations, not a general DLP — do not point an untrusted agent at high-sensitivity sites.
 
-Report vulnerabilities through [SECURITY.md](./SECURITY.md) private reporting, never in a public issue.
+Report vulnerabilities through [SECURITY.md](../../../SECURITY.md) private reporting, never in a public issue.
 
 ## Platforms and limits
 
@@ -186,18 +186,18 @@ The detailed documentation is currently in Chinese:
 
 | Document | Content |
 | --- | --- |
-| [docs/CONNECT.md](./docs/CONNECT.md) | Platform and client matrix, installer flags, manual steps, troubleshooting |
-| [docs/PLATFORMS.md](./docs/PLATFORMS.md) | Release matrix, Linux dependencies, uninstall and data recovery |
-| [docs/AUTO_UPDATE.md](./docs/AUTO_UPDATE.md) | Update check, download, restart-to-install, SHA-512 and rollback |
-| [docs/MARKETPLACE.md](./docs/MARKETPLACE.md) | DeepSeek Harness plugin install and verification |
-| [docs/MAINTENANCE.md](./docs/MAINTENANCE.md) | Release evidence, regression records and maintenance boundaries |
-| [release notes](./docs/releases/release-notes.md) / [CHANGELOG](./CHANGELOG.md) | Change history per version |
-| [site/tools.html](./site/tools.html) | Complete 34-tool manual (open locally, no deploy needed) |
+| [docs/CONNECT.md](../../../docs/CONNECT.md) | Platform and client matrix, installer flags, manual steps, troubleshooting |
+| [docs/PLATFORMS.md](../../../docs/PLATFORMS.md) | Release matrix, Linux dependencies, uninstall and data recovery |
+| [docs/AUTO_UPDATE.md](../../../docs/AUTO_UPDATE.md) | Update check, download, restart-to-install, SHA-512 and rollback |
+| [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | DeepSeek Harness plugin install and verification |
+| [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | Release evidence, regression records and maintenance boundaries |
+| [release notes](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | Change history per version |
+| [site/tools.html](../../../site/tools.html) | Complete 34-tool manual (open locally, no deploy needed) |
 
 ## Contributing and license
 
-Bug reports, feature discussions, documentation fixes and PRs are welcome — please read [CONTRIBUTING.md](./CONTRIBUTING.md) first. When adding an MCP tool, update `src/main/tools.ts`, `cli/mcp.mjs`, the tool table in this README and `site/tools.html` together; `npm run check` verifies the first three stay in sync.
+Bug reports, feature discussions, documentation fixes and PRs are welcome — please read [CONTRIBUTING.md](../../../CONTRIBUTING.md) first. When adding an MCP tool, update `src/main/tools.ts`, `cli/mcp.mjs`, the tool table in this README and `site/tools.html` together; `npm run check` verifies the first three stay in sync.
 
-MIT licensed — see [LICENSE](./LICENSE) © Aa Browser contributors.
+MIT licensed — see [LICENSE](../../../LICENSE) © Aa Browser contributors.
 
-This translation may lag behind the Chinese original. Translations of this README are maintained in [README.md](./README.md) (简体中文), plus `README.<language>.md`; see `docs/i18n/readme-languages.json` for the full list.
+This translation may lag behind the Chinese original. Translations of this README are maintained in [README.md](../../../README.md) (简体中文), plus `docs/i18n/readmes/README.<language>.md`; see `../readme-languages.json` for the full list.

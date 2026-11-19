@@ -3,16 +3,16 @@
   "note": "README 语言清单。新增语言时在此追加一项，然后运行 `npm run check:readme-i18n` 校验索引、文件与链接是否齐全。",
   "languages": [
     { "code": "zh-CN", "nativeName": "简体中文", "file": "README.md", "dir": "ltr" },
-    { "code": "en", "nativeName": "English", "file": "README.en.md", "dir": "ltr" },
-    { "code": "zh-TW", "nativeName": "繁體中文", "file": "README.zh-TW.md", "dir": "ltr" },
-    { "code": "ja", "nativeName": "日本語", "file": "README.ja.md", "dir": "ltr" },
-    { "code": "ko", "nativeName": "한국어", "file": "README.ko.md", "dir": "ltr" },
-    { "code": "es", "nativeName": "Español", "file": "README.es.md", "dir": "ltr" },
-    { "code": "pt-BR", "nativeName": "Português (BR)", "file": "README.pt-BR.md", "dir": "ltr" },
-    { "code": "fr", "nativeName": "Français", "file": "README.fr.md", "dir": "ltr" },
-    { "code": "de", "nativeName": "Deutsch", "file": "README.de.md", "dir": "ltr" },
-    { "code": "ru", "nativeName": "Русский", "file": "README.ru.md", "dir": "ltr" },
-    { "code": "ar", "nativeName": "العربية", "file": "README.ar.md", "dir": "rtl" },
-    { "code": "hi", "nativeName": "हिन्दी", "file": "README.hi.md", "dir": "ltr" }
+    { "code": "en", "nativeName": "English", "file": "docs/i18n/readmes/README.en.md", "dir": "ltr" },
+    { "code": "zh-TW", "nativeName": "繁體中文", "file": "docs/i18n/readmes/README.zh-TW.md", "dir": "ltr" },
+    { "code": "ja", "nativeName": "日本語", "file": "docs/i18n/readmes/README.ja.md", "dir": "ltr" },
+    { "code": "ko", "nativeName": "한국어", "file": "docs/i18n/readmes/README.ko.md", "dir": "ltr" },
+    { "code": "es", "nativeName": "Español", "file": "docs/i18n/readmes/README.es.md", "dir": "ltr" },
+    { "code": "pt-BR", "nativeName": "Português (BR)", "file": "docs/i18n/readmes/README.pt-BR.md", "dir": "ltr" },
+    { "code": "fr", "nativeName": "Français", "file": "docs/i18n/readmes/README.fr.md", "dir": "ltr" },
+    { "code": "de", "nativeName": "Deutsch", "file": "docs/i18n/readmes/README.de.md", "dir": "ltr" },
+    { "code": "ru", "nativeName": "Русский", "file": "docs/i18n/readmes/README.ru.md", "dir": "ltr" },
+    { "code": "ar", "nativeName": "العربية", "file": "docs/i18n/readmes/README.ar.md", "dir": "rtl" },
+    { "code": "hi", "nativeName": "हिन्दी", "file": "docs/i18n/readmes/README.hi.md", "dir": "ltr" }
   ]
 }
