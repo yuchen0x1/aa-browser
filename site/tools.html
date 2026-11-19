@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MCP 工具手册 — Aa Browser</title>
+    <meta
+      name="description"
+      content="Aa Browser 的 34 个 MCP 工具完整参考：导航与快照、交互、读取与状态、网络与 Mock、诊断与标签。含参数示例与返回说明。"
+    />
+    <meta name="theme-color" content="#0b0f11" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="icon" href="assets/icon.png" type="image/png" />
+    <link rel="stylesheet" href="assets/site.css?v=0.2.0" />
+    <meta property="og:type" content="article" />
+    <meta property="og:title" content="MCP 工具手册 — Aa Browser" />
+    <meta property="og:description" content="34 个 MCP 工具的参数、返回与示例，一次说清。" />
+    <meta property="og:image" content="assets/og-image.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">跳到主要内容</a>
+
+    <svg width="0" height="0" aria-hidden="true" focusable="false" style="position: absolute">
+      <symbol id="i-search" viewBox="0 0 24 24">
+        <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="1.8" />
+        <path d="m20 20-3.6-3.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+      </symbol>
+      <symbol id="i-copy" viewBox="0 0 24 24">
+        <rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.7" />
+        <path d="M15 5.5A2.5 2.5 0 0 0 12.5 3H6a2 2 0 0 0-2 2v7.5A2.5 2.5 0 0 0 6.5 15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" />
+      </symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24">
+        <path d="M5 12h14M13 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+      </symbol>
+    </svg>
+
+    <header class="site-header" id="siteHeader">
+      <div class="shell nav">
+        <a class="brand" href="index.html" aria-label="Aa Browser 首页">
+          <span class="brand__mark">Aa</span>
+          <span class="brand__name">Aa Browser</span>
+          <span class="brand__tag">Agent-native</span>
+        </a>
+
+        <button class="nav__toggle" id="navToggle" type="button" aria-expanded="false" aria-controls="navLinks" aria-label="打开导航菜单">
+          <span></span>
+        </button>
+
+        <nav class="nav__links" id="navLinks" aria-label="主导航">
+          <a class="nav__link" href="index.html#why">为什么</a>
+          <a class="nav__link" href="index.html#capabilities">能力</a>
+          <a class="nav__link" href="index.html#demo">演示</a>
+          <a class="nav__link" href="index.html#tools">工具</a>
+          <a class="nav__link" href="index.html#start">接入</a>
+          <a class="nav__link" href="index.html#security">安全</a>
+          <a class="nav__link is-current" href="tools.html" aria-current="page">手册</a>
+          <div class="nav__sheet-cta">
+            <a class="btn btn--primary btn--block" href="index.html#download">下载 Aa Browser</a>
+            <p>Windows · Linux · MIT 开源</p>
+          </div>
+        </nav>
+
+        <div class="nav__actions">
+          <a class="nav__github" href="https://github.com/yuchen0x1/aa-browser" target="_blank" rel="noopener">
+            <svg aria-hidden="true" width="17" height="17" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.58 2 12.26c0 4.52 2.87 8.35 6.84 9.7.5.1.68-.22.68-.48 0-.24-.01-.87-.01-1.7-2.78.62-3.37-1.37-3.37-1.37-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.36-2.22-.26-4.56-1.14-4.56-5.06 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.7 0 0 .84-.28 2.75 1.05A9.4 9.4 0 0 1 12 6.8c.85 0 1.71.12 2.51.34 1.91-1.33 2.75-1.05 2.75-1.05.55 1.4.2 2.44.1 2.7.64.72 1.03 1.63 1.03 2.75 0 3.93-2.35 4.8-4.58 5.05.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .27.18.59.69.48A10.02 10.02 0 0 0 22 12.26C22 6.58 17.52 2 12 2z" fill="currentColor" /></svg>
+            <span>GitHub</span>
+          </a>
+          <a class="btn btn--primary btn--small" href="index.html#download">下载</a>
+        </div>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="tools-hero">
+        <div class="shell">
+          <div class="tools-hero__head">
+            <div>
+              <span class="eyebrow">MCP Reference</span>
+              <h1 class="display">34 个工具，<br />一次说清。</h1>
+            </div>
+            <div class="tools-hero__meta">
+              <span class="chip chip--mint"><span class="chip__dot"></span>v0.2.0</span>
+              <span class="chip">stdio · MCP</span>
+              <span class="chip">5 类能力</span>
+            </div>
+          </div>
+          <p class="lead" style="max-width: 62ch">
+            所有工具都由 Aa Browser 主进程执行，经本地 WebSocket 回到页面。<code class="mono">browser_click</code>、<code class="mono">browser_type</code> 等动作默认带回增量快照，Agent 不必二次请求。
+          </p>
+        </div>
+      </section>
+
+      <div class="tools-controls">
+        <div class="shell tools-controls__inner">
+          <label class="search">
+            <svg aria-hidden="true"><use href="#i-search" /></svg>
+            <input id="toolSearch" type="search" placeholder="搜索工具名、能力或参数…" autocomplete="off" aria-label="搜索工具" />
+            <kbd>/</kbd>
+          </label>
+          <div class="filters" role="group" aria-label="按类别筛选">
+            <button class="filter" type="button" data-filter="all" aria-pressed="true">全部 <span>34</span></button>
+            <button class="filter" type="button" data-filter="nav" aria-pressed="false">导航 <span>4</span></button>
+            <button class="filter" type="button" data-filter="interact" aria-pressed="false">交互 <span>9</span></button>
+            <button class="filter" type="button" data-filter="read" aria-pressed="false">读取 <span>12</span></button>
+            <button class="filter" type="button" data-filter="network" aria-pressed="false">网络 <span>6</span></button>
+            <button class="filter" type="button" data-filter="diag" aria-pressed="false">诊断 <span>3</span></button>
+          </div>
+        </div>
+      </div>
+
+      <div class="shell tools-layout">
+        <aside class="tools-side" aria-label="类别导航">
+          <span class="tools-side__title">类别</span>
+          <a href="#nav">导航与快照 <span>4</span></a>
+          <a href="#interact">交互 <span>9</span></a>
+          <a href="#read">读取与状态 <span>12</span></a>
+          <a href="#network">网络与 Mock <span>6</span></a>
+          <a href="#diag">诊断与标签 <span>3</span></a>
+
+          <div class="tools-side__card">
+            <h3>约定</h3>
+            <p>
+              动作类工具默认返回增量快照；传 <code>snapshot: false</code> 可跳过。<code>ref</code> 来自最近一次快照，跨快照稳定。
+            </p>
+          </div>
+          <div class="tools-side__card">
+            <h3>验证</h3>
+            <p>
+              MCP 桥连上不等于接通。让客户端实际调用 <code>browser_tabs</code> 并拿到标签列表，才算验证通过。
+            </p>
+          </div>
+        </aside>
+
+        <div class="tools-main">
+          <div class="tools-status" aria-live="polite">
+            <span>显示 <b id="toolCount">34</b> 个工具</span>
+            <span aria-hidden="true">·</span>
+            <span id="toolScope">全部分类</span>
+          </div>
+
+          <div class="tools-list" id="toolList">
+            <div class="tools-section-anchor" id="nav"></div>
+
+            <article class="tool" id="tool-navigate" data-category="nav" data-search="browser_navigate 导航 打开 url 搜索词 快照">
+              <div class="tool__head">
+                <span class="tool__name">browser_navigate</span>
+                <span class="tool__cat">NAV</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_navigate" aria-label="复制工具名 browser_navigate">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>导航到 URL；非 URL 文本自动转为搜索词。结果内嵌完整快照，<code>snapshot: false</code> 可跳过。</p>
+              <div class="tool__example">{ <span class="j-key">"url"</span>: <span class="j-str">"https://github.com/trending"</span>, <span class="j-key">"snapshot"</span>: <span class="j-bool">true</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-snapshot" data-category="nav" data-search="browser_snapshot 快照 ref 结构化 yaml 增量 full">
+              <div class="tool__head">
+                <span class="tool__name">browser_snapshot</span>
+                <span class="tool__cat">NAV</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_snapshot" aria-label="复制工具名 browser_snapshot">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>结构化页面快照：可访问性树 + 元素 ref。增量模式省 token，<code>full: true</code> 强制完整树。</p>
+              <div class="tool__example">{ <span class="j-key">"full"</span>: <span class="j-bool">true</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-navigate-back" data-category="nav" data-search="browser_navigate_back 后退 历史">
+              <div class="tool__head">
+                <span class="tool__name">browser_navigate_back</span>
+                <span class="tool__cat">NAV</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_navigate_back" aria-label="复制工具名 browser_navigate_back">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>历史后退一页，返回增量快照。</p>
+              <div class="tool__example">{ }</div>
+            </article>
+
+            <article class="tool" id="tool-navigate-forward" data-category="nav" data-search="browser_navigate_forward 前进 历史">
+              <div class="tool__head">
+                <span class="tool__name">browser_navigate_forward</span>
+                <span class="tool__cat">NAV</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_navigate_forward" aria-label="复制工具名 browser_navigate_forward">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>历史前进一页，返回增量快照。</p>
+              <div class="tool__example">{ }</div>
+            </article>
+
+            <div class="tools-section-anchor" id="interact"></div>
+
+            <article class="tool" id="tool-click" data-category="interact" data-search="browser_click 点击 右键 双击 ref 快照">
+              <div class="tool__head">
+                <span class="tool__name">browser_click</span>
+                <span class="tool__cat">ACT</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_click" aria-label="复制工具名 browser_click">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>按 ref 点击，支持左键、右键与双击；走受信任输入事件，动作后自动返回增量快照。</p>
+              <div class="tool__example">{ <span class="j-key">"ref"</span>: <span class="j-str">"e12"</span>, <span class="j-key">"button"</span>: <span class="j-str">"left"</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-type" data-category="interact" data-search="browser_type 输入 文本 submit clear ref">
+              <div class="tool__head">
+                <span class="tool__name">browser_type</span>
+                <span class="tool__cat">ACT</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_type" aria-label="复制工具名 browser_type">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>按 ref 输入文本，<code>submit</code> 回车提交，<code>clear</code> 先清空。输入走 insertText 管线。</p>
+              <div class="tool__example">{ <span class="j-key">"ref"</span>: <span class="j-str">"e15"</span>, <span class="j-key">"text"</span>: <span class="j-str">"Aa Browser"</span>, <span class="j-key">"submit"</span>: <span class="j-bool">true</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-fill-form" data-category="interact" data-search="browser_fill_form 批量 表单 填写 下拉 复选">
+              <div class="tool__head">
+                <span class="tool__name">browser_fill_form</span>
+                <span class="tool__cat">ACT</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_fill_form" aria-label="复制工具名 browser_fill_form">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>一次调用填写多个字段（文本 / 下拉 / 复选），只在末尾返回一次快照，适合长表单。</p>
+              <div class="tool__example">{ <span class="j-key">"fields"</span>: [ { <span class="j-key">"ref"</span>: <span class="j-str">"e2"</span>, <span class="j-key">"value"</span>: <span class="j-str">"user@example.com"</span> }, { <span class="j-key">"ref"</span>: <span class="j-str">"e3"</span>, <span class="j-key">"label"</span>: <span class="j-str">"中国"</span> } ] }</div>
+            </article>
+
+            <article class="tool" id="tool-select-option" data-category="interact" data-search="browser_select_option 下拉 选择 option">
+              <div class="tool__head">
+                <span class="tool__name">browser_select_option</span>
+                <span class="tool__cat">ACT</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_select_option" aria-label="复制工具名 browser_select_option">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>按 ref 选择下拉项，按 option 的 value 或可见文本匹配。</p>
+              <div class="tool__example">{ <span class="j-key">"ref"</span>: <span class="j-str">"e8"</span>, <span class="j-key">"label"</span>: <span class="j-str">"最近 7 天"</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-drag" data-category="interact" data-search="browser_drag 拖拽 滑块 看板">
+              <div class="tool__head">
+                <span class="tool__name">browser_drag</span>
+                <span class="tool__cat">ACT</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_drag" aria-label="复制工具名 browser_drag">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>拖拽元素到目标元素（<code>toRef</code>）或按相对偏移（<code>dx</code> / <code>dy</code>），支持滑块与看板。</p>
+              <div class="tool__example">{ <span class="j-key">"ref"</span>: <span class="j-str">"e3"</span>, <span class="j-key">"toRef"</span>: <span class="j-str">"e9"</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-hover" data-category="interact" data-search="browser_hover 悬停 菜单 tooltip">
+              <div class="tool__head">
+                <span class="tool__name">browser_hover</span>
+                <span class="tool__cat">ACT</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_hover" aria-label="复制工具名 browser_hover">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>按 ref 悬停，触发悬停菜单与 tooltip。使用真实 mouseMove 输入路径。</p>
+              <div class="tool__example">{ <span class="j-key">"ref"</span>: <span class="j-str">"e6"</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-press-key" data-category="interact" data-search="browser_press_key 按键 enter escape 方向键">
+              <div class="tool__head">
+                <span class="tool__name">browser_press_key</span>
+                <span class="tool__cat">ACT</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_press_key" aria-label="复制工具名 browser_press_key">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>向当前焦点发送按键：Enter / Escape / Tab / 方向键 / 单字符等。</p>
+              <div class="tool__example">{ <span class="j-key">"key"</span>: <span class="j-str">"Escape"</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-scroll" data-category="interact" data-search="browser_scroll 滚动 页面 方向">
+              <div class="tool__head">
+                <span class="tool__name">browser_scroll</span>
+                <span class="tool__cat">ACT</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_scroll" aria-label="复制工具名 browser_scroll">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>滚动页面：先主文档，再最大滚动区域，默认 700px。</p>
+              <div class="tool__example">{ <span class="j-key">"direction"</span>: <span class="j-str">"down"</span>, <span class="j-key">"amount"</span>: <span class="j-num">900</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-upload-file" data-category="interact" data-search="browser_upload_file 上传 文件 input file">
+              <div class="tool__head">
+                <span class="tool__name">browser_upload_file</span>
+                <span class="tool__cat">ACT</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_upload_file" aria-label="复制工具名 browser_upload_file">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>向 <code>&lt;input type=file&gt;</code> 上传本机文件并触发 change 事件，单次上限 20MB。</p>
+              <div class="tool__example">{ <span class="j-key">"ref"</span>: <span class="j-str">"e11"</span>, <span class="j-key">"paths"</span>: [<span class="j-str">"C:\\Users\\me\\report.pdf"</span>] }</div>
+            </article>
+
+            <div class="tools-section-anchor" id="read"></div>
+
+            <article class="tool" id="tool-extract" data-category="read" data-search="browser_extract 提取 文本 内容">
+              <div class="tool__head">
+                <span class="tool__name">browser_extract</span>
+                <span class="tool__cat">READ</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_extract" aria-label="复制工具名 browser_extract">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>提取整页或指定元素的纯文本，适合读文章、表格外的长文本。</p>
+              <div class="tool__example">{ <span class="j-key">"ref"</span>: <span class="j-str">"e20"</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-evaluate" data-category="read" data-search="browser_evaluate 执行 js javascript 表达式">
+              <div class="tool__head">
+                <span class="tool__name">browser_evaluate</span>
+                <span class="tool__cat">READ</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_evaluate" aria-label="复制工具名 browser_evaluate">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>在页面主世界执行 JS 表达式并返回 JSON，可按 ref 把元素绑定为 <code>element</code>。</p>
+              <div class="tool__example">{ <span class="j-key">"expression"</span>: <span class="j-str">"document.title"</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-screenshot" data-category="read" data-search="browser_screenshot 截图 png 元素 裁剪">
+              <div class="tool__head">
+                <span class="tool__name">browser_screenshot</span>
+                <span class="tool__cat">READ</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_screenshot" aria-label="复制工具名 browser_screenshot">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>PNG 截图；传 <code>ref</code> 时滚动到位、按包围盒裁剪为元素级截图。</p>
+              <div class="tool__example">{ <span class="j-key">"ref"</span>: <span class="j-str">"e7"</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-pdf" data-category="read" data-search="browser_pdf 打印 pdf 导出">
+              <div class="tool__head">
+                <span class="tool__name">browser_pdf</span>
+                <span class="tool__cat">READ</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_pdf" aria-label="复制工具名 browser_pdf">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>把当前页面渲染为 A4 PDF 并保存到指定路径。</p>
+              <div class="tool__example">{ <span class="j-key">"path"</span>: <span class="j-str">"C:\\Users\\me\\page.pdf"</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-find" data-category="read" data-search="browser_find 查找 文本 ctrl+f 高亮">
+              <div class="tool__head">
+                <span class="tool__name">browser_find</span>
+                <span class="tool__cat">READ</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_find" aria-label="复制工具名 browser_find">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>页面内查找文本（原生 Ctrl+F 行为）：高亮全部匹配并定位第一处，返回匹配数。</p>
+              <div class="tool__example">{ <span class="j-key">"text"</span>: <span class="j-str">"订单号"</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-wait" data-category="read" data-search="browser_wait 等待 文本 出现 消失 延时">
+              <div class="tool__head">
+                <span class="tool__name">browser_wait</span>
+                <span class="tool__cat">READ</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_wait" aria-label="复制工具名 browser_wait">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>等待文本出现 / 消失，或等待固定时长。<code>text</code> 与 <code>textGone</code> 同时给出时以先发生者为准。</p>
+              <div class="tool__example">{ <span class="j-key">"text"</span>: <span class="j-str">"支付成功"</span>, <span class="j-key">"timeoutMs"</span>: <span class="j-num">10000</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-dialogs" data-category="read" data-search="browser_dialogs 弹窗 alert confirm prompt">
+              <div class="tool__head">
+                <span class="tool__name">browser_dialogs</span>
+                <span class="tool__cat">READ</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_dialogs" aria-label="复制工具名 browser_dialogs">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>读取页面弹过的 alert / confirm / prompt。弹窗已被拦截，confirm 返回 false、prompt 返回 null，不会卡死。</p>
+              <div class="tool__example">{ <span class="j-key">"clear"</span>: <span class="j-bool">true</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-get-selector" data-category="read" data-search="browser_get_selector css 选择器 导出">
+              <div class="tool__head">
+                <span class="tool__name">browser_get_selector</span>
+                <span class="tool__cat">READ</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_get_selector" aria-label="复制工具名 browser_get_selector">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>为 ref 元素生成 CSS 选择器，并经 DOM 回验，可复用到脚本与测试。</p>
+              <div class="tool__example">{ <span class="j-key">"ref"</span>: <span class="j-str">"e12"</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-resize" data-category="read" data-search="browser_resize 视口 尺寸 响应式">
+              <div class="tool__head">
+                <span class="tool__name">browser_resize</span>
+                <span class="tool__cat">READ</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_resize" aria-label="复制工具名 browser_resize">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>调整视口尺寸，用于响应式测试；随后重新快照即可看到适配后的结构。</p>
+              <div class="tool__example">{ <span class="j-key">"width"</span>: <span class="j-num">390</span>, <span class="j-key">"height"</span>: <span class="j-num">844</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-cookies" data-category="read" data-search="browser_cookies cookie 登录态 读写 清除">
+              <div class="tool__head">
+                <span class="tool__name">browser_cookies</span>
+                <span class="tool__cat">READ</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_cookies" aria-label="复制工具名 browser_cookies">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>Cookie 读取 / 写入 / 清理，是登录态测试的关键能力。</p>
+              <div class="tool__example">{ <span class="j-key">"action"</span>: <span class="j-str">"get"</span>, <span class="j-key">"url"</span>: <span class="j-str">"https://example.com"</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-storage" data-category="read" data-search="browser_storage localstorage sessionstorage 存储">
+              <div class="tool__head">
+                <span class="tool__name">browser_storage</span>
+                <span class="tool__cat">READ</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_storage" aria-label="复制工具名 browser_storage">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>localStorage / sessionStorage 的读取、写入、删除与清空。</p>
+              <div class="tool__example">{ <span class="j-key">"action"</span>: <span class="j-str">"get"</span>, <span class="j-key">"kind"</span>: <span class="j-str">"local"</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-downloads" data-category="read" data-search="browser_downloads 下载 文件 列表">
+              <div class="tool__head">
+                <span class="tool__name">browser_downloads</span>
+                <span class="tool__cat">READ</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_downloads" aria-label="复制工具名 browser_downloads">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>下载捕获列表：下载被静默保存到 <code>~/.aabrowser/downloads/</code>，没有保存对话框。</p>
+              <div class="tool__example">{ <span class="j-key">"limit"</span>: <span class="j-num">10</span> }</div>
+            </article>
+
+            <div class="tools-section-anchor" id="network"></div>
+
+            <article class="tool" id="tool-network-requests" data-category="network" data-search="browser_network_requests 抓包 请求 过滤 状态">
+              <div class="tool__head">
+                <span class="tool__name">browser_network_requests</span>
+                <span class="tool__cat">NET</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_network_requests" aria-label="复制工具名 browser_network_requests">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>列出捕获的 HTTP 请求（方法 / 状态 / 类型 / 大小 / 耗时 / URL），支持按状态、方法与 URL 过滤。</p>
+              <div class="tool__example">{ <span class="j-key">"statusMin"</span>: <span class="j-num">400</span>, <span class="j-key">"limit"</span>: <span class="j-num">50</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-network-detail" data-category="network" data-search="browser_network_detail 请求 详情 响应体 请求头">
+              <div class="tool__head">
+                <span class="tool__name">browser_network_detail</span>
+                <span class="tool__cat">NET</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_network_detail" aria-label="复制工具名 browser_network_detail">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>单个请求的完整请求 / 响应头、状态、大小、耗时；<code>body: true</code> 附带响应体。默认脱敏。</p>
+              <div class="tool__example">{ <span class="j-key">"requestId"</span>: <span class="j-str">"1234.5"</span>, <span class="j-key">"body"</span>: <span class="j-bool">true</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-har" data-category="network" data-search="browser_har har 导出 devtools fiddler">
+              <div class="tool__head">
+                <span class="tool__name">browser_har</span>
+                <span class="tool__cat">NET</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_har" aria-label="复制工具名 browser_har">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>导出 HAR 1.2（不含响应体），可导入 DevTools / Fiddler 人工分析。凭据默认脱敏。</p>
+              <div class="tool__example">{ <span class="j-key">"path"</span>: <span class="j-str">"C:\\Users\\me\\capture.har"</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-mock-requests" data-category="network" data-search="browser_mock_requests mock 拦截 假响应">
+              <div class="tool__head">
+                <span class="tool__name">browser_mock_requests</span>
+                <span class="tool__cat">NET</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_mock_requests" aria-label="复制工具名 browser_mock_requests">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>按 URL 子串 + 方法拦截请求，返回假状态 / 头 / 体；<code>action: continue</code> 只观察并放行。</p>
+              <div class="tool__example">{ <span class="j-key">"urlContains"</span>: <span class="j-str">"/api/v1/quote"</span>, <span class="j-key">"status"</span>: <span class="j-num">200</span>, <span class="j-key">"body"</span>: <span class="j-str">"{\"price\":42}"</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-list-mocks" data-category="network" data-search="browser_list_mocks 列出 规则 命中">
+              <div class="tool__head">
+                <span class="tool__name">browser_list_mocks</span>
+                <span class="tool__cat">NET</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_list_mocks" aria-label="复制工具名 browser_list_mocks">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>列出当前 mock 规则：匹配器、状态、命中次数。</p>
+              <div class="tool__example">{ }</div>
+            </article>
+
+            <article class="tool" id="tool-clear-mocks" data-category="network" data-search="browser_clear_mocks 删除 清空 规则">
+              <div class="tool__head">
+                <span class="tool__name">browser_clear_mocks</span>
+                <span class="tool__cat">NET</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_clear_mocks" aria-label="复制工具名 browser_clear_mocks">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>按 id 删除单条 mock 规则，或清空全部并停止拦截。</p>
+              <div class="tool__example">{ <span class="j-key">"id"</span>: <span class="j-str">"rule-1"</span> }</div>
+            </article>
+
+            <div class="tools-section-anchor" id="diag"></div>
+
+            <article class="tool" id="tool-performance" data-category="diag" data-search="browser_performance 性能 ttfb 首绘 资源 堆 dom">
+              <div class="tool__head">
+                <span class="tool__name">browser_performance</span>
+                <span class="tool__cat">DIAG</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_performance" aria-label="复制工具名 browser_performance">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>页面性能摘要：导航耗时（TTFB / DOMContentLoaded / load）、首绘、资源体积与慢资源、JS 堆、DOM 规模。只读诊断。</p>
+              <div class="tool__example">{ <span class="j-key">"slowest"</span>: <span class="j-num">5</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-console" data-category="diag" data-search="browser_console 控制台 日志 错误">
+              <div class="tool__head">
+                <span class="tool__name">browser_console</span>
+                <span class="tool__cat">DIAG</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_console" aria-label="复制工具名 browser_console">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>读取页面控制台消息，可按 error / warning / info 过滤。</p>
+              <div class="tool__example">{ <span class="j-key">"level"</span>: <span class="j-str">"error"</span>, <span class="j-key">"limit"</span>: <span class="j-num">20</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-tabs" data-category="diag" data-search="browser_tabs 标签页 列表 新建 切换 关闭">
+              <div class="tool__head">
+                <span class="tool__name">browser_tabs</span>
+                <span class="tool__cat">DIAG</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_tabs" aria-label="复制工具名 browser_tabs">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>标签页列表 / 新建 / 切换 / 关闭。它也是接入验证的标准调用：能返回标签列表才算接通。</p>
+              <div class="tool__example">{ <span class="j-key">"action"</span>: <span class="j-str">"list"</span> }</div>
+            </article>
+          </div>
+
+          <div class="tools-empty" id="toolsEmpty">
+            <strong>没有匹配的工具</strong>
+            换个关键词，或按类别浏览。
+          </div>
+        </div>
+      </div>
+
+      <section class="tools-cta">
+        <div class="shell tools-cta__inner">
+          <div>
+            <h2>还没接上？先看三分钟接入。</h2>
+            <p>安装器会写入配置、实际调用工具验证，并告诉你哪一步没通过。</p>
+          </div>
+          <div class="hero__actions" style="margin: 0">
+            <a class="btn btn--primary" href="index.html#start">接入指南</a>
+            <a class="btn btn--ghost" href="index.html#download">下载</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="shell">
+        <div class="footer__bottom" style="border-top: 0">
+          <p>© 2026 Aa Browser contributors · 工具清单对应 v0.2.0，参数以运行时定义为准。</p>
+          <div class="footer__meta">
+            <a href="index.html">首页</a>
+            <a href="https://github.com/yuchen0x1/aa-browser" target="_blank" rel="noopener">GitHub</a>
+            <a href="index.html#start">接入指南</a>
+          </div>
+        </div>
+      </div>
+    </footer>
+
+    <script src="assets/site.js?v=0.2.0" defer></script>
+  </body>
+</html>
