@@ -397,6 +397,19 @@ const TOOL_DEFS = [
     }
   },
   {
+    name: 'browser_performance',
+    title: '页面性能摘要',
+    description:
+      'Summarize performance metrics of the active tab: navigation timing (TTFB / DOMContentLoaded / load), First Contentful Paint, resource count and transfer size, slowest resources, JS heap usage and DOM size. Read-only diagnostics for slow pages; no DevTools needed.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        slowest: { type: 'number', description: 'How many slowest resources to list (default 5, max 20)' },
+        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+      }
+    }
+  },
+  {
     name: 'browser_network_requests',
     title: '网络请求列表（抓包）',
     description:
@@ -588,6 +601,7 @@ const TOOL_ANNOTATIONS = Object.freeze({
   browser_pdf: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   browser_upload_file: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   browser_console: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  browser_performance: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   browser_network_requests: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   browser_network_detail: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   browser_har: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },

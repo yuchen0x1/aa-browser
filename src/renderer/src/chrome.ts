@@ -88,6 +88,7 @@ const setEngineUrl = document.getElementById('set-engine-url') as HTMLInputEleme
 const setFullSnapshot = document.getElementById('set-full-snapshot') as HTMLInputElement | null
 const setOpApproval = document.getElementById('set-op-approval') as HTMLInputElement | null
 const setIsolatedSessions = document.getElementById('set-isolated-sessions') as HTMLInputElement | null
+const setRestoreSession = document.getElementById('set-restore-session') as HTMLInputElement | null
 const setDownloadDir = document.getElementById('set-download-dir') as HTMLInputElement | null
 const setAllowedSites = document.getElementById('set-allowed-sites') as HTMLTextAreaElement | null
 const setAgentInfo = document.getElementById('set-agent-info') as HTMLDivElement | null
@@ -154,6 +155,8 @@ function applyLocale(locale: Locale): void {
   setText('settings-approval-label', 'approval')
   setText('settings-isolated-label', 'isolatedSessions')
   setText('settings-isolated-hint', 'isolatedSessionsHint')
+  setText('settings-restore-label', 'restoreSession')
+  setText('settings-restore-hint', 'restoreSessionHint')
   setText('settings-download-dir-label', 'downloadDir')
   setAttr('set-download-dir', 'placeholder', 'downloadDirPlaceholder')
   setText('settings-allowlist-label', 'siteAllowlist')
@@ -808,6 +811,7 @@ async function openSettings(): Promise<void> {
     if (setFullSnapshot) setFullSnapshot.checked = view.settings.fullSnapshot
     if (setOpApproval) setOpApproval.checked = !!view.settings.requireOperationApproval
     if (setIsolatedSessions) setIsolatedSessions.checked = !!view.settings.isolatedSessions
+    if (setRestoreSession) setRestoreSession.checked = view.settings.restoreSession !== false
     if (setAutoUpdate) setAutoUpdate.checked = view.settings.autoUpdate !== false
     if (setUpdateChannel) setUpdateChannel.value = view.settings.updateChannel || 'stable'
     if (setDownloadDir) setDownloadDir.value = view.settings.downloadDir
@@ -862,6 +866,7 @@ document.getElementById('btn-save-settings')?.addEventListener('click', async ()
   if (setFullSnapshot) patch.fullSnapshot = setFullSnapshot.checked
   if (setOpApproval) patch.requireOperationApproval = setOpApproval.checked
   if (setIsolatedSessions) patch.isolatedSessions = setIsolatedSessions.checked
+  if (setRestoreSession) patch.restoreSession = setRestoreSession.checked
   if (setAutoUpdate) patch.autoUpdate = setAutoUpdate.checked
   if (setUpdateChannel) patch.updateChannel = setUpdateChannel.value === 'beta' ? 'beta' : 'stable'
   if (setDownloadDir) patch.downloadDir = setDownloadDir.value

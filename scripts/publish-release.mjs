@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
-import { releaseAssets } from './release-assets.mjs'
+import { releaseFileNames } from './release-assets.mjs'
 
 export async function publishRelease(repos, repo, tag, sha, log = console.log) {
-  const names = [...Object.values(releaseAssets(tag)).flat().sort(), 'SHA256SUMS.txt']
+  const names = releaseFileNames(tag)
   const body = await readFile(`release-notes-${tag}.md`, 'utf8')
   let release
   try {

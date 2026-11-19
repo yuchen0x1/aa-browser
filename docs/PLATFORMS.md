@@ -8,7 +8,7 @@
 | Ubuntu 桌面 x86_64 | AppImage | Linux 窗口关联及 XDG 数据目录。MCP 需要系统 Node.js 22.12+ | 检查、下载及确认重启。替换前保留本机旧 AppImage |
 | 其他发行版和架构 | 见评估表 | 兼容性需要实机验证 | 暂无独立发行渠道 |
 
-浏览、查找、共享登录态与隔离标签、下载、历史、权限确认和 33 个 MCP 工具来自同一内核。Windows 和 Linux 使用各自系统的路径、应用标识及文件对话框。Windows 安装助手 `install.mjs` 负责 NSIS 安装和 WorkBuddy Connector 生成。Linux 用户直接启动 AppImage，再在「设置 → 连接 AI 客户端」中写入配置。独立 MCP 配置写入完成后需要重启客户端并成功调用 `browser_tabs`。
+浏览、查找、共享登录态与隔离标签、下载、历史、权限确认、跨会话标签恢复和 34 个 MCP 工具来自同一内核。Windows 和 Linux 使用各自系统的路径、应用标识及文件对话框。Windows 安装助手 `install.mjs` 负责 NSIS 安装和 WorkBuddy Connector 生成。Linux 用户直接启动 AppImage，再在「设置 → 连接 AI 客户端」中写入配置。独立 MCP 配置写入完成后需要重启客户端并成功调用 `browser_tabs`。
 
 ## 安装、卸载与恢复
 
@@ -25,7 +25,7 @@ chmod u+x ~/Applications/AaBrowser.AppImage
 
 如果系统没有可用的 FUSE 挂载，可在保持 Chromium 沙箱启用的情况下，通过 `APPIMAGE_EXTRACT_AND_RUN=1 ~/Applications/AaBrowser.AppImage` 启动。遇到沙箱错误，检查发行版对 Chromium 用户命名空间的应用级策略。MCP 写入路径使用 Electron 用户数据下的 `mcp/bridge.cjs`，更新后浏览器重启会刷新桥文件。
 
-Linux 卸载时关闭应用并移除 AppImage 以及自行添加的启动器。Windows 和 Linux 用户都可以选择保留或备份 Electron 用户数据。Linux 为 XDG 配置目录下的 Aa Browser 用户数据，Windows 为用户 AppData。站点登录态及关键设置保存在 Chromium profile，临时连接描述文件默认位于 `~/.aabrowser/connection.json`。移除程序后，如需移除 MCP 配置，只从各客户端中删除 `aa-browser` 条目。
+Linux 卸载时关闭应用并移除 AppImage 以及自行添加的启动器。Windows 和 Linux 用户都可以选择保留或备份 Electron 用户数据。Linux 为 XDG 配置目录下的 Aa Browser 用户数据，Windows 为用户 AppData。站点登录态及关键设置保存在 Chromium profile，临时连接描述文件默认位于 `~/.aabrowser/connection.json`。跨会话标签记录默认位于 `~/.aabrowser/session.json`（可用 `AA_BROWSER_SESSION_FILE` 覆盖），只保存普通网页地址，不含 Cookie、请求头或账号密码。移除程序后，如需移除 MCP 配置，只从各客户端中删除 `aa-browser` 条目。
 
 Linux 应用内更新的旧文件保存在用户数据下的 `previous-versions/<版本>.AppImage`。新版本无法启动时，关闭残留进程，把需要的旧文件复制回安装目录，赋予执行权限并启动。Windows 可以重新安装原来的官方安装器。最好在尝试降级前复制用户数据。已登录会话可能受 Chromium 跨版本格式约束。
 

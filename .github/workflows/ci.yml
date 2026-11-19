@@ -39,6 +39,8 @@ jobs:
       - run: npm run validate:codex
       - run: npm run validate:workbuddy
       - run: npm run build
+      - name: Generate software bill of materials
+        run: npm run sbom
       - name: Headless desktop display (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -129,6 +131,8 @@ jobs:
           pattern: release-*
           path: release
           merge-multiple: true
+      - name: Generate SBOM for the tested release
+        run: npm run sbom
       - run: node scripts/release-assets.mjs manifest
       - name: Publish and verify assets
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8

@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { TabManager } from './tabs'
+import type { Tab } from './tabs'
 import { AgentServer } from './agent-server'
 import { buildTools } from './tools'
 import { normalizeUrl } from './tabs'
@@ -12,6 +13,7 @@ import { detectClients, setupClients, syncAppImageBridge } from './clients'
 import { getDownloadTracker } from './downloads'
 import { getHistoryStore } from './history'
 import { getSettingsStore } from './settings'
+import { getSessionStore } from './session-store'
 import { ApprovalManager } from './approvals'
 import { applyPermissionPolicy, clearIsolatedPartition, sweepStalePartitions } from './sessions'
 import { session } from 'electron'
@@ -51,6 +53,10 @@ let overlayHeight = 0
 let finder: PageFinder | null = null
 const approvals = new ApprovalManager()
 let updater: UpdateManager | null = null
+/** 由 whenReady 注入：立即写入跨会话标签记录（final=true 时允许清空过期记录） */
+let flushSessionRecord: ((final?: boolean) => void) | null = null
+/** 由 whenReady 注入：标签变化后延迟写入跨会话记录 */
+let scheduleSessionSave: () => void = () => {}
 const recentActions: import('@shared/types').ActionLogItem[] = []
 
 export function logAgentAction(item: import('@shared/types').ActionLogItem): void {
@@ -481,6 +487,9 @@ function registerIpc(): void {
     return guard(event, null, () => {
       const result = getSettingsStore().set((patch ?? {}) as Record<string, unknown>)
       updater?.refreshSettings()
+      // 关闭恢复时立刻删除旧记录；重新开启时立即记录当前标签，避免下次启动恢复过期页面。
+      if (!result.restoreSession) getSessionStore().clear()
+      else if ((patch as Record<string, unknown> | null)?.['restoreSession'] === true) flushSessionRecord?.()
       pushState()
       return result
     })
@@ -522,6 +531,7 @@ function onTabChange(): void {
   }
   if (active) layout()
   pushState()
+  scheduleSessionSave()
 }
 
 app.whenReady().then(() => {
@@ -577,10 +587,54 @@ app.whenReady().then(() => {
   tabManager.onViewDetach = (view) => detachTabView(view)
   getDownloadTracker().setDirectoryProvider(() => getSettingsStore().get().downloadDir)
 
+  // 跨会话标签恢复：先把上次的普通标签建回来，再开启自动保存。
+  // 恢复过程中的 onChange 也会排队保存，但 during-restore 标志保证不会用半恢复状态覆盖记录。
+  const sessionStore = getSessionStore()
+  let sessionSaveTimer: ReturnType<typeof setTimeout> | null = null
+  let restoringSession = false
+  function flushSession(final = false): void {
+    if (sessionSaveTimer) {
+      clearTimeout(sessionSaveTimer)
+      sessionSaveTimer = null
+    }
+    if (restoringSession || !getSettingsStore().get().restoreSession || !tabManager) return
+    const snapshot = tabManager.sessionTabs()
+    // 启动/导航的中间态会短暂出现 about:blank：此时不要清掉刚读入的旧记录，
+    // 只在退出时允许把「确实没有任何可恢复标签」的空记录落盘。
+    if (!snapshot.tabs.length && !final) return
+    sessionStore.save(snapshot.tabs, snapshot.activeIndex)
+  }
+  flushSessionRecord = (final?: boolean) => flushSession(final === true)
+  scheduleSessionSave = (): void => {
+    if (!getSettingsStore().get().restoreSession) return
+    if (sessionSaveTimer) clearTimeout(sessionSaveTimer)
+    sessionSaveTimer = setTimeout(() => {
+      sessionSaveTimer = null
+      flushSession()
+    }, 600)
+  }
+
   createWindow()
 
-  // 首个标签页：新标签页
-  tabManager.createTab()
+  // 首个标签页：优先恢复上次会话；没有可恢复记录时打开新标签页。
+  const restored = getSettingsStore().get().restoreSession ? sessionStore.load() : null
+  if (restored) {
+    restoringSession = true
+    const created: Tab[] = []
+    for (const entry of restored.tabs) {
+      try {
+        created.push(tabManager.createTab(entry.url, false, false))
+      } catch {
+        /* 白名单收紧后旧地址会被拒绝：跳过并继续恢复其余标签 */
+      }
+    }
+    restoringSession = false
+    if (created.length) {
+      const active = created[Math.min(restored.activeIndex, created.length - 1)]
+      tabManager.selectTab(active.id)
+    }
+  }
+  if (!tabManager.tabs.length) tabManager.createTab()
 
   // 下载追踪：静默捕获所有标签页隔离 session 的下载
   getDownloadTracker().attach(session.defaultSession)
@@ -642,6 +696,7 @@ app.whenReady().then(() => {
 })
 
 app.on('before-quit', () => {
+  try { flushSessionRecord?.(true) } catch { /* 会话记录是尽力而为，不阻塞退出 */ }
   updater?.dispose()
   approvals.cancelAll()
   agentServer?.stop()

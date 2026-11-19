@@ -25,6 +25,7 @@ export type LocaleKey =
   | 'agentService' | 'loading' | 'save' | 'saving' | 'saved' | 'saveFailed' | 'autoLocale'
   | 'defaultSearchEngine' | 'customSearchAddress' | 'isolatedSessionsHint' | 'downloadDirPlaceholder'
   | 'siteAllowlistHint' | 'siteAllowlistPlaceholder' | 'updateHint' | 'clientSetupHint'
+  | 'restoreSession' | 'restoreSessionHint'
 
 const catalogs: Record<Locale, Record<LocaleKey, string>> = {
   'zh-CN': {
@@ -47,7 +48,9 @@ const catalogs: Record<Locale, Record<LocaleKey, string>> = {
     siteAllowlistPlaceholder: '每行一个规则，例如：\nhttps://example.com\nhttps://*.example.org:8443',
     siteAllowlistHint: '填写后仅允许匹配的 HTTP/HTTPS 站点。留空表示不启用白名单。支持 *.example.com 子域名匹配。',
     updateHint: '更新来自 GitHub Releases。下载完成并通过 electron-updater 校验后才会安装。',
-    clientSetupHint: '写入前自动备份，只改 aa-browser 一个键。写入后请在客户端确认工具已加载。'
+    clientSetupHint: '写入前自动备份，只改 aa-browser 一个键。写入后请在客户端确认工具已加载。',
+    restoreSession: '重启后恢复上次打开的标签页',
+    restoreSessionHint: '只恢复普通网页标签，不恢复隔离标签、内部页和 file/data 地址。关闭后下次启动打开新标签页。'
   },
   'en-US': {
     appTitle: 'aa-browser', tabs: 'Browser tabs', newTab: 'New tab (Ctrl+T)', back: 'Back (Alt+←)',
@@ -69,7 +72,9 @@ const catalogs: Record<Locale, Record<LocaleKey, string>> = {
     siteAllowlistPlaceholder: 'One rule per line, for example:\nhttps://example.com\nhttps://*.example.org:8443',
     siteAllowlistHint: 'Only matching HTTP/HTTPS sites are allowed when configured. Leave blank to allow all HTTP/HTTPS sites. Use *.example.com to match subdomains.',
     updateHint: 'Updates come from GitHub Releases. electron-updater verifies the downloaded update before installation.',
-    clientSetupHint: 'Aa Browser backs up the configuration and changes only the aa-browser entry. Confirm in the client that it loaded the tools.'
+    clientSetupHint: 'Aa Browser backs up the configuration and changes only the aa-browser entry. Confirm in the client that it loaded the tools.',
+    restoreSession: 'Restore the tabs from the last session on restart',
+    restoreSessionHint: 'Only regular web tabs are restored; isolated tabs, internal pages and file/data URLs are skipped. When off, the next launch starts with a new tab.'
   }
 }
 

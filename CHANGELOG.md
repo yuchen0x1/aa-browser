@@ -2,6 +2,14 @@
 
 产品版本历史以 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md) 为准。
 
+## v0.2.0 — 2026-11-19
+
+- 新增跨会话标签恢复（默认开启、可关闭）：恢复普通网页标签和活动标签，跳过隔离标签、内部页与非 HTTP(S) 地址，剥离 URL 凭据，原子写入且限制 20 条。
+- 新增 `browser_performance` MCP 工具：导航/绘制/资源/堆/DOM 性能摘要，只读幂等；MCP 工具总数 34。
+- 正式发行新增 CycloneDX SBOM 并纳入 `SHA256SUMS.txt`；发布与公开校验脚本强制核对 SBOM。
+- 修复冒烟测试在继承 `ELECTRON_RUN_AS_NODE=1` 的 shell 中无法启动 Electron 的问题。
+- 持久化回归 11 项、桌面回归 26 项、更新 UI 回归 6 项，两平台 CI 与打包冒烟流程保持不变。
+
 ## v0.1.0 — 2026-11-18
 
 - 新增 Linux x86_64 AppImage、MCP 桥稳定路径、安装阶段错误反馈与 AppImage 手动回退副本。

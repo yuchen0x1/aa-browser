@@ -1,5 +1,7 @@
 # Aa Browser 项目现状审计
 
+> **本文件记录 2026-11-16 的 v0.0.5 基线，属于历史档案。** 当前版本状态、平台矩阵和验证证据见 [`docs/MAINTENANCE.md`](./docs/MAINTENANCE.md)、[`docs/PLATFORMS.md`](./docs/PLATFORMS.md) 和 [`docs/reports/2026-11-19-round2.md`](./docs/reports/2026-11-19-round2.md)。
+>
 > 审计时间：2026-11-16（Asia/Shanghai）
 > 审计对象：E:\移动云盘同步盘\Aa 浏览器\aa-browser
 > 审计范围：仓库结构、源码、配置、文档、CI、测试脚本、构建产物状态

@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { createReadStream, readFileSync, statSync } from 'node:fs'
+import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
 import { copyFile, mkdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+
+/** 与安装包一起发布的软件物料清单（CycloneDX）。 */
+export const SBOM_FILE = 'sbom.cdx.json'
 
 export function releaseAssets(tag) {
   assert.match(tag, /^v\d+\.\d+\.\d+$/)
@@ -13,6 +16,23 @@ export function releaseAssets(tag) {
     'windows-x64': [installer, `${installer}.blockmap`, 'latest.yml'],
     'linux-x64': [`aa-browser-${version}-linux-x86_64.AppImage`, 'latest-linux.yml']
   }
+}
+
+/** v0.2.0 起正式发行包含 SBOM；更早的标签保持原资产集合，供历史校验。 */
+export function supportsSbom(tag) {
+  const match = /^v(\d+)\.(\d+)\.(\d+)$/.exec(tag)
+  if (!match) return false
+  const major = Number(match[1])
+  const minor = Number(match[2])
+  return major > 0 || (major === 0 && minor >= 2)
+}
+
+/** 一个正式发布应包含的全部资产（含 SHA256SUMS.txt），按名称排序。 */
+export function releaseFileNames(tag) {
+  const names = Object.values(releaseAssets(tag)).flat()
+  if (supportsSbom(tag)) names.push(SBOM_FILE)
+  names.push('SHA256SUMS.txt')
+  return names.sort()
 }
 
 export async function digestFile(file, algorithm = 'sha256', encoding = 'hex') {
@@ -45,7 +65,10 @@ async function prepare(platform, tag, folder) {
 }
 
 async function writeManifest(tag, folder) {
-  const names = Object.values(releaseAssets(tag)).flat().sort()
+  const names = releaseFileNames(tag).filter((name) => name !== 'SHA256SUMS.txt')
+  if (supportsSbom(tag) && !existsSync(path.join(folder, SBOM_FILE))) {
+    throw new Error(`Missing ${SBOM_FILE}: run npm run sbom before generating the release manifest`)
+  }
   const lines = await Promise.all(names.map(async (name) => `${await digestFile(path.join(folder, name))}  ${name}`))
   await writeFile(path.join(folder, 'SHA256SUMS.txt'), `${lines.join('\n')}\n`)
 }

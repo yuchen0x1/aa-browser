@@ -22,6 +22,8 @@ export interface AppSettings {
   autoUpdate: boolean
   /** 更新通道 */
   updateChannel: 'stable' | 'beta'
+  /** 重启后恢复上次打开的普通标签页（隔离标签和内部页不恢复） */
+  restoreSession: boolean
 }
 
 const DEFAULTS: AppSettings = {
@@ -33,7 +35,8 @@ const DEFAULTS: AppSettings = {
   allowedSites: [],
   isolatedSessions: false,
   autoUpdate: true,
-  updateChannel: 'stable'
+  updateChannel: 'stable',
+  restoreSession: true
 }
 
 const PRESETS: { label: string; url: string }[] = [
@@ -63,6 +66,7 @@ function normalizeSettings(value: unknown): AppSettings {
     isolatedSessions: typeof raw.isolatedSessions === 'boolean' ? raw.isolatedSessions : DEFAULTS.isolatedSessions,
     autoUpdate: typeof raw.autoUpdate === 'boolean' ? raw.autoUpdate : DEFAULTS.autoUpdate,
     updateChannel: raw.updateChannel === 'beta' ? 'beta' : 'stable',
+    restoreSession: typeof raw.restoreSession === 'boolean' ? raw.restoreSession : DEFAULTS.restoreSession,
     allowedSites: Array.isArray(raw.allowedSites) ? raw.allowedSites.filter((site): site is string => typeof site === 'string').map((site) => site.trim()).filter(Boolean) : []
   }
 }
@@ -94,6 +98,7 @@ export class SettingsStore {
     if (typeof patch.isolatedSessions === 'boolean') next.isolatedSessions = patch.isolatedSessions
     if (typeof patch.autoUpdate === 'boolean') next.autoUpdate = patch.autoUpdate
     if (patch.updateChannel === 'stable' || patch.updateChannel === 'beta') next.updateChannel = patch.updateChannel
+    if (typeof patch.restoreSession === 'boolean') next.restoreSession = patch.restoreSession
     if (Array.isArray(patch.allowedSites)) {
       next.allowedSites = patch.allowedSites
         .filter((site): site is string => typeof site === 'string')

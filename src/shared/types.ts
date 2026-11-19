@@ -110,6 +110,8 @@ export interface AppSettings {
   isolatedSessions: boolean
   autoUpdate: boolean
   updateChannel: 'stable' | 'beta'
+  /** 重启后恢复上次打开的普通标签页 */
+  restoreSession: boolean
 }
 
 /** 设置面板返回值 */

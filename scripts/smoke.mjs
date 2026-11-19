@@ -27,6 +27,7 @@ const SMOKE_DIR = path.join(ROOT, '.local-verification', `smoke-${process.pid}-$
 const SMOKE_CONNECT_FILE = path.join(SMOKE_DIR, 'connection.json')
 const SMOKE_DOWNLOAD_DIR = path.join(SMOKE_DIR, 'downloads')
 const SMOKE_SCREENSHOT_DIR = path.join(SMOKE_DIR, 'screenshots')
+const SMOKE_SESSION_FILE = path.join(SMOKE_DIR, 'session.json')
 const PROFILE = path.join(SMOKE_DIR, 'profile')
 const bridgePath = !packagedApp ? path.join(ROOT, 'cli', 'mcp.mjs') : process.platform === 'linux'
   ? path.join(PROFILE, 'mcp', 'bridge.cjs')
@@ -96,15 +97,22 @@ async function ensureAppRunning() {
   }
   const child = spawn(electronPath, packagedApp ? [] : ['.'], {
     cwd: ROOT,
-    env: {
-      ...process.env,
-      AA_BROWSER_CONNECTION_FILE: SMOKE_CONNECT_FILE,
-      AA_BROWSER_USER_DATA_DIR: PROFILE,
-      AA_BROWSER_DOWNLOAD_DIR: SMOKE_DOWNLOAD_DIR,
-      AA_BROWSER_SCREENSHOT_DIR: SMOKE_SCREENSHOT_DIR,
-      AA_BROWSER_HISTORY_DIR: path.join(SMOKE_DIR, 'history'),
-      AA_BROWSER_SETTINGS_FILE: path.join(SMOKE_DIR, 'settings.json')
-    },
+    env: (() => {
+      const environment = {
+        ...process.env,
+        AA_BROWSER_CONNECTION_FILE: SMOKE_CONNECT_FILE,
+        AA_BROWSER_USER_DATA_DIR: PROFILE,
+        AA_BROWSER_DOWNLOAD_DIR: SMOKE_DOWNLOAD_DIR,
+        AA_BROWSER_SCREENSHOT_DIR: SMOKE_SCREENSHOT_DIR,
+        AA_BROWSER_HISTORY_DIR: path.join(SMOKE_DIR, 'history'),
+        AA_BROWSER_SETTINGS_FILE: path.join(SMOKE_DIR, 'settings.json'),
+        AA_BROWSER_SESSION_FILE: SMOKE_SESSION_FILE
+      }
+      // Some CI/agent shells export this for Electron-based tooling; it turns
+      // the app process into plain Node and `electron.app` becomes undefined.
+      delete environment.ELECTRON_RUN_AS_NODE
+      return environment
+    })(),
     stdio: 'inherit'
   })
   child.on('error', (err) => console.error('[smoke] Electron launch failed:', err.message))
@@ -222,7 +230,7 @@ async function main() {
     const toolNames = (list?.result?.tools ?? []).map((t) => t.name)
     check('tools/list ≥ 12 个工具', toolNames.length >= 12, `实际 ${toolNames.length}`)
     // 工具定义漂移回归：v0.6.0 曾出现桥少 3 个 mock 工具、客户端完全调不到
-    check('tools/list 与主进程一致（33 个）', toolNames.length === 33, `实际 ${toolNames.length}: ${toolNames.join(',')}`)
+    check('tools/list 与主进程一致（34 个）', toolNames.length === 34, `实际 ${toolNames.length}: ${toolNames.join(',')}`)
     const missingHints = (list?.result?.tools ?? [])
       .filter((tool) => ['readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint'].some((key) => typeof tool?.annotations?.[key] !== 'boolean'))
       .map((tool) => tool.name)
@@ -362,11 +370,29 @@ async function main() {
     const tabs = await mcp.call('browser_tabs', { action: 'list' })
     check('列出标签页', mcp.text(tabs).includes('★活动'), mcp.text(tabs).slice(0, 200))
 
+    console.log('\n[10b] 跨会话恢复记录')
+    let sessionSnapshot = null
+    const sessionDeadline = Date.now() + 6000
+    while (Date.now() < sessionDeadline && !sessionSnapshot?.tabs?.length) {
+      await sleep(150)
+      try { sessionSnapshot = JSON.parse(fs.readFileSync(SMOKE_SESSION_FILE, 'utf-8')) } catch { /* 尚未写入 */ }
+    }
+    const webTabs = (sessionSnapshot?.tabs ?? []).filter((tab) => /^https?:\/\//.test(String(tab?.url ?? '')))
+    check('普通网页标签已写入会话恢复记录', webTabs.length > 0, JSON.stringify(sessionSnapshot)?.slice(0, 300))
+    check('会话记录不含内部页或隔离标记', !JSON.stringify(sessionSnapshot ?? {}).includes('about:blank') && !JSON.stringify(sessionSnapshot ?? {}).includes('aa-iso-'), JSON.stringify(sessionSnapshot)?.slice(0, 300))
+
     console.log('\n[11] 强制完整快照')
     const fullSnap = await mcp.call('browser_snapshot', { full: true })
     const fullText = mcp.text(fullSnap)
     check('full:true 返回完整树', fullText.includes('页面快照（完整）'), fullText.slice(0, 160))
     check('完整树与增量内容一致', fullText.includes('已搜索: 你好 Aa'))
+
+    console.log('\n[11b] 页面性能摘要')
+    const perf = await mcp.call('browser_performance', { slowest: 3 })
+    const perfText = mcp.text(perf)
+    check('性能摘要包含导航与资源指标', !perf.isError && perfText.includes('导航:') && perfText.includes('资源:'), perfText.slice(0, 400))
+    check('性能摘要包含 DOM 规模', perfText.includes('DOM: 元素'), perfText.slice(0, 400))
+    check('性能摘要指向当前测试页', perfText.includes('test-page.html'), perfText.slice(0, 400))
 
     console.log('\n[12] 网络抓包')
     // 本地 HTTP 服务：页面加载时 fetch /api/data → 产生可断言的网络请求；附带下载与文件上传

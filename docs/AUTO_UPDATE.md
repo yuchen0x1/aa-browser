@@ -8,7 +8,7 @@ Windows NSIS 与 Linux AppImage 使用 [GitHub Releases](https://github.com/yuch
 
 主界面显示可用版本、下载进度、速度和失败状态。详细版本、日期、大小及变更日志在更新状态提示中。点击「稍后」会收起当前阶段的提示。下载完成后只有用户确认「重启安装」才交给系统安装器。安装失败需用户重新确认。
 
-更新从官方仓库通过 HTTPS 获取。electron-updater 在交付安装前按平台更新描述验证 SHA-512。每个 Release 也附 `SHA256SUMS.txt`。从 v0.1.0 起，GitHub 不可变 Release 会对标签、提交及资产生成密码学发行证明，可以独立验证任意下载文件。
+更新从官方仓库通过 HTTPS 获取。electron-updater 在交付安装前按平台更新描述验证 SHA-512。每个 Release 也附 `SHA256SUMS.txt` 与 CycloneDX `sbom.cdx.json`；SBOM 覆盖应用组件和 npm 依赖树，并同样计入 SHA-256 清单。从 v0.1.0 起，GitHub 不可变 Release 会对标签、提交及资产生成密码学发行证明，可以独立验证任意下载文件。
 
 ```sh
 gh release verify v0.1.0 --repo yuchen0x1/aa-browser
@@ -25,7 +25,7 @@ gh release verify-asset v0.1.0 ./aa-browser-0.1.0-linux-x86_64.AppImage --repo y
 2. 两平台 CI 通过后合并，确认仓库的不可变 Release 已启用。
 3. 从通过 CI 的 `main` 提交创建并推送 `vX.Y.Z` 标签。
 4. 标签 CI 打包并启动两平台产物，验证安装包/更新描述的版本、文件名、大小和 SHA-512，构建 SHA-256 清单。仅当两平台均通过时才在 `release` 环境上传草稿资产。
-5. 草稿资产经 GitHub API 摘要检查后公开。正式版本的标签及资产由 GitHub 锁定。草稿中已有资产若摘要不同，应从原通过的 run 恢复已验证产物或排查草稿，原公开版本始终保留。
+5. 草稿资产经 GitHub API 摘要检查后公开。正式版本的标签及资产由 GitHub 锁定。草稿中已有资产若摘要不同，应从原通过的 run 恢复已验证产物或排查草稿，原公开版本始终保留。SBOM 在发布 job 内由同一提交的 lockfile 生成，并进入 `SHA256SUMS.txt` 与资源集校验。
 6. Release maintenance 检查公开链接、版本元数据、摘要和发行证明。
 
 建议在发版前保存老版本安装包，并在独立测试 profile 上完成一次升级和恢复。CI 的更新 UI 用模拟 provider 验证交互。打包冒烟会启动实际安装目录或 AppImage 并调用 MCP。完整的已验证证据见 [维护状态](MAINTENANCE.md)。

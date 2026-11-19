@@ -1,10 +1,10 @@
 # Aa Browser 维护状态
 
-基线审核于 2026-11-18。GitHub 的 [CI](https://github.com/yuchen0x1/aa-browser/actions/workflows/ci.yml)、[发行检查](https://github.com/yuchen0x1/aa-browser/actions/workflows/sync-release-readme.yml)、[CodeQL](https://github.com/yuchen0x1/aa-browser/actions/workflows/codeql.yml)、[最新发行](https://github.com/yuchen0x1/aa-browser/releases/latest) 提供实时状态。产品目标版本由 `package.json` 和 tag 共同确定。
+基线审核于 2026-11-19（v0.2.0）。GitHub 的 [CI](https://github.com/yuchen0x1/aa-browser/actions/workflows/ci.yml)、[发行检查](https://github.com/yuchen0x1/aa-browser/actions/workflows/sync-release-readme.yml)、[CodeQL](https://github.com/yuchen0x1/aa-browser/actions/workflows/codeql.yml)、[最新发行](https://github.com/yuchen0x1/aa-browser/releases/latest) 提供实时状态。产品目标版本由 `package.json` 和 tag 共同确定。
 
 ## 原项目
 
-Aa Browser 使用 Electron 45、TypeScript、electron-vite 和 npm。原有窗口壳层由本地 HTML/CSS/TypeScript 提供，预加载仅为壳层暴露限定 IPC。站点页使用独立 WebContentsView 和分区。主进程管理标签、历史、设置、下载、审批、网络诊断及更新。页面快照由自包含脚本提取。33 个 MCP 工具通过 stdio 桥与带 token 的本机 WebSocket 通信。
+Aa Browser 使用 Electron 45、TypeScript、electron-vite 和 npm。原有窗口壳层由本地 HTML/CSS/TypeScript 提供，预加载仅为壳层暴露限定 IPC。站点页使用独立 WebContentsView 和分区。主进程管理标签、历史、设置、会话恢复记录、下载、审批、网络诊断及更新。页面快照由自包含脚本提取。34 个 MCP 工具通过 stdio 桥与带 token 的本机 WebSocket 通信；`browser_performance` 提供只读性能摘要。
 
 ```text
 src/renderer  →  src/preload  →  src/main  →  Chromium WebContentsView
@@ -15,14 +15,19 @@ MCP 客户端    →  cli/mcp      →  src/main/agent-server →  tools / actio
 
 功能基线含标签与前后退、页面查找、语言和搜索设置、登录态、隔离标签、站点白名单、操作确认、历史、下载、MCP 客户端接入，以及快照和网页交互、文档导出、控制台与网络诊断。没有远程服务端、业务数据库或 schema 迁移。设置和历史用 JSON 容错及原子写入，Chromium 管理站点数据。此次 Linux 适配复用这一结构，MCP 路径独立于 AppImage 临时挂载目录。
 
-基线 `06e2bf9` 对应最新正式发行 v0.0.8。保留历史标签，其中一些历史版本号高于正式发行版本。用户升级来源是 GitHub Releases。原流水线只有 Windows，写入 README 与未来分支保护冲突，重跑还可替换同名公开资产。v0.1.0 使用版本文档随 PR 提交和只读周期检查，跨平台构建通过后上传草稿，GitHub 锁定公开资产。
+基线 `06e2bf9` 对应 v0.0.8。保留历史标签，其中一些历史版本号高于正式发行版本。当前正式版本为 v0.2.0：新增跨会话标签恢复、`browser_performance` 工具和随发行附带的 CycloneDX SBOM。用户升级来源是 GitHub Releases。原流水线只有 Windows，写入 README 与未来分支保护冲突，重跑还可替换同名公开资产。v0.1.0 使用版本文档随 PR 提交和只读周期检查，跨平台构建通过后上传草稿，GitHub 锁定公开资产；v0.2.0 沿用同一流程并把 SBOM 纳入资产集与 SHA-256 清单。
 
 ## 验证与留档
 
 | 检查 | 基线及证据来源 |
 | --- | --- |
 | Windows v0.0.8 本地回归 | 12 项命令通过。包括 check、build、test:tools、test:stores、test:security、test:updater、test:release、validate:workbuddy、validate:codex、smoke、test:desktop、test:update-ui |
-| Windows/Linux 新版本 | 两平台的 CI 展示源码回归、打包、更新描述检查和打包后实测；最新结果以运行日志为准 |
+| Windows v0.2.0 本地回归 | check（34 工具）、test:tools、test:stores 11/11、test:security、test:updater 13/13、test:release 5/5、build、smoke（含性能摘要与会话记录断言）、test:desktop 26/26、test:update-ui 6/6、`npm run dist` 产出 NSIS + blockmap + latest.yml、`release-assets prepare windows-x64` 校验通过、SBOM 生成与发布脚本回归 |
+| Windows 安装包实测 | `aa-browser-setup-0.2.0.exe` 静默安装到临时目录成功；对安装后的 `Aa Browser.exe` 运行完整 smoke（34 工具、性能摘要、会话记录、抓包、上传下载）通过；卸载程序返回 0 且主程序文件已移除 |
+| 跨会话恢复 | 持久化单测覆盖凭据剥离、去重、上限、损坏/未来版本；桌面回归覆盖种子会话恢复、活动标签恢复和「隔离标签不入记录」 |
+| 性能摘要 | 冒烟测试在真实页面调用 `browser_performance`，断言导航/资源/DOM 字段和当前 URL |
+| SBOM | `npm run sbom` 从 lockfile 生成 CycloneDX 1.5；发布清单要求 SBOM 存在，公开校验解析并核对版本 |
+| Windows/Linux 新版本 | Windows 本地已实测；Linux 由 CI 在 Ubuntu 构建 AppImage 并运行打包后 MCP 冒烟，结果以运行日志为准 |
 | Windows 10、其他 Linux 发行版、Wayland 实机 | 待验证，当前按 [平台指南](PLATFORMS.md) 标出边界 |
 | 升级与回退 | 模拟测试覆盖下载、重试、稍后、安装触发和 Linux 旧包副本。连续版本间的安装、迁移、回退依赖发布后的真实验收 |
 | 签名 | 不可变 Release 的发行证明独立验证。Windows 尚缺 Authenticode 证书 |
@@ -54,10 +59,13 @@ MCP 客户端    →  cli/mcp      →  src/main/agent-server →  tools / actio
 
 优先清除打包调试材料和校验发行元数据，再由合法证书配置 Windows 发布者签名。后续验证客户端内置的独立签名校验与自动健康回退。
 
+v0.2.0 复核：新增的 `session.json` 只保存普通网页 URL 与标题，账号密码在归一化时剥离，写入使用 0600 原子文件；SBOM 只包含公开 npm 包元数据和版本，不写入本机路径、凭据或内网信息。
+
 ## 维护节奏
 
 - PR 说明平台、数据与更新影响。功能和修复合并前运行双平台 CI，依赖变更由 Dependency review 和 Dependabot 提示。高危运行时告警通过优先修复 PR 处理。
 - CI 只给发布 job 仓库写权限。release 环境只接受版本标签。正式发行流程及恢复规则见 [自动更新](AUTO_UPDATE.md)。
 - 每周的维护工作流检查下载链接、摘要、平台更新元数据和依赖漏洞。GitHub Actions 运行结果提供失败记录。
+- 每次发行前运行 `npm run sbom`，确认 SBOM 版本与 `package.json` 一致并进入 `SHA256SUMS.txt`；依赖变更后复核新增组件的许可证。
 - 每月复查 [32 个相关项目](RESEARCH.md) 的版本、Issue 和平台差异，每次大版本前复核重要源码与许可证。研究变更通过 PR 更新本项目文档。
 - 每次扩展后同步更新 [平台功能矩阵](PLATFORMS.md) 与 release notes，保留真实系统验收和未覆盖条件。

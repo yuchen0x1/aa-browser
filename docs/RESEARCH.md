@@ -9,7 +9,7 @@
 | 桌面布局与接管 | 单窗标签和专用设置；MCP 调用在可见桌面发生 | Zen 的空间、Min 的简洁标签、qutebrowser 的键盘入口 | 保留现有壳层与快捷键，优先解决真实 Linux 窗口与 MCP 路径 |
 | 浏览器技术与权限 | Electron WebContentsView、sandbox、分区 | Chromium/Firefox 的多进程边界，Electron 的 IPC 安全，Firefox/Brave 的原生平台适配 | Linux 发行包要求 Chromium 沙箱；移动和扩展保留独立评估 |
 | 更新与供应链 | Windows NSIS、更新描述与哈希 | Electron Builder 的 AppImage、AppImageUpdate 的回退、VS Code 的平台工件、GitHub 的发行证明 | 追加 AppImage 回退副本、平台元数据校验、不可变 GitHub Release、依赖与静态分析 |
-| 测试复现 | 本地 fixture 和 33 工具契约 | Playwright 的隔离浏览上下文、BrowserGym 的固定场景、Selenium Grid 的环境矩阵 | 两平台复用真实桌面/MCP 验收；打包后再次启动并重跑 smoke |
+| 测试复现 | 本地 fixture 和 34 工具契约 | Playwright 的隔离浏览上下文、BrowserGym 的固定场景、Selenium Grid 的环境矩阵 | 两平台复用真实桌面/MCP 验收；打包后再次启动并重跑 smoke |
 | Agent 工具可见性 | 快照与 ref、操作审批、网络诊断 | Playwright MCP 的可访问性快照、DevTools MCP 的诊断、Stagehand 的操作与抽取语义 | 保留合约和用户审批。新能力优先考虑可用性和错误说明 |
 | 移动端 | 依赖 Electron、桌面 WebContents 和本机 stdio | DuckDuckGo 独立 Android/iOS 工程 | 当前不扩展；技术路线与发行成本均不同于共享 Electron 桌面 |
 | 服务部署 | 本机连接，用户接管 | Browserless 的容器化任务会话、Skyvern 的任务队列 | 当前用户价值集中于本机；远程多租户另需授权、隔离和凭据范围设计 |

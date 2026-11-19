@@ -13,13 +13,14 @@ fs.mkdirSync(runDir, { recursive: true })
 const config = path.join(runDir, 'tsconfig.json')
 fs.writeFileSync(config, JSON.stringify({
   compilerOptions: { target: 'ES2022', module: 'NodeNext', moduleResolution: 'NodeNext', esModuleInterop: true, skipLibCheck: true, types: ['node'], rootDir: path.join(root, 'src/main'), outDir: path.join(runDir, 'compiled') },
-  files: ['settings.ts', 'history.ts'].map((file) => path.join(root, 'src/main', file))
+  files: ['settings.ts', 'history.ts', 'session-store.ts'].map((file) => path.join(root, 'src/main', file))
 }))
 const tsc = path.join(path.dirname(require.resolve('typescript/package.json')), 'bin/tsc')
 const compiled = spawnSync(process.execPath, [tsc, '--project', config], { cwd: root, stdio: 'inherit' })
 if (compiled.status !== 0) process.exit(compiled.status ?? 1)
 const { SettingsStore } = require(path.join(runDir, 'compiled/settings.js'))
 const { HistoryStore } = require(path.join(runDir, 'compiled/history.js'))
+const { SessionStore, normalizeSessionSnapshot } = require(path.join(runDir, 'compiled/session-store.js'))
 let failures = 0
 const results = []
 function test(label, fn) {
@@ -31,6 +32,7 @@ function fixture(name) {
   fs.mkdirSync(directory, { recursive: true })
   process.env.AA_BROWSER_SETTINGS_FILE = path.join(directory, 'settings.json')
   process.env.AA_BROWSER_HISTORY_DIR = directory
+  process.env.AA_BROWSER_SESSION_FILE = path.join(directory, 'session.json')
   return directory
 }
 
@@ -100,6 +102,48 @@ test('malformed JSON is backed up before a successful repair write', () => {
   const backups = fs.readdirSync(dir).filter((file) => file.includes('.invalid-'))
   assert.equal(backups.length, 1)
   assert.equal(fs.readFileSync(path.join(dir, backups[0]), 'utf8'), raw)
+})
+test('session snapshots only keep web URLs, strip credentials, dedupe and cap tabs', () => {
+  const snapshot = normalizeSessionSnapshot({
+    version: 1,
+    activeIndex: 99,
+    tabs: [
+      { url: 'https://user:secret@example.com/path#frag', title: 'A' },
+      { url: 'file:///C:/Windows/win.ini' },
+      { url: 'javascript:alert(1)' },
+      { url: 'https://example.com/path#frag' },
+      { url: 'http://example.org/b', title: 42 },
+      ...Array.from({ length: 25 }, (_, i) => ({ url: `https://site${i}.example/` }))
+    ]
+  })
+  assert.ok(snapshot)
+  assert.equal(snapshot.tabs.length, 20)
+  assert.equal(snapshot.tabs[0].url, 'https://example.com/path#frag')
+  assert.equal(snapshot.tabs[1].url, 'http://example.org/b')
+  assert.equal(snapshot.activeIndex, 19)
+  assert.equal(JSON.stringify(snapshot).includes('secret'), false)
+  assert.equal(normalizeSessionSnapshot({ version: 2, tabs: [{ url: 'https://example.com' }] }), null)
+  assert.equal(normalizeSessionSnapshot({ version: 1, tabs: [{ url: 'about:blank' }] }), null)
+})
+test('session store round-trips restorable tabs and clears the record when none remain', () => {
+  fixture('session-roundtrip')
+  const store = new SessionStore()
+  const saved = store.save([{ url: 'https://a.example/', title: 'A' }, { url: 'file:///tmp/x' }, { url: 'https://b.example/' }], 1)
+  assert.deepEqual(saved.tabs.map((tab) => tab.url), ['https://a.example/', 'https://b.example/'])
+  assert.equal(saved.activeIndex, 1)
+  const loaded = store.load()
+  assert.deepEqual(loaded.tabs.map((tab) => tab.url), ['https://a.example/', 'https://b.example/'])
+  assert.equal(loaded.activeIndex, 1)
+  assert.equal(store.save([{ url: 'javascript:alert(1)' }]), null)
+  assert.equal(store.load(), null)
+})
+test('corrupted or future session records are ignored instead of failing startup', () => {
+  fixture('session-invalid')
+  const file = process.env.AA_BROWSER_SESSION_FILE
+  fs.writeFileSync(file, '{ broken JSON')
+  assert.equal(new SessionStore().load(), null)
+  fs.writeFileSync(file, JSON.stringify({ version: 99, tabs: [{ url: 'https://x.example/' }] }))
+  assert.equal(new SessionStore().load(), null)
 })
 fs.writeFileSync(path.join(runDir, 'result.json'), JSON.stringify({ failures, results }, null, 2))
 console.log(`${results.length - failures}/${results.length} persistence checks passed`)
