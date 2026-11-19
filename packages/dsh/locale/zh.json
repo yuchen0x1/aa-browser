@@ -1,0 +1,7 @@
+{
+  "meta": {
+    "title": "Aa 浏览器连接",
+    "description": "把正在运行的 Aa 浏览器接入 DeepSeek Harness，让 Agent 通过 MCP 工具操作浏览器。需要 Windows x64 或 Linux x64 版的 Aa 浏览器；浏览器未启动时 MCP 条目仍会连接，但工具调用会失败，启动浏览器后即可使用。工具名为 mcp__aa-browser__*。",
+    "detail": "docs/DETAIL.zh.md"
+  }
+}

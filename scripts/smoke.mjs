@@ -254,12 +254,10 @@ async function main() {
     const startupPrompt = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.querySelector("#connection-prompt")?.value ?? ""' }))
     const startupBackground = mcp.text(await mcp.call('browser_evaluate', { expression: 'getComputedStyle(document.body).backgroundColor' }))
     const startupWidthOk = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.documentElement.scrollWidth <= window.innerWidth' }))
-    const promptLabel = process.platform === 'linux' ? '连接提示词' : '安装提示词'
-    const platformPrompt = process.platform === 'linux'
-      ? startupPrompt.includes('browser_tabs') && startupPrompt.includes('docs/PLATFORMS.md')
-      : startupPrompt.includes('https://raw.githubusercontent.com/yuchen0x1/aa-browser/main/install.mjs') && startupPrompt.includes('--repo yuchen0x1/aa-browser')
+    const promptLabel = '接入提示词'
+    const platformPrompt = startupPrompt.includes('install.mjs') && startupPrompt.includes('--connect-only') && startupPrompt.includes('browser_tabs')
     check(
-      '启动页向导与安装提示词正确渲染',
+      '启动页向导与通用接入提示词正确渲染',
       startupInfo.includes('让 AI 直接使用') &&
         startupInfo.includes(`复制${promptLabel}`) && platformPrompt,
       startupInfo.slice(0, 500)

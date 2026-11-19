@@ -1,0 +1,32 @@
+# Bundle patch: stage the Aa Browser MCP bridge, then connect the manager to it.
+#
+# Row 1 is this package's Host plugin. On activation it copies the bundled
+# `bridge.cjs` (built from cli/mcp.mjs) to a stable user path so the MCP row
+# below never depends on the plugin's install directory.
+#
+# Row 2 is the shipped MCP client. `command` and `args` are Loader `!!js`
+# expressions evaluated against the DSH runtime:
+#   - command: DSH's own executable, so no system Node.js is required. Under
+#     the Electron-hosted Desktop build this is the Electron binary, which
+#     runs as Node because the row sets ELECTRON_RUN_AS_NODE=1.
+#   - args: the staged bridge path. Windows uses backslash separators, other
+#     Hosts use forward slashes; no `path` import is needed.
+- insert:
+    - id: aa-browser-dsh
+      name: aa-browser-dsh
+      config:
+        bridge: ./bridge.cjs
+        target: ~/.aabrowser/dsh-bridge.cjs
+    - id: aa-browser-mcp
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: aa-browser
+        transport: stdio
+        command: !!js process.execPath
+        args:
+          - !!js >-
+              process.env.USERPROFILE ? process.env.USERPROFILE + '\\.aabrowser\\dsh-bridge.cjs' : (process.env.HOME || '') + '/.aabrowser/dsh-bridge.cjs'
+        env:
+          ELECTRON_RUN_AS_NODE: '1'
+        toolCallTimeoutMs: 180000
+        failOnStartupError: false

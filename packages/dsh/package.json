@@ -1,0 +1,59 @@
+{
+  "name": "aa-browser-dsh",
+  "version": "0.1.0",
+  "description": "Connects a running Aa Browser to DeepSeek Harness so the agent can drive the browser through its MCP tools.",
+  "type": "module",
+  "license": "MIT",
+  "author": {
+    "name": "Aa Browser contributors"
+  },
+  "homepage": "https://github.com/yuchen0x1/aa-browser/tree/main/packages/dsh",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yuchen0x1/aa-browser.git",
+    "directory": "packages/dsh"
+  },
+  "bugs": {
+    "url": "https://github.com/yuchen0x1/aa-browser/issues"
+  },
+  "keywords": [
+    "dsh-plugin",
+    "dsh-bundle",
+    "deepseek-harness",
+    "aa-browser",
+    "mcp",
+    "browser-automation"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "cordis.patch.yml",
+    "bridge.cjs",
+    "locale/",
+    "docs/",
+    "icon.svg",
+    "assets/",
+    "README.md"
+  ],
+  "scripts": {
+    "sync": "node scripts/sync-bridge.mjs",
+    "prepack": "node scripts/sync-bridge.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml",
+      "platforms": [
+        "win32",
+        "linux"
+      ]
+    }
+  }
+}

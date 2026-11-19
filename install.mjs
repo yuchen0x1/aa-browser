@@ -1,19 +1,26 @@
 #!/usr/bin/env node
 /**
- * Aa Browser 通用安装器（零依赖，单文件可直接分发）。
+ * Aa Browser 通用安装/接入器（零依赖，单文件可直接分发）。
  *
- * 复制一条命令即可完成：下载 → 静默安装 → 启动 → 自动写入本机 AI 客户端的 MCP 配置。
+ * 一条命令完成：下载 → 校验 → 安装 → 启动 → 写入本机 AI 客户端 MCP 配置 → 实际调用
+ * browser_tabs 验证。适用于 Windows x64 与 Linux x86_64。
  *
- *   node install.mjs --url  <安装包直链或本地路径>   [选项]
- *   node install.mjs --repo <owner>/<repo>           # 自动取 GitHub Releases 最新安装包
- *   node install.mjs --from <本地安装包或目录>
+ *   node install.mjs --repo <owner>/<repo> [--verify --json]   # 安装最新 Release 并接入
+ *   node install.mjs --connect-only --verify --json             # 已安装/已运行，只写配置并验证
+ *   node install.mjs --verify-only                              # 只验证当前连接
+ *   node install.mjs --print-config                             # 输出通用 MCP 配置片段
+ *   node install.mjs --url <直链> | --from <本地安装包/目录>
  *
  * 选项：
- *   --clients zcode,cursor   只接入指定客户端（默认接入所有检测到的）
- *   --dir <路径>             自定义安装目录检测位置（默认 %LOCALAPPDATA%/Programs/Aa Browser）
- *   --no-launch              安装后不自动启动浏览器
+ *   --clients zcode,cursor  只接入指定客户端（默认接入所有检测到的）
+ *   --dir <目录>            Windows 安装目录 / Linux AppImage 存放目录
+ *   --sha256 <hex>          显式校验安装包 SHA-256（--repo 自动使用 Release digest）
+ *   --no-launch             不自动启动浏览器
+ *   --json                  机器可读结果（日志改走 stderr）
+ *   --yes                   兼容 AI 提示词的无人值守开关（本安装器从不交互提问）
  *
- * 设计为可被 AI Agent 逐字执行：失败即退出非零码并给出原因。
+ * 设计目标：可被任意 AI Agent 逐字执行。失败时退出非零并给出原因；绝不静默安装
+ * 系统依赖，也绝不把「配置已写入」当成「连接已验证」。
  */
 import fs from 'node:fs'
 import os from 'node:os'
@@ -22,45 +29,116 @@ import { spawn, spawnSync } from 'node:child_process'
 import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import process from 'node:process'
+import { pathToFileURL } from 'node:url'
+
+export const SUPPORTED_PLATFORMS = ['win32', 'linux']
+export const CONNECT_FILE_RELATIVE = path.join('.aabrowser', 'connection.json')
+
+/* ──────────────────── 纯函数（可单测） ──────────────────── */
+
+/** 解析命令行；未知位置参数忽略。 */
+export function parseArgs(argv) {
+  const valueFlags = new Set(['--url', '--repo', '--from', '--clients', '--dir', '--sha256'])
+  const options = { positional: [] }
+  for (let i = 0; i < argv.length; i++) {
+    const item = argv[i]
+    if (valueFlags.has(item)) {
+      options[item.slice(2)] = argv[++i] ?? ''
+    } else if (item.startsWith('--') && item.includes('=')) {
+      const [key, ...rest] = item.slice(2).split('=')
+      options[key] = rest.join('=')
+    } else if (item.startsWith('-')) {
+      options[item.replace(/^-+/, '')] = true
+    } else {
+      options.positional.push(item)
+    }
+  }
+  return options
+}
+
+/** 从 GitHub Release assets 中挑选当前平台资产。 */
+export function pickReleaseAsset(assets, platform) {
+  const list = Array.isArray(assets) ? assets.filter((asset) => asset && typeof asset.name === 'string') : []
+  if (platform === 'win32') {
+    return list.find((asset) => /setup.*\.exe$/i.test(asset.name)) || list.find((asset) => /\.exe$/i.test(asset.name)) || null
+  }
+  if (platform === 'linux') return list.find((asset) => /\.AppImage$/i.test(asset.name)) || null
+  return null
+}
+
+/** Windows 默认安装目录。 */
+export function defaultInstallDirFor(platform, env = process.env, home = os.homedir()) {
+  if (platform !== 'win32') return null
+  const localAppData = env['LOCALAPPDATA'] || path.join(home, 'AppData', 'Local')
+  return path.join(localAppData, 'Programs', 'Aa Browser')
+}
+
+/** Linux Electron userData 目录（AppImage 运行时会把稳定桥写到这里）。 */
+export function linuxUserDataDirFor(env = process.env, home = os.homedir()) {
+  const configHome = env['XDG_CONFIG_HOME'] || path.join(home, '.config')
+  return path.join(configHome, 'Aa Browser')
+}
+
+/** Linux AppImage 稳定路径。 */
+export function appImagePathFor(dirArg, home = os.homedir()) {
+  const directory = dirArg || path.join(home, 'Applications')
+  return path.join(directory, 'AaBrowser.AppImage')
+}
+
+/** MCP 桥的稳定绝对路径（客户端配置指向它，随应用升级保持有效）。 */
+export function bridgePathFor({ platform, installDir, env = process.env, home = os.homedir() }) {
+  if (env['AA_BROWSER_MCP_BRIDGE']) return env['AA_BROWSER_MCP_BRIDGE']
+  if (platform === 'win32') {
+    return path.join(installDir || defaultInstallDirFor(platform, env, home), 'resources', 'app.asar.unpacked', 'out', 'bridge', 'mcp.cjs')
+  }
+  if (platform === 'linux') return path.join(linuxUserDataDirFor(env, home), 'mcp', 'bridge.cjs')
+  return null
+}
+
+/** 校验下载产物：文件头 + 可选 SHA-256。导出以便安全回归直接测试。 */
+export async function verifyArtifact(file, expectedDigest, label, { requireDigest = false, platform } = {}) {
+  const size = fs.statSync(file).size
+  if (!size) throw new Error(`安装包为空：${file}`)
+  const head = Buffer.alloc(4)
+  const fd = fs.openSync(file, 'r')
+  try {
+    fs.readSync(fd, head, 0, 4, 0)
+  } finally {
+    fs.closeSync(fd)
+  }
+  const linuxArtifact = platform === 'linux' || /\.appimage$/i.test(file)
+  if (linuxArtifact) {
+    if (!(head[0] === 0x7f && head.subarray(1, 4).toString('latin1') === 'ELF')) {
+      throw new Error(`安装包不是有效的 Linux ELF/AppImage 文件：${file}`)
+    }
+  } else if (head.subarray(0, 2).toString('latin1') !== 'MZ') {
+    throw new Error(`安装包不是有效的 Windows 可执行文件（缺少 MZ 头）：${file}`)
+  }
+
+  if (!expectedDigest) {
+    if (requireDigest) {
+      throw new Error(`GitHub Release 未提供可验证的 SHA-256 digest，已中止安装：${label}\n请使用显式 --sha256 指定预期值。`)
+    }
+    return { digestChecked: false }
+  }
+  const match = /^(sha256):([0-9a-f]{64})$/i.exec(String(expectedDigest).trim())
+  if (!match) throw new Error(`无法识别的 SHA-256 digest 格式（${expectedDigest}），已中止安装：${label}`)
+  const { createHash } = await import('node:crypto')
+  const hash = createHash('sha256')
+  await new Promise((resolve, reject) => {
+    fs.createReadStream(file).on('data', (chunk) => hash.update(chunk)).on('end', resolve).on('error', reject)
+  })
+  const actual = hash.digest('hex')
+  if (actual !== match[2].toLowerCase()) {
+    throw new Error(`安装包哈希校验失败：${label}\n  预期 sha256:${match[2]}\n  实际 sha256:${actual}\n可能被篡改或下载不完整，已中止安装。`)
+  }
+  return { digestChecked: true, digest: actual }
+}
+
+/* ──────────────────── 运行期辅助 ──────────────────── */
 
 const HOME = os.homedir()
-const CONNECT_FILE = path.join(HOME, '.aabrowser', 'connection.json')
-const CLIENT_IDS = ['zcode', 'claude', 'cursor', 'windsurf', 'cline', 'vscode', 'gemini', 'qwen', 'workbuddy']
-
-const args = process.argv.slice(2)
-const argOf = (name) => {
-  const i = args.indexOf(name)
-  return i !== -1 ? args[i + 1] : undefined
-}
-const has = (name) => args.includes(name)
-const URL_ARG = argOf('--url')
-const REPO = argOf('--repo')
-const FROM = argOf('--from')
-const CLIENTS = argOf('--clients')
-const CUSTOM_DIR = argOf('--dir')
-const NO_LAUNCH = has('--no-launch')
-const SHA256_ARG = argOf('--sha256')
-const HELP = has('--help') || has('-h')
-
-const log = (...a) => console.log(...a)
-const die = (msg) => {
-  console.error('❌ ' + msg)
-  process.exit(1)
-}
-
-if (HELP || (!URL_ARG && !REPO && !FROM)) {
-  log('Aa Browser 安装器 —— 下载 → 静默安装 → 启动 → 自动接入 AI 客户端')
-  log('')
-  log('用法:')
-  log('  node install.mjs --url  <安装包直链或本地路径>')
-  log('  node install.mjs --repo <owner>/<repo>      # 从 GitHub Releases 取最新版')
-  log('  node install.mjs --from <本地安装包/目录>')
-  log('选项: --clients zcode,cursor,workbuddy  |  --dir <安装目录>  |  --no-launch')
-  log('      --sha256 <hex>  下载后校验安装包 SHA-256（--repo 会自动使用 Release digest）')
-  process.exit(HELP ? 0 : 1)
-}
-
-const isWin = process.platform === 'win32'
+const CONNECT_FILE = process.env['AA_BROWSER_CONNECTION_FILE'] || path.join(HOME, CONNECT_FILE_RELATIVE)
 
 function pidAlive(pid) {
   try {
@@ -74,101 +152,84 @@ function pidAlive(pid) {
 function readConnection() {
   try {
     const info = JSON.parse(fs.readFileSync(CONNECT_FILE, 'utf-8'))
-    if (info.pid && pidAlive(info.pid)) return info
+    if (info && info.pid && pidAlive(info.pid) && info.port && info.token) return info
     return null
   } catch {
     return null
   }
 }
 
-async function downloadTo(url, dest) {
+async function downloadTo(url, dest, log) {
   log(`⬇️  下载 ${url}`)
-  const res = await fetch(url, { redirect: 'follow' })
-  if (!res.ok || !res.body) die(`下载失败: HTTP ${res.status}（检查地址是否有效/可公开访问）`)
+  const res = await fetch(url, { redirect: 'follow', headers: { 'User-Agent': 'aa-browser-installer' } })
+  if (!res.ok || !res.body) throw new Error(`下载失败: HTTP ${res.status}（检查地址是否有效/可公开访问）`)
   const total = Number(res.headers.get('content-length') || 0)
   let got = 0
   let lastPct = -1
+  const out = fs.createWriteStream(dest)
   await pipeline(
     Readable.fromWeb(res.body),
-    async function* (src) {
-      const fsStream = (await import('node:fs')).createWriteStream(dest)
-      for await (const chunk of src) {
+    async function* (source) {
+      for await (const chunk of source) {
         got += chunk.length
         if (total) {
           const pct = Math.floor((got / total) * 100)
-          if (pct >= lastPct + 10) {
+          if (pct >= lastPct + 20) {
             lastPct = pct
             log(`   ${pct}% (${Math.round(got / 1048576)}MB)`)
           }
         }
-        if (!fsStream.write(chunk)) await new Promise((r) => fsStream.once('drain', r))
+        if (!out.write(chunk)) await new Promise((resolve) => out.once('drain', resolve))
       }
-      await new Promise((r) => fsStream.end(r))
+      await new Promise((resolve) => out.end(resolve))
     }
   )
   log(`✅ 下载完成: ${dest} (${Math.round(got / 1048576)}MB)`)
 }
 
-async function resolveFromRepo(repo) {
+async function resolveFromRepo(repo, platform) {
   const api = `https://api.github.com/repos/${repo}/releases/latest`
   const res = await fetch(api, {
     headers: { 'User-Agent': 'aa-browser-installer', Accept: 'application/vnd.github+json' }
   })
-  if (!res.ok) die(`查询 GitHub Releases 失败: HTTP ${res.status}（确认仓库存在且已发布 Release）`)
+  if (!res.ok) throw new Error(`查询 GitHub Releases 失败: HTTP ${res.status}（确认仓库存在且已发布 Release）`)
   const data = await res.json()
-  const asset = (data.assets || []).find((a) => /setup.*\.exe$/i.test(a.name)) ||
-    (data.assets || []).find((a) => a.name.endsWith('.exe'))
-  if (!asset) die(`Release ${data.tag_name ?? ''} 中没有 .exe 安装包`)
-  log(`找到最新版: ${data.tag_name} → ${asset.name}`)
-  return { url: asset['browser_download_url'], digest: asset.digest, name: asset.name }
+  const asset = pickReleaseAsset(data.assets, platform)
+  if (!asset) throw new Error(`Release ${data.tag_name ?? ''} 中没有适用于 ${platform} 的安装包`)
+  return { url: asset['browser_download_url'], digest: asset.digest, name: asset.name, tag: data.tag_name }
 }
 
-/**
- * 校验下载的安装包。
- *
- * 安装器会被 AI Agent 逐字执行，而包体来自网络：没有校验就无法区分
- * "官方资产"和"被替换/被中间人篡改的 exe"。GitHub Release API 会给出
- * 形如 `sha256:<hex>` 的 digest 必须匹配。GitHub Release (`--repo`) 下载
- * 没有可验证的 digest 时直接中止；本地文件或显式 URL 仍允许仅做格式检查，
- * 除非用户通过 `--sha256` 要求严格校验。
- */
-async function verifyArtifact(file, expectedDigest, label, { requireDigest = false } = {}) {
-  const size = fs.statSync(file).size
-  if (!size) die(`安装包为空：${file}`)
-  const head = Buffer.alloc(2)
-  const fd = fs.openSync(file, 'r')
-  try {
-    fs.readSync(fd, head, 0, 2, 0)
-  } finally {
-    fs.closeSync(fd)
-  }
-  if (head.toString('latin1') !== 'MZ') die(`安装包不是有效的 Windows 可执行文件（缺少 MZ 头）：${file}`)
-
-  if (!expectedDigest) {
-    if (requireDigest) die(`GitHub Release 未提供可验证的 SHA-256 digest，已中止安装：${label}\n请使用显式 --sha256 指定预期值。`)
-    log('⚠️  未提供 digest，仅完成格式与大小校验；如需严格校验请用 --sha256 指定预期值。')
-    return
-  }
-  const m = /^(sha256):([0-9a-f]{64})$/i.exec(String(expectedDigest).trim())
-  if (!m) die(`无法识别的 SHA-256 digest 格式（${expectedDigest}），已中止安装：${label}`)
-  const { createHash } = await import('node:crypto')
-  const hash = createHash('sha256')
-  await new Promise((resolve, reject) => {
-    fs.createReadStream(file)
-      .on('data', (c) => hash.update(c))
-      .on('end', resolve)
-      .on('error', reject)
-  })
-  const actual = hash.digest('hex')
-  if (actual !== m[2].toLowerCase()) {
-    die(`安装包哈希校验失败：${label}\n  预期 sha256:${m[2]}\n  实际 sha256:${actual}\n可能被篡改或下载不完整，已中止安装。`)
-  }
-  log(`🔒 已校验 SHA-256: ${actual.slice(0, 16)}…`)
+function appExeFor(installDir) {
+  return path.join(installDir, 'Aa Browser.exe')
 }
 
-function defaultInstallDir() {
-  if (!isWin) die('当前版本安装包仅支持 Windows；macOS/Linux 请用源码安装：git clone → npm install → npm run build → node cli/setup.mjs')
-  return CUSTOM_DIR || path.join(process.env['LOCALAPPDATA'] || path.join(HOME, 'AppData', 'Local'), 'Programs', 'Aa Browser')
+function findWindowsInstallDir(dirArg, env = process.env) {
+  const candidates = []
+  if (dirArg) candidates.push(dirArg)
+  const defaults = defaultInstallDirFor('win32', env)
+  if (defaults) candidates.push(defaults)
+  if (env['ProgramFiles']) candidates.push(path.join(env['ProgramFiles'], 'Aa Browser'))
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(appExeFor(candidate))) return candidate
+    } catch {
+      /* 继续找 */
+    }
+  }
+  return null
+}
+
+function findLinuxAppImage(dirArg, env = process.env, home = HOME) {
+  const direct = dirArg && fs.existsSync(dirArg) && !fs.statSync(dirArg).isDirectory() ? dirArg : null
+  const candidates = [direct, appImagePathFor(dirArg, home)].filter(Boolean)
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return candidate
+    } catch {
+      /* 继续找 */
+    }
+  }
+  return null
 }
 
 function findSetupScript(installDir) {
@@ -177,122 +238,362 @@ function findSetupScript(installDir) {
     path.join(installDir, 'cli', 'setup.mjs'),
     path.join(installDir, 'resources', 'cli', 'setup.mjs')
   ]
-  for (const c of candidates) if (fs.existsSync(c)) return c
-  die(`安装目录里找不到 cli/setup.mjs（查找过 ${candidates.join(' , ')}）——安装包可能不完整`)
+  return candidates.find((candidate) => fs.existsSync(candidate)) || null
 }
 
-function findAppExe(installDir) {
-  const exe = path.join(installDir, 'Aa Browser.exe')
-  if (!fs.existsSync(exe)) die(`未找到 ${exe} —— 安装似乎未完成`)
-  return exe
-}
-
-const appExeExists = (dir) => fs.existsSync(path.join(dir, 'Aa Browser.exe'))
-
-function runSetup(setupPath, appExe) {
-  const cliArgs = ['--yes']
-  if (CLIENTS) cliArgs.push('--client', CLIENTS)
-  // 优先系统 node；没有就用 Aa Browser 本体（ELECTRON_RUN_AS_NODE）
-  let node = 'node'
-  const probe = spawnSync('node', ['--version'], { encoding: 'utf-8', timeout: 8000 })
-  if (!(probe.status === 0 && /^v\d/.test((probe.stdout || '').trim()))) {
-    node = appExe
-    log('（未检测到系统 Node，使用 Aa Browser 内置运行时执行配置）')
-  }
-  const env = node === appExe ? { ...process.env, ELECTRON_RUN_AS_NODE: '1' } : { ...process.env }
-  log(`\n🔌 写入 AI 客户端 MCP 配置（${CLIENTS ? '指定: ' + CLIENTS : '所有检测到的'}）…`)
-  // 不经过 shell：安装路径含空格（...\Programs\Aa Browser\...）也能正确传参
-  const r = spawnSync(node, [setupPath, ...cliArgs], { stdio: 'inherit', env, timeout: 120000 })
-  if (r.status !== 0) die('MCP 配置写入失败（见上方输出）')
-}
-
-async function main() {
-  const t0 = Date.now()
-
-  // 1. 取得安装包
-  let artifact
-  let expectedDigest = null
-  if (FROM) {
-    artifact = path.resolve(FROM)
-    if (!fs.existsSync(artifact)) die(`--from 路径不存在: ${artifact}`)
-  } else if (URL_ARG && /^[a-z]+:\/\//i.test(URL_ARG)) {
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-browser-'))
-    artifact = path.join(tmp, path.basename(new URL(URL_ARG).pathname) || 'aa-browser-setup.exe')
-    await downloadTo(URL_ARG, artifact)
-  } else if (URL_ARG && fs.existsSync(URL_ARG)) {
-    artifact = path.resolve(URL_ARG) // 本地路径等同 --from
-  } else if (REPO) {
-    const resolved = await resolveFromRepo(REPO)
-    expectedDigest = resolved.digest ?? null
-    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-browser-'))
-    artifact = path.join(tmp, 'aa-browser-setup.exe')
-    await downloadTo(resolved.url, artifact)
-  } else {
-    die('请提供 --url / --repo / --from 之一')
-  }
-  if (artifact.toLowerCase().endsWith('.zip')) {
-    die('暂不支持 zip 便携包，请使用 NSIS 安装包（.exe）')
-  }
-  // 显式 --sha256 优先于 Release 元数据；本地文件（--from / 本地 --url）没有远端 digest，
-  // 仍会校验 PE 头与非空，给了 --sha256 时再做哈希比对。
-  const digestToUse = SHA256_ARG ? `sha256:${String(SHA256_ARG).trim()}` : expectedDigest
-  if (!fs.statSync(artifact).isDirectory()) {
-    await verifyArtifact(artifact, digestToUse, artifact, { requireDigest: Boolean(REPO && !SHA256_ARG) })
-  }
-
-  // 2. 安装：exe → NSIS 静默安装；目录 → 便携模式就地使用
-  const isDir = fs.statSync(artifact).isDirectory()
-  let installDir
-  if (isDir) {
-    installDir = artifact
-    log(`\n📁 便携模式：直接使用目录 ${installDir}`)
-    if (!appExeExists(installDir)) {
-      die('目录中没有 Aa Browser.exe（便携模式需要 win-unpacked 解压目录，源码目录请用 npm start 方式运行）')
+function extractAppImage(appImagePath) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-browser-extract-'))
+  try {
+    const result = spawnSync(appImagePath, ['--appimage-extract'], { cwd: tmp, encoding: 'utf8', timeout: 180000 })
+    if (result.status !== 0) return null
+    const root = path.join(tmp, 'squashfs-root')
+    if (!fs.existsSync(root)) return null
+    return {
+      root,
+      bridge: path.join(root, 'resources', 'app.asar.unpacked', 'out', 'bridge', 'mcp.cjs'),
+      setup: path.join(root, 'resources', 'app.asar.unpacked', 'cli', 'setup.mjs'),
+      cleanup: () => { try { fs.rmSync(tmp, { recursive: true, force: true }) } catch { /* 忽略 */ } }
     }
-  } else {
-    installDir = defaultInstallDir()
-    log('\n📦 静默安装中（约 10-30 秒）…')
-    const r = spawnSync(artifact, ['/S'], { timeout: 180000 })
-    if (r.status !== 0 && !fs.existsSync(installDir)) {
-      die(`安装器退出码 ${r.status}，且未检测到安装目录 ${installDir}`)
-    }
+  } catch {
+    return null
   }
+}
 
-  // 3. 启动（若安装器未自动拉起）
-  const appExe = findAppExe(installDir)
-  let conn = null
-  log('⏳ 等待 Aa Browser 就绪…')
-  const deadline = Date.now() + 60000
+async function waitForConnection({ launch, noLaunch, log, timeoutMs = 60000 }) {
+  const deadline = Date.now() + timeoutMs
+  const started = Date.now()
   let launched = false
   while (Date.now() < deadline) {
-    conn = readConnection()
-    if (conn) break
-    if (!NO_LAUNCH && !launched && Date.now() - t0 > 3000) {
-      // 安装器通常已自动启动；若 3 秒后仍无连接信息则手动拉起一次
+    const connection = readConnection()
+    if (connection) return connection
+    if (!noLaunch && !launched && launch && Date.now() - started > 3000) {
       try {
-        spawn(appExe, [], { detached: true, stdio: 'ignore' }).unref()
+        launch()
         launched = true
       } catch {
         /* 拉起失败则继续轮询 */
       }
     }
-    await new Promise((r) => setTimeout(r, 1000))
+    await new Promise((resolve) => setTimeout(resolve, 1000))
   }
-  if (!conn) die('60 秒内未检测到 Aa Browser 就绪（~/.aabrowser/connection.json）')
-  log(`✅ Aa Browser 已就绪 (v${conn.version}, ws://127.0.0.1:${conn.port})`)
-
-  // 4. 写入 AI 客户端 MCP 配置
-  const setupPath = findSetupScript(installDir)
-  runSetup(setupPath, appExe)
-
-  // 5. 收尾汇报
-  log('')
-  log('🎉 安装与接入完成！')
-  log(`   安装位置: ${installDir}`)
-  log(`   浏览器  : 已运行（v${conn.version}）`)
-  log(`   配置备份: 各客户端目录下的 *.aa-backup-* 文件`)
-  log('   下一步  : 重启你的 AI 客户端，即可使用 browser_* 系列工具（截图/点击/输入/抓包等）')
-  log('   卸载    : 系统"设置 → 应用"中卸载 Aa Browser')
+  return null
 }
 
-main().catch((err) => die(err && err.stack ? err.stack : String(err)))
+async function verifyBrowserTabs(connection) {
+  if (typeof WebSocket !== 'function') {
+    throw new Error('当前 Node.js 不支持 WebSocket（需要 Node.js 22.12+），无法执行 browser_tabs 验证')
+  }
+  return await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      try { socket.close() } catch { /* 忽略 */ }
+      reject(new Error('验证超时：15 秒内没有收到 browser_tabs 响应'))
+    }, 15000)
+    let socket
+    try {
+      socket = new WebSocket(`ws://127.0.0.1:${connection.port}/?token=${encodeURIComponent(connection.token)}`)
+    } catch (error) {
+      clearTimeout(timer)
+      reject(error)
+      return
+    }
+    socket.onopen = () => {
+      socket.send(JSON.stringify({ id: 1, tool: 'browser_tabs', args: { action: 'list' } }))
+    }
+    socket.onmessage = (event) => {
+      let message
+      try {
+        message = JSON.parse(String(event.data))
+      } catch {
+        return
+      }
+      if (message.id !== 1) return
+      clearTimeout(timer)
+      try { socket.close() } catch { /* 忽略 */ }
+      if (!message.ok) {
+        reject(new Error(`browser_tabs 调用失败：${message.error || '未知错误'}`))
+        return
+      }
+      const content = (message.result?.content ?? []).filter((item) => item?.type === 'text').map((item) => item.text).join('\n')
+      resolve({ text: content, toolCount: undefined })
+    }
+    socket.onerror = () => {
+      clearTimeout(timer)
+      reject(new Error('无法连接 Aa Browser 本地 Agent 服务（WebSocket）。确认浏览器仍在运行。'))
+    }
+  })
+}
+
+function runSetup(setupPath, bridge, clients, log, json = false) {
+  if (!setupPath) throw new Error('找不到 cli/setup.mjs，无法写入客户端配置（安装包可能不完整）')
+  log(`\n🔌 写入 AI 客户端 MCP 配置（${clients ? `指定: ${clients}` : '所有检测到的'}）…`)
+  const cliArgs = ['--yes']
+  if (clients) cliArgs.push('--client', clients)
+  const env = { ...process.env, AA_BROWSER_MCP_BRIDGE: bridge }
+  const result = spawnSync(process.execPath, [setupPath, ...cliArgs], {
+    stdio: json ? ['ignore', 2, 2] : 'inherit',
+    env,
+    timeout: 120000
+  })
+  if (result.status !== 0) throw new Error('MCP 配置写入失败（见上方输出）')
+}
+
+function configEntry(bridge, env = process.env) {
+  const entry = { command: process.execPath, args: [bridge] }
+  if (process.versions.electron) entry.env = { ELECTRON_RUN_AS_NODE: '1' }
+  return { mcpServers: { 'aa-browser': entry } }
+}
+
+/* ──────────────────── 主流程 ──────────────────── */
+
+function usage() {
+  console.log('Aa Browser 安装器 —— 下载 → 校验 → 安装/接入 → 验证')
+  console.log('')
+  console.log('用法:')
+  console.log('  node install.mjs --repo <owner>/<repo> [--verify] [--json]')
+  console.log('  node install.mjs --connect-only [--verify] [--json]   # 已安装，只写配置')
+  console.log('  node install.mjs --verify-only                        # 只验证当前连接')
+  console.log('  node install.mjs --print-config                       # 输出通用 MCP 配置')
+  console.log('  node install.mjs --url <安装包直链或本地路径> | --from <本地路径>')
+  console.log('')
+  console.log('选项: --clients zcode,cursor,workbuddy | --dir <目录> | --no-launch')
+  console.log('      --sha256 <hex>  显式校验安装包 SHA-256')
+  console.log('      --json          机器可读结果（日志改走 stderr）')
+  console.log('')
+  console.log('支持平台: Windows x64、Linux x86_64。其他平台会明确拒绝。')
+}
+
+async function main(argv) {
+  const options = parseArgs(argv)
+  const json = options.json === true
+  // --print-config 的 stdout 必须是纯 JSON，人类日志一律走 stderr。
+  const machineOutput = json || options['print-config'] === true
+  const log = machineOutput ? (...args) => console.error(...args) : (...args) => console.log(...args)
+  const report = {
+    ok: false,
+    platform: process.platform,
+    arch: process.arch,
+    version: null,
+    installDir: null,
+    bridge: null,
+    clients: null,
+    verified: false,
+    error: null,
+    actions: []
+  }
+  const emit = () => {
+    if (json) process.stdout.write(`${JSON.stringify({ ...report, actions: [...report.actions] })}\n`)
+  }
+  const die = (error) => {
+    const message = error instanceof Error ? error.message : String(error)
+    report.error = message
+    console.error(`❌ ${message}`)
+    emit()
+    process.exit(1)
+  }
+
+  let extracted = null
+
+  try {
+    if (options.help || options.h) {
+      usage()
+      return
+    }
+    const platform = process.platform
+    if (!SUPPORTED_PLATFORMS.includes(platform)) {
+      die(new Error(`当前平台 ${platform}/${process.arch} 暂无官方安装包。官方支持 Windows x64 与 Linux x86_64；macOS/ARM 请等待后续版本，不要强行安装。`))
+    }
+    log(`平台: ${platform} ${process.arch} · Node ${process.version}`)
+
+    if (options['verify-only']) {
+      const connection = readConnection()
+      if (!connection) die(new Error('没有检测到运行中的 Aa Browser（~/.aabrowser/connection.json）。请先启动浏览器。'))
+      report.version = connection.version
+      const result = await verifyBrowserTabs(connection)
+      report.verified = true
+      report.ok = true
+      log(`✅ browser_tabs 验证通过（Aa Browser v${connection.version}）`)
+      log(result.text || '（未返回文本内容）')
+      emit()
+      return
+    }
+
+    if (options['print-config']) {
+      const installDir = platform === 'win32' ? findWindowsInstallDir(options.dir) : null
+      const appImage = platform === 'linux' ? findLinuxAppImage(options.dir) : null
+      if (platform === 'win32' && !installDir) die(new Error('未找到已安装的 Aa Browser，无法生成配置。请先运行安装（--repo）。'))
+      if (platform === 'linux' && !appImage && !process.env['AA_BROWSER_MCP_BRIDGE']) {
+        die(new Error('未找到 Aa Browser AppImage，且未设置 AA_BROWSER_MCP_BRIDGE，无法生成配置。'))
+      }
+      const bridge = bridgePathFor({ platform, installDir })
+      report.installDir = installDir
+      report.bridge = bridge
+      report.ok = true
+      console.log(JSON.stringify(configEntry(bridge), null, 2))
+      return
+    }
+
+    let connection = readConnection()
+    let installDir = null
+    let appImage = null
+
+    if (options['connect-only']) {
+      if (platform === 'win32') {
+        installDir = findWindowsInstallDir(options.dir)
+        if (!installDir) die(new Error('未找到已安装的 Aa Browser（可用 --dir 指定安装目录）。请先运行安装，或去掉 --connect-only。'))
+      } else {
+        appImage = findLinuxAppImage(options.dir)
+        if (!appImage && !fs.existsSync(path.join(linuxUserDataDirFor(), 'mcp', 'bridge.cjs'))) {
+          die(new Error('未找到已安装的 Aa Browser AppImage（可用 --dir 指定位置）。请先运行安装。'))
+        }
+      }
+      report.actions.push('connect-only: skipped download and installation')
+      if (!connection) {
+        log('⏳ Aa Browser 未运行，正在尝试启动…')
+        connection = await waitForConnection({
+          noLaunch: options['no-launch'] === true,
+          launch: platform === 'win32'
+            ? () => { spawn(appExeFor(installDir), [], { detached: true, stdio: 'ignore' }).unref() }
+            : () => { spawn(appImage, [], { detached: true, stdio: 'ignore' }).unref() },
+          log
+        })
+        if (!connection) die(new Error('60 秒内未检测到运行中的 Aa Browser。请手动打开浏览器后重试。'))
+      }
+    } else {
+      let artifact
+      let expectedDigest = null
+      if (options.from) {
+        artifact = path.resolve(options.from)
+        if (!fs.existsSync(artifact)) die(new Error(`--from 路径不存在: ${artifact}`))
+      } else if (options.url && /^[a-z]+:\/\//i.test(options.url)) {
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-browser-'))
+        artifact = path.join(tmp, path.basename(new URL(options.url).pathname) || 'aa-browser-setup.exe')
+        await downloadTo(options.url, artifact, log)
+      } else if (options.url && fs.existsSync(options.url)) {
+        artifact = path.resolve(options.url)
+      } else if (options.repo) {
+        const resolved = await resolveFromRepo(options.repo, platform)
+        expectedDigest = resolved.digest ?? null
+        const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-browser-'))
+        artifact = path.join(tmp, resolved.name || (platform === 'linux' ? 'aa-browser.AppImage' : 'aa-browser-setup.exe'))
+        await downloadTo(resolved.url, artifact, log)
+        report.version = resolved.tag ?? null
+      } else {
+        die(new Error('请提供 --repo / --connect-only / --url / --from 之一（--help 查看用法）'))
+        return
+      }
+
+      if (fs.statSync(artifact).isDirectory()) {
+        if (platform !== 'win32') die(new Error('便携目录模式仅支持 Windows（win-unpacked）。Linux 请使用 AppImage。'))
+        installDir = artifact
+        if (!fs.existsSync(appExeFor(installDir))) die(new Error('目录中没有 Aa Browser.exe（便携模式需要 win-unpacked 解压目录）'))
+        log(`\n📁 便携模式：直接使用目录 ${installDir}`)
+      } else {
+        const digestToUse = options.sha256 ? `sha256:${String(options.sha256).trim()}` : expectedDigest
+        const verification = await verifyArtifact(artifact, digestToUse, artifact, {
+          requireDigest: Boolean(options.repo && !options.sha256),
+          platform
+        })
+        if (verification.digestChecked) log(`🔒 已校验 SHA-256: ${verification.digest.slice(0, 16)}…`)
+
+        if (platform === 'win32') {
+          installDir = options.dir || defaultInstallDirFor('win32')
+          log('\n📦 静默安装中（约 10-30 秒）…')
+          const result = spawnSync(artifact, ['/S'], { timeout: 180000 })
+          if (result.status !== 0 && !fs.existsSync(appExeFor(installDir))) {
+            die(new Error(`安装器退出码 ${result.status}，且未检测到安装目录 ${installDir}`))
+          }
+          report.actions.push('installed Windows NSIS package')
+        } else {
+          appImage = appImagePathFor(options.dir)
+          fs.mkdirSync(path.dirname(appImage), { recursive: true })
+          fs.copyFileSync(artifact, appImage)
+          fs.chmodSync(appImage, 0o755)
+          report.actions.push('installed Linux AppImage')
+          log(`\n📦 已安装 AppImage: ${appImage}`)
+        }
+      }
+
+      report.installDir = installDir || path.dirname(appImage)
+      if (!connection) {
+        log('⏳ 等待 Aa Browser 就绪…')
+        connection = await waitForConnection({
+          noLaunch: options['no-launch'] === true,
+          launch: platform === 'win32'
+            ? () => { spawn(appExeFor(installDir), [], { detached: true, stdio: 'ignore' }).unref() }
+            : () => { spawn(appImage, [], { detached: true, stdio: 'ignore' }).unref() },
+          log
+        })
+        if (!connection) die(new Error('60 秒内未检测到 Aa Browser 就绪（~/.aabrowser/connection.json）'))
+      }
+    }
+
+    report.version = report.version || connection.version
+    report.installDir = report.installDir || (platform === 'win32' ? installDir : appImage ? path.dirname(appImage) : null)
+    log(`✅ Aa Browser 已就绪 (v${connection.version}, ws://127.0.0.1:${connection.port})`)
+
+    let bridge = bridgePathFor({ platform, installDir })
+    if (platform === 'linux') {
+      // AppImage 运行时会把桥写到稳定的 userData 路径；也允许从 AppImage 解包兜底。
+      if (!fs.existsSync(bridge) && appImage) {
+        extracted = extractAppImage(appImage)
+        if (extracted && fs.existsSync(extracted.bridge)) {
+          fs.mkdirSync(path.dirname(bridge), { recursive: true })
+          fs.copyFileSync(extracted.bridge, bridge)
+        }
+      }
+    }
+    if (!fs.existsSync(bridge)) die(new Error(`找不到 MCP 桥文件：${bridge}。安装可能不完整。`))
+    report.bridge = bridge
+
+    let setupPath = platform === 'win32' ? findSetupScript(installDir || (options.dir || '')) : null
+    if (!setupPath && appImage) {
+      extracted = extracted || extractAppImage(appImage)
+      setupPath = extracted && fs.existsSync(extracted.setup) ? extracted.setup : null
+    }
+    if (!setupPath && options.repo) {
+      const raw = `https://raw.githubusercontent.com/${options.repo}/main/cli/setup.mjs`
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-browser-setup-'))
+      setupPath = path.join(tmp, 'setup.mjs')
+      log(`⬇️  下载客户端配置脚本 ${raw}`)
+      const res = await fetch(raw, { headers: { 'User-Agent': 'aa-browser-installer' } })
+      if (!res.ok) die(new Error(`下载 setup.mjs 失败: HTTP ${res.status}`))
+      fs.writeFileSync(setupPath, Buffer.from(await res.arrayBuffer()))
+    }
+    runSetup(setupPath, bridge, options.clients, log, json)
+    report.clients = options.clients || 'auto-detected'
+    report.actions.push('wrote MCP configuration for detected clients')
+
+    if (options.verify) {
+      log('\n🔎 实际调用 browser_tabs 验证…')
+      const result = await verifyBrowserTabs(connection)
+      report.verified = true
+      log(`✅ 验证通过：${(result.text || '').split('\n')[0] || 'browser_tabs 返回成功'}`)
+      log(result.text || '')
+    }
+
+    report.ok = true
+    log('')
+    log('🎉 安装与接入完成！')
+    log(`   版本    : v${report.version}`)
+    log(`   安装位置: ${report.installDir}`)
+    log(`   MCP 桥  : ${bridge}`)
+    log(`   配置备份: 各客户端目录下的 *.aa-backup-* 文件`)
+    log('   下一步  : 重启/重载 AI 客户端，实际调用 browser_tabs 确认工具已加载')
+    log('   自动更新: Aa Browser 通过 GitHub Releases 自动更新；升级后配置一般无需重写')
+    emit()
+  } catch (error) {
+    die(error)
+  } finally {
+    if (extracted?.cleanup) extracted.cleanup()
+  }
+}
+
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
+if (isMain) {
+  main(process.argv.slice(2)).catch((error) => {
+    console.error(`❌ ${error instanceof Error ? error.stack ?? error.message : String(error)}`)
+    process.exit(1)
+  })
+}
+
+export { main }

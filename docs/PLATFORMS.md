@@ -12,9 +12,9 @@
 
 ## 安装、卸载与恢复
 
-**Windows**。从项目 Release 下载 `aa-browser-setup-<版本>.exe`，按常规向导安装。现有版本可使用应用内更新。卸载入口位于系统「已安装的应用」。桌面快捷方式和卸载项由 NSIS 管理。
+**Windows**。从项目 Release 下载 `aa-browser-setup-<版本>.exe`，按常规向导安装。现有版本可使用应用内更新。卸载入口位于系统「已安装的应用」。桌面快捷方式和卸载项由 NSIS 管理。也可以把新标签页的通用接入提示词发给任意具备本机执行能力的 AI，由它自动完成下载、安装和 MCP 配置。
 
-**Linux**。使用带 GTK 3、NSS、GBM 和音频库的 x86_64 桌面系统。应用需要 Chromium 沙箱可用。AppImage 由当前用户运行，并应放在当前用户可写的位置。首次使用可以将文件移动到 `~/Applications/AaBrowser.AppImage`，使用固定路径方便桌面快捷方式跟随更新。
+**Linux**。使用带 GTK 3、NSS、GBM 和音频库的 x86_64 桌面系统。应用需要 Chromium 沙箱可用。AppImage 由当前用户运行，并应放在当前用户可写的位置。通用安装器会把它安装到 `~/Applications/AaBrowser.AppImage`（可用 `--dir` 修改目录）；也可以手动下载后使用固定路径，方便桌面快捷方式跟随更新。
 
 ```sh
 mkdir -p ~/Applications

@@ -4,11 +4,15 @@
 
 ## v0.2.0 — 2026-11-19
 
+- 新增通用安装/接入提示词：一段提示词发给任意具备本机执行能力的 AI，自动下载、校验、安装（Windows NSIS / Linux AppImage）、写入 MCP 配置并实际调用 `browser_tabs` 验证；已安装时用 `--connect-only` 只接入不重装。
+- 新增 DeepSeek Harness 插件包 `packages/dsh/`（`aa-browser-dsh`）：插件市场安装后把随包 MCP 桥放到稳定路径，工具以 `mcp__aa-browser__*` 提供，无需系统 Node；配套 `check:dsh` 与市场条目。
+- 安装器新增 `--connect-only`、`--verify`、`--verify-only`、`--print-config`、`--json` 与 Linux AppImage 安装；Windows/Linux 均校验 Release SHA-256 与文件头。提示词由 `installer/*.md` 单一来源生成，`check:prompt` 防漂移。
 - 新增跨会话标签恢复（默认开启、可关闭）：恢复普通网页标签和活动标签，跳过隔离标签、内部页与非 HTTP(S) 地址，剥离 URL 凭据，原子写入且限制 20 条。
 - 新增 `browser_performance` MCP 工具：导航/绘制/资源/堆/DOM 性能摘要，只读幂等；MCP 工具总数 34。
 - 正式发行新增 CycloneDX SBOM 并纳入 `SHA256SUMS.txt`；发布与公开校验脚本强制核对 SBOM。
 - 修复冒烟测试在继承 `ELECTRON_RUN_AS_NODE=1` 的 shell 中无法启动 Electron 的问题。
-- 持久化回归 11 项、桌面回归 26 项、更新 UI 回归 6 项，两平台 CI 与打包冒烟流程保持不变。
+- 修复 Aa Browser 未运行时 MCP `tools/call` 无响应、客户端挂到超时的问题；桥始终返回 `isError` 工具结果，并新增离线回归测试。
+- 持久化回归 11 项、桌面回归 26 项、更新 UI 回归 6 项、安装器纯函数 4 项，并新增打包产物 `--connect-only --verify` 端到端测试。
 
 ## v0.1.0 — 2026-11-18
 

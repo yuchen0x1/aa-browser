@@ -22,8 +22,12 @@ MCP 客户端    →  cli/mcp      →  src/main/agent-server →  tools / actio
 | 检查 | 基线及证据来源 |
 | --- | --- |
 | Windows v0.0.8 本地回归 | 12 项命令通过。包括 check、build、test:tools、test:stores、test:security、test:updater、test:release、validate:workbuddy、validate:codex、smoke、test:desktop、test:update-ui |
-| Windows v0.2.0 本地回归 | check（34 工具）、test:tools、test:stores 11/11、test:security、test:updater 13/13、test:release 5/5、build、smoke（含性能摘要与会话记录断言）、test:desktop 26/26、test:update-ui 6/6、`npm run dist` 产出 NSIS + blockmap + latest.yml、`release-assets prepare windows-x64` 校验通过、SBOM 生成与发布脚本回归 |
+| Windows v0.2.0 本地回归 | check（34 工具 + 提示词一致）、test:tools、test:stores 11/11、test:security、test:updater 13/13、test:release 5/5、test:installer 4/4、test:connect（打包产物 connect-only + browser_tabs 验证）、build、smoke（含性能摘要与会话记录断言）、test:desktop 26/26、test:update-ui 6/6、`npm run dist` 产出 NSIS + blockmap + latest.yml、`release-assets prepare windows-x64` 校验通过、SBOM 生成与发布脚本回归 |
 | Windows 安装包实测 | `aa-browser-setup-0.2.0.exe` 静默安装到临时目录成功；对安装后的 `Aa Browser.exe` 运行完整 smoke（34 工具、性能摘要、会话记录、抓包、上传下载）通过；卸载程序返回 0 且主程序文件已移除 |
+| 通用接入提示词 | `installer/install-prompt.md` 与 `connect-prompt.md` 单一来源生成 `PROMPT.md` 和新标签页，`check:prompt` 校验一致；冒烟测试断言启动页渲染通用接入提示词与复制按钮 |
+| 安装器与 connect-only | 纯函数 4/4（平台资产、稳定路径、digest、PE/ELF 文件头）；对 `release/win-unpacked` 执行 `--connect-only --dir ... --verify --json` 通过，`--print-config` 输出可用的 MCP 命令；Linux 由 CI 在 AppImage 上执行同一测试 |
+| MCP 桥离线行为 | `npm run test:bridge`：浏览器未运行时 `tools/call` 在 8 秒内返回工具级 `isError`，不再挂到客户端超时 |
+| DSH 插件 | `npm run check:dsh` 校验清单/patch 两行/桥版本/locale/detail/图标/市场条目；已通过 `plugin_manager install_bundle` 安装到当前 profile（`aa-browser-dsh@0.1.0`，两行启用），当前会话已暴露 34 个 `mcp__aa-browser__*` 工具；插件市场收录尚未提交（需 npm 发布与外部仓库 PR） |
 | 跨会话恢复 | 持久化单测覆盖凭据剥离、去重、上限、损坏/未来版本；桌面回归覆盖种子会话恢复、活动标签恢复和「隔离标签不入记录」 |
 | 性能摘要 | 冒烟测试在真实页面调用 `browser_performance`，断言导航/资源/DOM 字段和当前 URL |
 | SBOM | `npm run sbom` 从 lockfile 生成 CycloneDX 1.5；发布清单要求 SBOM 存在，公开校验解析并核对版本 |
