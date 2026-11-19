@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Aa Browser — OG image source</title>
+    <link rel="stylesheet" href="site.css" />
+    <style>
+      html,
+      body {
+        width: 1200px;
+        height: 630px;
+        overflow: hidden;
+      }
+
+      body {
+        background: #0b0f11;
+        font-size: 16px;
+      }
+
+      .og {
+        position: relative;
+        width: 1200px;
+        height: 630px;
+        padding: 62px 68px 54px;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        background:
+          radial-gradient(900px 520px at 88% -10%, rgba(120, 203, 185, 0.16), transparent 65%),
+          radial-gradient(700px 420px at -8% 110%, rgba(120, 203, 185, 0.1), transparent 70%),
+          #0b0f11;
+        overflow: hidden;
+      }
+
+      .og::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background-image: radial-gradient(circle at 1px 1px, rgba(232, 238, 236, 0.07) 1px, transparent 0);
+        background-size: 30px 30px;
+        mask-image: radial-gradient(ellipse 80% 80% at 45% 20%, #000 10%, transparent 75%);
+        pointer-events: none;
+      }
+
+      .og__top {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .og__brand {
+        display: flex;
+        align-items: center;
+        gap: 13px;
+      }
+
+      .og__mark {
+        width: 44px;
+        height: 44px;
+        border-radius: 12px;
+        border: 1px solid rgba(120, 203, 185, 0.45);
+        background: linear-gradient(150deg, rgba(120, 203, 185, 0.26), rgba(120, 203, 185, 0.05));
+        display: grid;
+        place-items: center;
+        color: #c5f6e9;
+        font-family: var(--font-mono);
+        font-size: 17px;
+        font-weight: 700;
+        letter-spacing: -0.05em;
+      }
+
+      .og__name {
+        font-size: 19px;
+        font-weight: 620;
+        letter-spacing: -0.02em;
+      }
+
+      .og__tag {
+        margin-top: 2px;
+        color: #839390;
+        font-family: var(--font-mono);
+        font-size: 9.5px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+
+      .og__badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 12px;
+        border: 1px solid rgba(120, 203, 185, 0.3);
+        border-radius: 999px;
+        background: rgba(120, 203, 185, 0.08);
+        color: #a9ebdb;
+        font-family: var(--font-mono);
+        font-size: 10px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .og__badge i {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: #78cbb9;
+        box-shadow: 0 0 10px #78cbb9;
+      }
+
+      .og__body {
+        position: relative;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 392px;
+        gap: 46px;
+        align-items: center;
+      }
+
+      .og h1 {
+        margin: 0;
+        font-size: 74px;
+        line-height: 1.03;
+        letter-spacing: -0.045em;
+        font-weight: 640;
+        color: #eef4f2;
+      }
+
+      .og h1 em {
+        font-style: normal;
+        background: linear-gradient(100deg, #c7f8ec, #70c6b3 60%, #4d9d8c);
+        -webkit-background-clip: text;
+        background-clip: text;
+        -webkit-text-fill-color: transparent;
+      }
+
+      .og__sub {
+        margin: 18px 0 0;
+        color: #a3b1ae;
+        font-size: 17px;
+        line-height: 1.65;
+      }
+
+      .og__pills {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 28px;
+      }
+
+      .og__pill {
+        padding: 5px 11px;
+        border: 1px solid rgba(232, 238, 236, 0.14);
+        border-radius: 6px;
+        color: #a3b1ae;
+        font-family: var(--font-mono);
+        font-size: 10.5px;
+        letter-spacing: 0.03em;
+      }
+
+      .og__pill--mint {
+        border-color: rgba(120, 203, 185, 0.36);
+        background: rgba(120, 203, 185, 0.09);
+        color: #b6eee0;
+      }
+
+      .og__card {
+        border: 1px solid rgba(232, 238, 236, 0.14);
+        border-radius: 16px;
+        background: rgba(9, 14, 16, 0.92);
+        box-shadow: 0 30px 80px -30px rgba(0, 0, 0, 0.9), 0 0 70px -30px rgba(120, 203, 185, 0.5);
+        overflow: hidden;
+        transform: rotate(-1deg);
+      }
+
+      .og__card-head {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        padding: 12px 14px;
+        border-bottom: 1px solid rgba(232, 238, 236, 0.09);
+        color: #78cbb9;
+        font-family: var(--font-mono);
+        font-size: 9px;
+        letter-spacing: 0.13em;
+        text-transform: uppercase;
+      }
+
+      .og__card-head::before {
+        content: "";
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: #78cbb9;
+        box-shadow: 0 0 8px #78cbb9;
+      }
+
+      .og__card-head span {
+        margin-left: auto;
+        color: #5f6e6a;
+        letter-spacing: 0.04em;
+        text-transform: none;
+      }
+
+      .og__code {
+        padding: 14px 16px 16px;
+        font-family: var(--font-mono);
+        font-size: 11.5px;
+        line-height: 1.95;
+        color: #8d9c98;
+      }
+
+      .og__code div {
+        white-space: nowrap;
+      }
+
+      .og__code .k {
+        color: #9db4c4;
+      }
+
+      .og__code .s {
+        color: #dde9e6;
+      }
+
+      .og__code .r {
+        color: #a8ebda;
+      }
+
+      .og__code .hit {
+        display: block;
+        margin: 2px -16px;
+        padding: 3px 16px;
+        background: linear-gradient(90deg, rgba(120, 203, 185, 0.17), rgba(120, 203, 185, 0.03));
+        box-shadow: inset 2px 0 0 #78cbb9;
+      }
+
+      .og__card-foot {
+        display: flex;
+        justify-content: space-between;
+        padding: 9px 14px;
+        border-top: 1px solid rgba(232, 238, 236, 0.08);
+        color: #5f6e6a;
+        font-family: var(--font-mono);
+        font-size: 9px;
+      }
+
+      .og__foot {
+        position: relative;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 20px;
+        padding-top: 20px;
+        border-top: 1px solid rgba(232, 238, 236, 0.1);
+        color: #839390;
+        font-family: var(--font-mono);
+        font-size: 11px;
+        letter-spacing: 0.05em;
+      }
+
+      .og__foot b {
+        color: #d8e6e2;
+        font-weight: 400;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="og">
+      <div class="og__top">
+        <div class="og__brand">
+          <div class="og__mark">Aa</div>
+          <div>
+            <div class="og__name">Aa Browser</div>
+            <div class="og__tag">The Agent-Native Browser</div>
+          </div>
+        </div>
+        <span class="og__badge"><i></i>v0.2.0 · MIT</span>
+      </div>
+
+      <div class="og__body">
+        <div>
+          <h1>浏览器，<br />为 <em>Agent</em> 而生。</h1>
+          <p class="og__sub">结构化快照、稳定 ref、真实输入。<br />人像人一样浏览网页，Agent 像工程师一样驱动它。</p>
+          <div class="og__pills">
+            <span class="og__pill og__pill--mint">34 个 MCP 工具</span>
+            <span class="og__pill">增量快照 −60%</span>
+            <span class="og__pill">127.0.0.1 本地</span>
+            <span class="og__pill">Windows · Linux</span>
+          </div>
+        </div>
+
+        <div class="og__card">
+          <div class="og__card-head">Agent view <span>browser_snapshot</span></div>
+          <div class="og__code">
+            <div><span class="k">- search</span></div>
+            <div class="hit"><span class="k">  - combobox</span> <span class="s">"搜索网页"</span> <span class="r">[ref=e15]</span></div>
+            <div><span class="k">  - button</span> <span class="s">"语音搜索"</span> <span class="r">[ref=e16]</span></div>
+            <div><span class="k">- list</span> <span class="s">"搜索结果"</span></div>
+            <div><span class="k">  - link</span> <span class="s">"Aa Browser …"</span> <span class="r">[ref=e21]</span></div>
+            <div><span class="k">  - link</span> <span class="s">"快速开始 …"</span> <span class="r">[ref=e22]</span></div>
+          </div>
+          <div class="og__card-foot"><span>214 行 · 1.8k tokens</span><span>19 可交互</span></div>
+        </div>
+      </div>
+
+      <div class="og__foot">
+        <span><b>github.com/yuchen0x1/aa-browser</b></span>
+        <span>不截图 · 不猜坐标 · 本地 token 鉴权</span>
+      </div>
+    </div>
+  </body>
+</html>
