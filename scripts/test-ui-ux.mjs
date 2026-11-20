@@ -217,7 +217,22 @@ if (!process.versions.electron) {
     chrome.focus()
     await ui(`document.querySelector('[data-tab-id="${tabs[0].id}"]').focus()`)
     await key('Right')
-    await until(async () => (await ui(`window.aa.getState().then(s=>s.activeId === ${literal(tabs[1].id)})`)) && webContents.getFocusedWebContents() === chrome, 'arrow-selected tab and native shell focus')
+    try {
+      await until(async () => (await ui(`window.aa.getState().then(s=>s.activeId === ${literal(tabs[1].id)})`)) && webContents.getFocusedWebContents() === chrome, 'arrow-selected tab and native shell focus')
+    } catch (error) {
+      // Dump the exact keyboard-relevant state so runner-specific focus races
+      // are diagnosable from CI logs instead of a bare timeout.
+      const state = await ui('window.aa.getState()')
+      const diagnostics = {
+        activeId: state.activeId,
+        expectedId: tabs[1].id,
+        tabs: state.tabs.map((t) => ({ id: t.id, url: t.url, loading: t.loading, active: t.active })),
+        focusedURL: webContents.getFocusedWebContents()?.getURL() ?? null,
+        focusedIsChrome: webContents.getFocusedWebContents() === chrome,
+        allWebContents: webContents.getAllWebContents().map((wc) => wc.getURL()),
+      }
+      throw new Error(`${error.message} ${JSON.stringify(diagnostics)}`)
+    }
     const arrowFocus = webContents.getFocusedWebContents() === chrome
     const focusedAfterFirstArrow = webContents.getFocusedWebContents()
     check('tab arrow selection retains shell keyboard focus', arrowFocus, { focusedURL: focusedAfterFirstArrow?.getURL(), activeId: (await ui('window.aa.getState()')).activeId, expectedId: tabs[1].id })
