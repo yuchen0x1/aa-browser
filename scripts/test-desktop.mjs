@@ -527,6 +527,8 @@ if (!process.versions.electron) {
     const contextSource = await activePage()
     const originalPopup = Menu.prototype.popup
     const originalMenuLocale = (await ui('window.aa.settingsGet()')).settings.locale
+    // 'auto' 会跟随系统语言，CI  runner 通常是英文；固定中文后再断言中文菜单项
+    await ui('window.aa.settingsSet({locale:"zh-CN"})')
     let contextItem
     let contextLabels = []
     Menu.prototype.popup = function () {
