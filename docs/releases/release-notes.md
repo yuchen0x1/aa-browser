@@ -6,6 +6,7 @@
 
 | 版本 | 完整 Release 正文 |
 | --- | --- |
+| v0.6.8 | [bodies/v0.6.8.md](./bodies/v0.6.8.md) |
 | v0.6.7 | [bodies/v0.6.7.md](./bodies/v0.6.7.md) |
 | v0.6.6 | [bodies/v0.6.6.md](./bodies/v0.6.6.md) |
 | v0.6.5 | [bodies/v0.6.5.md](./bodies/v0.6.5.md) |
@@ -21,6 +22,12 @@
 | v0.0.3 | [bodies/v0.0.3.md](./bodies/v0.0.3.md) |
 | v0.0.2 | [bodies/v0.0.2.md](./bodies/v0.0.2.md) |
 | v0.0.1 | [bodies/v0.0.1.md](./bodies/v0.0.1.md) |
+
+## v0.6.8 — 2026-11-21
+
+- 修复关闭窗口时会话记录被空标签覆盖、MCP 请求含 Unicode 行/段落分隔符被误拆超时，以及连接建立期间取消请求仍可能发送的竞态。
+- 对话框策略与固定 iframe 动作复用 jsLiteral 编码；显式 `browser_frame evaluate` 语义不变，MCP 工具保持 42 个，用户数据无需迁移。
+- 新增真实关窗与特殊字符往返回归；本地 Windows 与远程 CI 双平台通过。
 
 ## v0.6.7 — 2026-11-21
 
