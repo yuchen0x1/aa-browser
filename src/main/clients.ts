@@ -3,6 +3,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { writeFileAtomic } from './atomic-json'
+import { diagnosticMessage, errorDetail, clientNameFor } from '../shared/diagnostics'
+import type { Locale } from '../shared/locale'
+import { getMainLocale } from './locale'
 
 /**
  * 一键接入：检测本机 AI 客户端并把 aa-browser 的 MCP 配置写入其配置文件。
@@ -358,13 +361,13 @@ function replaceCodexEntry(text: string, entry: string): string {
   return `${base}${base ? `${newline}${newline}` : ''}${entry.replace(/\n/g, newline)}${newline}`
 }
 
-function configureCodex(def: ClientDef, ts: string): ClientSetupResult {
+function configureCodex(def: ClientDef, ts: string, locale: Locale): ClientSetupResult {
   const file = configFileFor(def)
   const entry = codexEntryToml()
   const existingText = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : ''
   const exists = codexEntryBlocks(existingText).length > 0
   if (exists && codexEntryBlocks(existingText).some((block) => block === entry)) {
-    return { id: def.id, name: def.name, status: 'skipped', message: `已配置且无需更新：${file}` }
+    return { id: def.id, name: def.name, status: 'skipped', message: diagnosticMessage(locale, 'clients.configured', file) }
   }
   if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.aa-backup-${ts}`)
   fs.mkdirSync(path.dirname(file), { recursive: true })
@@ -373,7 +376,7 @@ function configureCodex(def: ClientDef, ts: string): ClientSetupResult {
     id: def.id,
     name: def.name,
     status: exists ? 'updated' : 'added',
-    message: `${exists ? '已更新' : '已写入'} Codex MCP 配置：${file}`
+    message: diagnosticMessage(locale, exists ? 'clients.codexUpdated' : 'clients.codexAdded', file)
   }
 }
 
@@ -426,10 +429,11 @@ export function detectClients(): ClientDetectResult[] {
  * 返回逐个结果；绝不触碰 aa-browser 以外的键；写前备份。
  */
 export function setupClients(ids: string[]): ClientSetupResult[] {
+  const locale = getMainLocale()
   const results: ClientSetupResult[] = []
   const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
   try {
-    if (isAppImage() && !findSystemNode()) throw new Error('请先安装 Node.js 22 并重新打开 Aa Browser。')
+    if (isAppImage() && !findSystemNode()) throw new Error(diagnosticMessage(locale, 'clients.nodeRequired'))
     if (CLIENT_DEFS.some((def) => ids.includes(def.id) && !def.manual)) syncAppImageBridge()
   } catch (error) {
     return CLIENT_DEFS.filter((def) => ids.includes(def.id)).map((def) => ({
@@ -443,15 +447,15 @@ export function setupClients(ids: string[]): ClientSetupResult[] {
         id: def.id,
         name: def.name,
         status: 'manual',
-        message: '请在 DeepSeek Harness 插件市场安装并启用 Aa Browser 插件；本应用不会修改 .dsh 配置或内部状态。启用后让 Agent 实际调用 mcp__aa-browser__browser_tabs 验证。'
+        message: diagnosticMessage(locale, 'clients.manual')
       })
       continue
     }
     if (def.toml) {
       try {
-        results.push(configureCodex(def, ts))
+        results.push(configureCodex(def, ts, locale))
       } catch (err) {
-        results.push({ id: def.id, name: def.name, status: 'error', message: `写入 Codex 配置失败：${(err as Error).message}` })
+        results.push({ id: def.id, name: def.name, status: 'error', message: diagnosticMessage(locale, 'clients.codexWriteFailed', errorDetail(err)) })
       }
       continue
     }
@@ -471,7 +475,7 @@ export function setupClients(ids: string[]): ClientSetupResult[] {
             id: def.id,
             name: def.name,
             status: 'manual',
-            message: `配置文件存在但无法解析（${file}），已跳过自动写入。请手动添加 MCP 条目：command="${bridgeEntry().command}", args=["${bridgeEntry().args[0]}"]`
+            message: diagnosticMessage(locale, 'clients.unparseable', file, bridgeEntry().command, bridgeEntry().args[0])
           })
           continue
         }
@@ -487,7 +491,7 @@ export function setupClients(ids: string[]): ClientSetupResult[] {
             id: def.id,
             name: def.name,
             status: 'skipped',
-            message: `已配置且无需更新：${file}`
+            message: diagnosticMessage(locale, 'clients.configured', file)
           })
           continue
         }
@@ -497,20 +501,19 @@ export function setupClients(ids: string[]): ClientSetupResult[] {
       container['aa-browser'] = entry
       fs.mkdirSync(path.dirname(file), { recursive: true })
       fs.writeFileSync(file, JSON.stringify(parsed, null, 2) + '\n', 'utf-8')
-      const verb = status === 'added' ? '已写入' : '已更新'
-      const note = installed ? '' : `（客户端目录未检测到，已创建新配置）`
+      const note = installed ? '' : diagnosticMessage(locale, 'clients.notDetected')
       results.push({
         id: def.id,
         name: def.name,
         status,
-        message: `${verb} ${def.name} 配置：${file}${note}`
+        message: diagnosticMessage(locale, status === 'added' ? 'clients.added' : 'clients.updated', clientNameFor(locale, def.id, def.name), file, note)
       })
     } catch (err) {
       results.push({
         id: def.id,
         name: def.name,
         status: 'error',
-        message: `写入 ${def.name} 失败：${(err as Error).message}`
+        message: diagnosticMessage(locale, 'clients.writeFailed', clientNameFor(locale, def.id, def.name), errorDetail(err))
       })
     }
   }

@@ -22,6 +22,8 @@ import type { UiState } from '@shared/types'
 import { contextMenuLabels } from '@shared/menu-labels'
 import { UpdateManager } from './updater'
 import { PageFinder } from './page-finder'
+import { printPage } from './printing'
+import { getMainLocale } from './locale'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const VERSION = app.getVersion()
@@ -144,6 +146,12 @@ function handleBeforeInput(wc: Electron.WebContents): void {
   wc.on('before-input-event', (event, input) => {
     const ctrl = input.control || input.meta
     if (input.type !== 'keyDown') return
+    // 模态设置不允许浏览器快捷键改变背后的网页或夺走表单焦点。
+    const key = input.key.toLowerCase()
+    if (settingsOpen && ((ctrl && ['t', 'w', 'l', 'f', 'r', 'p'].includes(key)) || (ctrl && input.shift && key === 'i') || key === 'f5' || (input.alt && ['arrowleft', 'arrowright'].includes(key)))) {
+      event.preventDefault()
+      return
+    }
     if (ctrl && input.shift && input.key.toLowerCase() === 't') {
       event.preventDefault()
       tabManager?.reopenClosed()
@@ -154,6 +162,12 @@ function handleBeforeInput(wc: Electron.WebContents): void {
       finder?.open()
       chromeView?.webContents.focus()
       chromeView?.webContents.send('aa:focus-find')
+      return
+    }
+    if (ctrl && !input.alt && !input.shift && key === 'p') {
+      event.preventDefault()
+      const active = tabManager?.active()
+      if (active) printPage(active.view.webContents, win)
       return
     }
     if (input.key === 'Escape' && wc !== chromeView?.webContents && finder?.getState().open) {
@@ -211,11 +225,7 @@ function handleBeforeInput(wc: Electron.WebContents): void {
 function installPageContextMenu(wc: Electron.WebContents): void {
   wc.on('context-menu', (_e, params) => {
     const menu = new Menu()
-    const settingLocale = getSettingsStore().get().locale
-    const locale = settingLocale === 'en-US' ? 'en'
-      : settingLocale === 'auto' ? (app.getLocale().toLowerCase().startsWith('zh') ? 'zh' : 'en')
-        : 'zh'
-    const L = contextMenuLabels(locale)
+    const L = contextMenuLabels(getMainLocale() === 'en-US' ? 'en' : 'zh')
     const hasLink = /^https?:|^file:/i.test(params.linkURL)
     const linkAllowed = !!tabManager?.isUrlAllowed(params.linkURL)
     const hasSelection = !!params.selectionText
@@ -272,7 +282,7 @@ function installPageContextMenu(wc: Electron.WebContents): void {
       t?.net.releaseDebugger() // DevTools 与 debugger/对话框守卫互斥
       wc.openDevTools({ mode: 'detach' })
     } })
-    push({ label: L.print, click: () => wc.print() })
+    push({ label: L.print, enabled: !settingsOpen, click: () => { if (!settingsOpen) printPage(wc, win) } })
     push({ label: L.saveScreenshot, click: () => {
       void wc.capturePage().then((img) => {
         const dir = app.getPath('pictures') || os.homedir()
@@ -300,13 +310,17 @@ function titleBarColors(): { color: string; symbolColor: string } {
     : { color: '#ebf1f4', symbolColor: '#1d2a2f' }
 }
 
-/** 把当前主题同步给所有内部页（新标签页）。外部网页不会被注入或读取。 */
-function syncInternalTheme(): void {
+/** 内部新标签页只接收已保存的外观设置；外部网页不会被注入或读取。 */
+function applyInternalAppearance(wc: Electron.WebContents): void {
+  if (wc.getURL() !== newtabUrl()) return
   const theme = resolvedTheme()
-  tabManager?.forEachWebView((wc) => {
-    if (wc.getURL() !== newtabUrl()) return
-    void wc.executeJavaScript(`window.__aaApplyTheme && window.__aaApplyTheme(${JSON.stringify(theme)})`).catch(() => {})
-  })
+  const locale = getSettingsStore().get().locale
+  const url = newtabUrl()
+  void wc.executeJavaScript(`if (location.href === ${JSON.stringify(url)}) { window.__aaApplyTheme?.(${JSON.stringify(theme)}); window.__aaApplyLocale?.(${JSON.stringify(locale)}) }`).catch(() => {})
+}
+
+function syncInternalAppearance(): void {
+  tabManager?.forEachWebView(applyInternalAppearance)
 }
 
 function applyTitleBarOverlay(): void {
@@ -335,7 +349,7 @@ function createWindow(): void {
   })
   nativeTheme.on('updated', () => {
     applyTitleBarOverlay()
-    syncInternalTheme()
+    syncInternalAppearance()
   })
   applyTitleBarOverlay()
 
@@ -432,7 +446,7 @@ function registerIpc(): void {
       if (typeof query === 'string') finder?.search(query, forward !== false, next === true)
     })
   })
-  ipcMain.handle('aa:find-close', (event) => guard(event, undefined, () => finder?.close()))
+  ipcMain.handle('aa:find-close', (event) => guard(event, undefined, () => finder?.close(false)))
   ipcMain.handle('aa:overlay-height', (event, value: unknown) => {
     return guard(event, undefined, () => {
       if (typeof value !== 'number' || !Number.isFinite(value)) return
@@ -575,9 +589,9 @@ function registerIpc(): void {
       // 关闭恢复时立刻删除旧记录；重新开启时立即记录当前标签，避免下次启动恢复过期页面。
       if (!result.restoreSession) getSessionStore().clear()
       else if ((patch as Record<string, unknown> | null)?.['restoreSession'] === true) flushSessionRecord?.()
-      if ((patch as Record<string, unknown> | null)?.['theme'] !== undefined) {
-        applyTitleBarOverlay()
-        syncInternalTheme()
+      if ((patch as Record<string, unknown> | null)?.['theme'] !== undefined) applyTitleBarOverlay()
+      if ((patch as Record<string, unknown> | null)?.['theme'] !== undefined || (patch as Record<string, unknown> | null)?.['locale'] !== undefined) {
+        syncInternalAppearance()
       }
       pushState()
       return result
@@ -686,11 +700,7 @@ app.whenReady().then(() => {
   tabManager.onNavigate = (url, title) => getHistoryStore().add(url, title)
   tabManager.getAllowedSites = () => getSettingsStore().get().allowedSites
   tabManager.getDefaultIsolated = () => getSettingsStore().get().isolatedSessions
-  tabManager.applyInternalTheme = (wc) => {
-    if (wc.getURL() !== newtabUrl()) return
-    const theme = resolvedTheme()
-    void wc.executeJavaScript(`window.__aaApplyTheme && window.__aaApplyTheme(${JSON.stringify(theme)})`).catch(() => {})
-  }
+  tabManager.applyInternalTheme = applyInternalAppearance
   tabManager.onSession = (ses) => {
     applyPermissionPolicy(ses, { requestApproval: (meta) => approvals.request(meta) })
     getDownloadTracker().attach(ses)

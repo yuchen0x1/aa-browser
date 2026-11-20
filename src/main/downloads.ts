@@ -3,6 +3,8 @@ import os from 'node:os'
 import path from 'node:path'
 import { shell } from 'electron'
 import type { Session, DownloadItem } from 'electron'
+import { diagnosticMessage, errorDetail } from '../shared/diagnostics'
+import { getMainLocale } from './locale'
 
 /** 一条下载记录 */
 export interface DownloadRecord {
@@ -159,20 +161,21 @@ export class DownloadTracker {
    * URL 必须用主进程注入的白名单重新校验，防止绕过站点限制。
    */
   retry(id: string): { ok: boolean; reason?: string } {
+    const locale = getMainLocale()
     const rec = this.records.find((r) => r.id === id)
-    if (!rec) return { ok: false, reason: `找不到下载记录 ${id}` }
-    if (this.activeItems.has(id)) return { ok: false, reason: '该下载仍在进行中，无法重试' }
-    if (!this.urlGuard(rec.url)) return { ok: false, reason: '该下载地址不在当前站点白名单内，已拒绝重试' }
+    if (!rec) return { ok: false, reason: diagnosticMessage(locale, 'downloads.missing', id) }
+    if (this.activeItems.has(id)) return { ok: false, reason: diagnosticMessage(locale, 'downloads.active') }
+    if (!this.urlGuard(rec.url)) return { ok: false, reason: diagnosticMessage(locale, 'downloads.notAllowed') }
 
     const session = this.recordSessions.get(id)
-    if (!session) return { ok: false, reason: '无法找到该下载所属的浏览器会话' }
+    if (!session) return { ok: false, reason: diagnosticMessage(locale, 'downloads.noSession') }
     this.pendingRetries.push(id)
     try {
       // Electron 的 downloadURL 在部分版本返回 void，不能假设是 Promise
       session.downloadURL(rec.url)
-    } catch {
+    } catch (error) {
       this.pendingRetries.splice(this.pendingRetries.indexOf(id), 1)
-      return { ok: false, reason: '重新发起下载失败' }
+      return { ok: false, reason: diagnosticMessage(locale, 'downloads.failed', errorDetail(error)) }
     }
     return { ok: true }
   }

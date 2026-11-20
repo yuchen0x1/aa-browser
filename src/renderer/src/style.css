@@ -28,6 +28,7 @@
   --duration-fast: 150ms;
   --duration-normal: 200ms;
   --opacity-disabled: 0.45;
+  --action-primary-bg: linear-gradient(135deg, var(--accent-cyan), var(--accent-blue));
 
   /* ── 语义 Token：暗色（默认）映射 ────────────────────────
      组件只引用语义 Token；主题差异全部在两个 :root 块内完成。 */
@@ -520,6 +521,11 @@ textarea:focus-visible {
   margin-top: 2px;
 }
 
+.suggest-text {
+  flex: 1;
+  min-width: 0;
+}
+
 .suggest-title {
   font-size: 12.5px;
   color: var(--text-strong);
@@ -776,8 +782,15 @@ textarea:focus-visible {
   white-space: nowrap;
   font-family: var(--font-mono);
 }
-.agent-call-detail { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.agent-call-detail {
+  flex: 0 1 55%;
+  min-width: 0;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
 .agent-call-stop {
+  flex: none;
   padding: 2px 8px;
   border: 1px solid var(--danger-border);
   border-radius: 5px;
@@ -1480,6 +1493,16 @@ label.settings-label {
   font-size: var(--font-size-control);
   color: var(--success-ink);
 }
+.settings-status[data-state="pending"] { color: var(--text-muted); }
+.settings-status[data-state="error"],
+#download-status[data-state="error"] { color: var(--danger-ink); }
+#download-status {
+  padding: 8px 12px;
+  color: var(--success-ink);
+  font-size: var(--font-size-control);
+  overflow-wrap: anywhere;
+}
+#download-status:empty { display: none; }
 #btn-save-settings {
   min-width: 108px;
   height: 34px;
@@ -1590,8 +1613,9 @@ label.settings-label {
   opacity: var(--opacity-disabled);
   cursor: default;
 }
-.settings-btn-primary {
-  background: linear-gradient(135deg, var(--accent-cyan), var(--accent-blue));
+.settings-btn-primary,
+.settings-btn-primary:hover:not(:disabled) {
+  background: var(--action-primary-bg);
   border-color: transparent;
   color: var(--text-on-accent);
 }

@@ -62,6 +62,13 @@ location / {
 error_page 404 /404.html;
 ```
 
+### 自定义 404 与部署路径
+
+将托管平台配置为在不存在的页面 URL 上返回 `404.html`，保留原 URL 和 HTTP 404 状态（不要重定向到 `/404.html`，也不要返回 200）。错误页的样式和图标都内嵌，不依赖错误 URL 下的资源请求。
+
+- 根目录部署保持 `404.html` 中的 `<base href="/">`。当前 GitHub Pages 地址 `yuchen0x1.github.io/aa-browser/` 会用内联脚本自动切换到 `/aa-browser/`。
+- 其他子目录部署（含不同仓库的 Pages），请把该标签改成部署路径，例如 `<base href="/products/browser/">`，必须保留首尾 `/`；同时将托管平台的 404 回退指向该目录内的 `404.html`。若禁用 JavaScript 或 CSP 阻止内联脚本，当前 Pages 的专用发布副本也可显式设置 `<base href="/aa-browser/">`。使用 CSP 的托管环境需要允许同源 `<base>` 和该页面的内联样式。
+
 ## 内容来源与更新点
 
 页面的功能描述、版本号、下载文件名、安全边界均来自仓库内 `README.md`、`docs/CONNECT.md`、

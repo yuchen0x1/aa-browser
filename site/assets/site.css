@@ -3133,10 +3133,8 @@ details.disclosure .disclosure__body p {
 }
 
 .search input:focus {
-  outline: none;
   border-color: var(--line-mint);
   background: rgba(120, 203, 185, 0.04);
-  box-shadow: 0 0 0 3px rgba(120, 203, 185, 0.1);
 }
 
 .search kbd {

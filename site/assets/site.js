@@ -52,7 +52,7 @@
     }, 1800);
   }
 
-  async function copyText(text) {
+  async function copyText(text, source) {
     if (!text) return false;
 
     try {
@@ -64,22 +64,38 @@
       /* fall through to legacy path */
     }
 
+    // The user may have moved focus while the clipboard write was pending.
+    const activeBeforeFallback = document.activeElement;
+    const { scrollX, scrollY } = window;
     const helper = document.createElement("textarea");
     helper.value = text;
     helper.setAttribute("readonly", "");
     helper.style.position = "fixed";
     helper.style.top = "-1000px";
     helper.style.opacity = "0";
-    document.body.appendChild(helper);
-    helper.select();
-
+    const canRestoreFocus = (element) =>
+      typeof element?.focus === "function" &&
+      element !== document.body &&
+      element.isConnected &&
+      !element.closest("[inert]") &&
+      !element.matches(":disabled") &&
+      element.getClientRects().length > 0 &&
+      getComputedStyle(element).visibility === "visible";
     let ok = false;
     try {
+      document.body.appendChild(helper);
+      helper.select();
       ok = document.execCommand("copy");
     } catch {
       ok = false;
+    } finally {
+      helper.remove();
+      if (canRestoreFocus(activeBeforeFallback)) activeBeforeFallback.focus({ preventScroll: true });
+      else if (canRestoreFocus(source)) source.focus({ preventScroll: true });
+      if (window.scrollX !== scrollX || window.scrollY !== scrollY) {
+        window.scrollTo({ left: scrollX, top: scrollY, behavior: "instant" });
+      }
     }
-    helper.remove();
     return ok;
   }
 
@@ -101,7 +117,7 @@
       }
     }
 
-    const ok = await copyText(text.trim());
+    const ok = await copyText(text.trim(), button);
     if (!ok) {
       toast("复制失败，请手动选择");
       return;
@@ -116,6 +132,7 @@
   const header = $("#siteHeader");
   const navToggle = $("#navToggle");
   const navLinks = $("#navLinks");
+  const isolatedNavBackground = new Set();
 
   function setNavOpen(open) {
     if (!header || !navToggle) return;
@@ -123,6 +140,18 @@
     navToggle.setAttribute("aria-expanded", String(open));
     navToggle.setAttribute("aria-label", open ? "关闭导航菜单" : "打开导航菜单");
     document.body.classList.toggle("is-locked", open);
+
+    if (open) {
+      // Only isolate background regions; the sheet lives inside the header.
+      for (const element of $$(".skip-link, main, footer")) {
+        if (element.contains(header) || element.hasAttribute("inert")) continue;
+        element.inert = true;
+        isolatedNavBackground.add(element);
+      }
+    } else {
+      for (const element of isolatedNavBackground) element.inert = false;
+      isolatedNavBackground.clear();
+    }
   }
 
   if (navToggle) {
@@ -238,7 +267,8 @@
 
     const startAuto = () => {
       stopAuto();
-      if (reduceMotion || userPaused || !inView) return;
+      if (reduceMotion || userPaused || !inView || document.hidden ||
+          demo.contains(document.activeElement) || demo.matches(":hover")) return;
       autoTimer = window.setInterval(() => select((index + 1) % demoTabs.length, false), 8000);
     };
 
@@ -279,26 +309,23 @@
     });
 
     demo.addEventListener("mouseenter", stopAuto);
-    demo.addEventListener("mouseleave", () => {
-      if (!userPaused) startAuto();
-    });
+    demo.addEventListener("mouseleave", startAuto);
     demo.addEventListener("focusin", stopAuto);
     demo.addEventListener("focusout", (event) => {
-      if (!demo.contains(event.relatedTarget) && !userPaused) startAuto();
+      // Recheck after the departing element has actually released focus.
+      if (!demo.contains(event.relatedTarget)) queueMicrotask(startAuto);
     });
+    document.addEventListener("visibilitychange", startAuto);
 
     if ("IntersectionObserver" in window) {
       const demoObserver = new IntersectionObserver(
         (entries) => {
           inView = entries[0]?.isIntersecting ?? true;
-          if (inView && !userPaused) startAuto();
-          else stopAuto();
+          startAuto();
         },
         { threshold: 0.25 }
       );
       demoObserver.observe(demo);
-    } else {
-      startAuto();
     }
 
     select(index, false);

@@ -103,7 +103,10 @@ const feedList = document.getElementById('action-feed-list') as HTMLDivElement |
 const btnCloseFeed = document.getElementById('btn-close-feed') as HTMLButtonElement | null
 const btnDownloads = document.getElementById('btn-downloads') as HTMLButtonElement | null
 const dlPanel = document.getElementById('download-panel') as HTMLDivElement | null
+const btnCloseDownloads = document.getElementById('btn-close-dl') as HTMLButtonElement | null
 const dlList = document.getElementById('download-list') as HTMLDivElement | null
+const downloadStatus = document.getElementById('download-status')
+const pendingDownloadRetries = new Set<string>()
 const suggestPanel = document.getElementById('suggest-panel') as HTMLDivElement | null
 const suggestList = document.getElementById('suggest-list') as HTMLDivElement | null
 const btnSettings = document.getElementById('btn-settings') as HTMLButtonElement | null
@@ -119,6 +122,9 @@ const setRestoreSession = document.getElementById('set-restore-session') as HTML
 const setDownloadDir = document.getElementById('set-download-dir') as HTMLInputElement | null
 const setAllowedSites = document.getElementById('set-allowed-sites') as HTMLTextAreaElement | null
 const setAgentInfo = document.getElementById('set-agent-info') as HTMLDivElement | null
+let lastClients: ClientDetectResult[] | null = null
+let lastAgentInfo: AgentInfo | null = null
+let hasAgentInfo = false
 const settingsStatus = document.getElementById('settings-status') as HTMLSpanElement | null
 let settingsStatusTimer: ReturnType<typeof setTimeout> | undefined
 let settingsReturnFocus: HTMLElement | null = null
@@ -138,6 +144,7 @@ const updateNoticeProgress = document.getElementById('update-notice-progress') a
 const updateNoticeAction = document.getElementById('update-notice-action') as HTMLButtonElement
 const btnReopen = document.getElementById('btn-reopen') as HTMLButtonElement
 const findBar = document.getElementById('find-bar') as HTMLDivElement
+const btnFind = document.getElementById('btn-find') as HTMLButtonElement
 const findQuery = document.getElementById('find-query') as HTMLInputElement
 const findStatus = document.getElementById('find-status') as HTMLSpanElement
 
@@ -178,6 +185,26 @@ function setText(id: string, key: LocaleKey): void {
 function setAttr(id: string, name: string, key: LocaleKey): void {
   const element = document.getElementById(id)
   if (element) element.setAttribute(name, t(key))
+}
+
+/** 外壳内的可见可聚焦控件；隐藏抽屉、禁用项和模态背景都不算。 */
+function isFocusable(element: HTMLElement | null | undefined): element is HTMLElement {
+  return !!element && element !== document.body && element !== document.documentElement &&
+    element.isConnected && element.getClientRects().length > 0 &&
+    !element.matches(':disabled, [aria-disabled="true"]') && !element.closest('[inert], [aria-hidden="true"]')
+}
+function focusIfPossible(element: HTMLElement | null | undefined): boolean {
+  if (!isFocusable(element)) return false
+  element.focus({ preventScroll: true })
+  return true
+}
+
+function renderSearchPresetLabels(): void {
+  const englishLabels: Record<string, string> = { '必应 (Bing)': 'Bing', '百度': 'Baidu' }
+  for (const option of Array.from(setEngine?.options ?? [])) {
+    const label = option.dataset['presetLabel']
+    if (label) option.textContent = activeLocale === 'en-US' ? englishLabels[label] ?? label : label
+  }
 }
 
 function applyLocale(locale: Locale): void {
@@ -251,31 +278,58 @@ function applyLocale(locale: Locale): void {
   setAttr('find-close', 'aria-label', 'close')
   const localeOption = setLocale?.querySelector<HTMLOptionElement>('option[value="auto"]'); if (localeOption) localeOption.textContent = t('autoLocale')
   const engineUrl = document.getElementById('set-engine-url') as HTMLInputElement | null; if (engineUrl) engineUrl.placeholder = t('customSearch')
+  renderSearchPresetLabels()
   const updateCheck = document.getElementById('btn-update-check'); if (updateCheck) updateCheck.textContent = t('checkUpdate')
   const updateAction = document.getElementById('btn-update-action'); if (updateAction && !updateAction.hidden) updateAction.textContent = t('downloadUpdate')
+  renderAgentInfo()
+  // 语言预览只翻译已缓存的数据，不重新扫描客户端，也不写任何配置。
+  if (lastClients && setClientList && setClientList.getAttribute('aria-busy') !== 'true') renderClients(lastClients, true)
   renderToolbar(); renderFind(); renderUpdate(state.update)
 }
 
 function renderFind(): void {
   const find = state.find
   const wasHidden = findBar.hidden
+  const hadFocus = findBar.contains(document.activeElement)
   findBar.hidden = !find?.open
   btnReopen.disabled = !state.canReopenClosed
   document.documentElement.style.setProperty('--find-height', find?.open ? '48px' : '0px')
   document.documentElement.style.setProperty('--page-top', `${84 + (state.update?.noticeVisible ? 44 : 0) + (find?.open ? 48 : 0) + (state.pendingApprovals.length ? 180 : 0)}px`)
-  if (!find?.open) return
-  if (wasHidden) {
+  if (!find?.open) {
+    // 查找条被关闭（Esc/按钮/主进程）后焦点不能留在隐藏输入框；仅当焦点原本就在查找条内时回收。
+    if (!wasHidden && document.hasFocus() && hadFocus) {
+      const target = findReturnFocus
+      findReturnFocus = null
+      if (!focusIfPossible(target)) focusIfPossible(btnFind)
+    }
+    return
+  }
+  if (wasHidden && !(settingsModal && !settingsModal.hidden)) {
     findQuery.value = find.query
     findQuery.focus()
+  } else if (wasHidden) {
+    findQuery.value = find.query
   }
   findStatus.textContent = !find.query ? t('findPlaceholder') : find.matches ? `${find.activeMatch} / ${find.matches}` : (activeLocale === 'en-US' ? 'No matches' : '未找到匹配')
   findQuery.setAttribute('aria-invalid', String(!!find.query && !find.matches))
 }
 
+let findReturnFocus: HTMLElement | null = null
+
 async function openFind(): Promise<void> {
+  // 设置是模态层：打开期间不允许把焦点移出到查找条。
+  if (settingsModal && !settingsModal.hidden) return
+  const previous = document.activeElement
+  if (previous instanceof HTMLElement && previous !== document.body && !findBar.contains(previous)) findReturnFocus = previous
   await window.aa.findOpen()
   findQuery.focus()
   findQuery.select()
+}
+
+/** Esc / 关闭按钮退出查找：焦点回到打开查找前的位置，不留在隐藏的输入框里。 */
+function closeFind(): void {
+  // renderFind 在状态确认关闭后回收焦点；不跨 IPC 等待抢回用户已主动移动的焦点。
+  void window.aa.findClose()
 }
 
 document.getElementById('btn-find')?.addEventListener('click', () => void openFind())
@@ -289,8 +343,12 @@ findQuery.addEventListener('keydown', (event) => {
 })
 document.getElementById('find-prev')?.addEventListener('click', () => void window.aa.find(findQuery.value, false, true))
 document.getElementById('find-next')?.addEventListener('click', () => void window.aa.find(findQuery.value, true, true))
-document.getElementById('find-close')?.addEventListener('click', () => void window.aa.findClose())
-window.aa.onFocusFind(() => { findQuery.focus(); findQuery.select() })
+document.getElementById('find-close')?.addEventListener('click', () => closeFind())
+window.aa.onFocusFind(() => {
+  if (settingsModal && !settingsModal.hidden) return
+  findQuery.focus()
+  findQuery.select()
+})
 
 /** DOM 浮层的实际高度同步给原生视图，避免被 84px 工具栏裁切。 */
 let extentFrame = 0
@@ -429,6 +487,8 @@ function renderTabs(): void {
     const close = document.createElement('button')
     close.className = 'close'
     close.dataset['focusKey'] = `tab-close:${t.id}`
+    // 只有活动标签的关闭按钮进入 Tab 顺序；非活动标签仍可鼠标点击，方向键切换后自然轮到它。
+    close.tabIndex = t.active ? 0 : -1
     close.title = uiText('关闭标签页 (Ctrl+W)', 'Close tab (Ctrl+W)')
     close.setAttribute('aria-label', `${uiText('关闭标签页：', 'Close tab: ')}${t.title || uiText('无标题', 'Untitled')}`)
     close.textContent = '×'
@@ -672,6 +732,52 @@ function downloadStateLabel(s: string): string {
   }
 }
 
+/** 下载重试结果反馈：面板内可见 + aria-live 播报，不静默吞掉失败。 */
+function setDownloadStatus(message: string, state: 'pending' | 'success' | 'error'): void {
+  if (!downloadStatus) return
+  downloadStatus.textContent = message
+  downloadStatus.dataset['state'] = state
+}
+
+function syncDownloadRetryButtons(): void {
+  dlList?.querySelectorAll<HTMLButtonElement>('[data-focus-key^="download-retry:"]').forEach((button) => {
+    button.disabled = pendingDownloadRetries.size > 0
+  })
+}
+
+async function retryDownload(id: string): Promise<void> {
+  // 面板共用一个结果区，串行提交避免其他文件的成功覆盖尚未读完的失败。
+  if (pendingDownloadRetries.size > 0) return
+  const focusedKey = document.activeElement instanceof HTMLElement ? document.activeElement.dataset['focusKey'] : undefined
+  pendingDownloadRetries.add(id)
+  // 禁用聚焦中的按钮会把焦点丢给 body；先移到面板内稳定控件。
+  if (focusedKey?.startsWith('download-retry:')) focusIfPossible(btnCloseDownloads)
+  syncDownloadRetryButtons()
+  const record = state.downloads?.find((d) => d.id === id)
+  const name = record?.filename ? uiText(`，文件：${record.filename}`, ` — ${record.filename}`) : ''
+  setDownloadStatus(uiText(`正在重新发起下载${name}…`, `Restarting download${name}…`), 'pending')
+  try {
+    const result = await window.aa.downloadRetry(id)
+    if (result?.ok) {
+      setDownloadStatus(uiText(`已重新发起下载${name}。可在列表中查看进度。`, `Download restarted${name}. Check its progress in this list.`), 'success')
+    } else {
+      const reason = result?.reason?.trim() || uiText('未知原因', 'Unknown reason')
+      setDownloadStatus(uiText(`重试失败${name}：${reason}`, `Retry failed${name}: ${reason}`), 'error')
+    }
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    setDownloadStatus(uiText(`重试失败${name}：${reason}`, `Retry failed${name}: ${reason}`), 'error')
+  } finally {
+    pendingDownloadRetries.delete(id)
+    // 状态流可能已经重建按钮；解锁当前列表而不是旧 DOM 引用。
+    syncDownloadRetryButtons()
+    // 只有外壳仍持有焦点且用户没有主动移焦时才归还，避免抢走新的操作位置。
+    if (focusedKey && document.hasFocus() && document.activeElement === btnCloseDownloads) {
+      focusIfPossible(document.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(focusedKey)}"]`))
+    }
+  }
+}
+
 function renderDownloads(): void {
   if (!dlList) return
   const items = state.downloads || []
@@ -742,7 +848,8 @@ function renderDownloads(): void {
       retry.className = 'dl-act'
       retry.dataset['focusKey'] = `download-retry:${d.id}`
       retry.textContent = uiText('重试', 'Retry')
-      retry.addEventListener('click', () => void window.aa.downloadRetry(d.id))
+      retry.disabled = pendingDownloadRetries.size > 0
+      retry.addEventListener('click', () => void retryDownload(d.id))
       actions.appendChild(retry)
     }
     el.appendChild(actions)
@@ -751,9 +858,15 @@ function renderDownloads(): void {
   }
 }
 
+let suggestTimer: ReturnType<typeof setTimeout> | undefined
+let suggestRequest = 0
+
 function hideSuggest(): void {
+  clearTimeout(suggestTimer)
+  suggestRequest++
   if (suggestPanel) suggestPanel.hidden = true
   omnibox.removeAttribute('aria-activedescendant')
+  omnibox.setAttribute('aria-expanded', 'false')
 }
 
 function renderSuggest(items: HistoryEntry[]): void {
@@ -762,6 +875,8 @@ function renderSuggest(items: HistoryEntry[]): void {
     hideSuggest()
     return
   }
+  // 列表每次重建，旧的 activedescendant 可能指向已销毁的节点，先清掉再按需设置。
+  omnibox.removeAttribute('aria-activedescendant')
   suggestList.innerHTML = ''
   for (const [index, it] of items.entries()) {
     const el = document.createElement('div')
@@ -797,22 +912,70 @@ function renderSuggest(items: HistoryEntry[]): void {
     suggestList.appendChild(el)
   }
   suggestPanel.hidden = false
+  omnibox.setAttribute('aria-expanded', 'true')
 }
 
-let suggestTimer: ReturnType<typeof setTimeout> | undefined
 function onOmniboxInput(): void {
+  const request = ++suggestRequest
   const q = omnibox.value.trim()
   if (!q) {
-    clearTimeout(suggestTimer)
     hideSuggest()
     return
   }
   clearTimeout(suggestTimer)
   suggestTimer = setTimeout(() => {
     void window.aa.historySuggest(q).then((items) => {
-      if (document.activeElement === omnibox && omnibox.value.trim() === q) renderSuggest(items)
+      if (request === suggestRequest && document.activeElement === omnibox && omnibox.value.trim() === q) renderSuggest(items)
     })
   }, 140)
+}
+
+/** 重建列表后为消失的焦点控件找同业务域内的就近替代，避免焦点掉回 body 或跑到网页。 */
+function findFocusFallback(key: string): HTMLElement | null {
+  const byKey = (value: string): HTMLElement | null =>
+    document.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(value)}"]`)
+  const direct = byKey(key)
+  if (isFocusable(direct)) return direct
+
+  const separator = key.indexOf(':')
+  const kind = separator === -1 ? key : key.slice(0, separator)
+  const id = separator === -1 ? '' : key.slice(separator + 1)
+
+  switch (kind) {
+    case 'download-cancel':
+    case 'download-retry':
+    case 'download-open':
+    case 'download-show':
+      for (const action of ['download-open', 'download-show', 'download-retry']) {
+        const candidate = byKey(`${action}:${id}`)
+        if (isFocusable(candidate)) return candidate
+      }
+      break
+    case 'approval-allow':
+    case 'approval-deny': {
+      // 不把持续按下的 Enter 转交给下一条高危操作的「允许」。
+      const activeTabEl = document.querySelector<HTMLElement>('.tab.active')
+      return isFocusable(activeTabEl) ? activeTabEl : omnibox
+    }
+    case 'call-stop': {
+      const nextCall = document.querySelector<HTMLElement>('[data-focus-key^="call-stop:"]')
+      if (isFocusable(nextCall)) return nextCall
+      const action = [agentActivityAction, agentStop].find(isFocusable)
+      if (action) return action
+      break
+    }
+    case 'tab':
+    case 'tab-close': {
+      const activeTabEl = document.querySelector<HTMLElement>('.tab.active')
+      if (isFocusable(activeTabEl)) return activeTabEl
+      const anyTab = document.querySelector<HTMLElement>('[role="tab"]')
+      return isFocusable(anyTab) ? anyTab : omnibox
+    }
+  }
+  // 记录整体消失时，停留在仍打开的抽屉内，而不是把焦点甩给网页。
+  if (dlPanel && !dlPanel.hidden) return [btnCloseDownloads, btnDownloads].find(isFocusable) ?? null
+  if (feedDrawer && !feedDrawer.hidden) return [btnCloseFeed, btnFeed].find(isFocusable) ?? null
+  return isFocusable(btnFeed) ? btnFeed : omnibox
 }
 
 function applyState(next: UiState): void {
@@ -827,9 +990,8 @@ function applyState(next: UiState): void {
   renderDownloads()
   renderUpdate(next.update)
   renderFind()
-  if (focusKey && focused && !focused.isConnected && document.activeElement === document.body) {
-    const target = document.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(focusKey)}"]`)
-    if (target && target.offsetParent !== null && !target.matches(':disabled')) target.focus({ preventScroll: true })
+  if (focusKey && focused && !isFocusable(focused) && (document.activeElement === document.body || document.activeElement === focused)) {
+    focusIfPossible(findFocusFallback(focusKey))
   }
   syncOverlayExtent()
   if (document.activeElement !== omnibox) hideSuggest()
@@ -871,31 +1033,104 @@ tabsEl.addEventListener('keydown', (event: KeyboardEvent) => {
   if (id) void window.aa.tabSelect(id, false)
 })
 
+type DrawerKind = 'dl' | 'feed'
+function drawerPanel(kind: DrawerKind): HTMLDivElement | null {
+  return kind === 'dl' ? dlPanel : feedDrawer
+}
+function drawerTrigger(kind: DrawerKind): HTMLElement | null {
+  return kind === 'dl' ? btnDownloads : btnFeed
+}
+function drawerClose(kind: DrawerKind): HTMLElement | null {
+  return kind === 'dl' ? btnCloseDownloads : btnCloseFeed
+}
+function drawerOpen(kind: DrawerKind): boolean {
+  const panel = drawerPanel(kind)
+  return !!panel && !panel.hidden
+}
+
+/** 键盘打开抽屉后把焦点移入（通用聚焦关闭按钮），关闭时再还给触发按钮。 */
+function openDrawer(kind: DrawerKind): void {
+  if (kind === 'dl') {
+    if (feedDrawer) feedDrawer.hidden = true
+    if (dlPanel) dlPanel.hidden = false
+  } else {
+    if (dlPanel) dlPanel.hidden = true
+    if (feedDrawer) feedDrawer.hidden = false
+  }
+  focusIfPossible(drawerClose(kind))
+  drawerTrigger('dl')?.setAttribute('aria-expanded', String(kind === 'dl'))
+  drawerTrigger('feed')?.setAttribute('aria-expanded', String(kind === 'feed'))
+}
+
+/** restoreFocus=false 用于外部鼠标点击：只收起面板，不把焦点抢回触发按钮。 */
+function closeDrawer(kind: DrawerKind, restoreFocus = true): void {
+  const panel = drawerPanel(kind)
+  if (!panel || panel.hidden) return
+  const hadFocusInside = panel.contains(document.activeElement)
+  panel.hidden = true
+  drawerTrigger(kind)?.setAttribute('aria-expanded', 'false')
+  if (!restoreFocus) {
+    if (hadFocusInside && document.activeElement instanceof HTMLElement) document.activeElement.blur()
+    return
+  }
+  focusIfPossible(drawerTrigger(kind))
+}
+
 btnDownloads?.addEventListener('click', () => {
-  if (!dlPanel) return
-  dlPanel.hidden = !dlPanel.hidden
-  if (feedDrawer) feedDrawer.hidden = true
+  if (drawerOpen('dl')) closeDrawer('dl')
+  else openDrawer('dl')
 })
-document.getElementById('btn-close-dl')?.addEventListener('click', () => {
-  if (dlPanel) dlPanel.hidden = true
-})
+btnCloseDownloads?.addEventListener('click', () => closeDrawer('dl'))
 document.addEventListener('click', (e) => {
-  if (feedDrawer && !feedDrawer.hidden && !btnFeed?.contains(e.target as Node) && !feedDrawer.contains(e.target as Node)) feedDrawer.hidden = true
-  if (!dlPanel || dlPanel.hidden) return
-  if (btnDownloads?.contains(e.target as Node) || dlPanel.contains(e.target as Node)) return
-  dlPanel.hidden = true
+  const target = e.target as Node
+  if (drawerOpen('feed') && !btnFeed?.contains(target) && !feedDrawer?.contains(target)) closeDrawer('feed', false)
+  if (drawerOpen('dl') && !btnDownloads?.contains(target) && !dlPanel?.contains(target)) closeDrawer('dl', false)
 })
 
 btnFeed?.addEventListener('click', () => {
-  if (!feedDrawer) return
-  feedDrawer.hidden = !feedDrawer.hidden
-  if (dlPanel) dlPanel.hidden = true
+  if (drawerOpen('feed')) closeDrawer('feed')
+  else openDrawer('feed')
 })
-btnCloseFeed?.addEventListener('click', () => {
-  if (feedDrawer) feedDrawer.hidden = true
-})
+btnCloseFeed?.addEventListener('click', () => closeDrawer('feed'))
 
 /* ── 设置面板：连接 AI 客户端 ─────────────── */
+/** 设置里的 Agent 服务信息：语言切换时用缓存值即时重渲染，不重新请求。 */
+function renderAgentInfo(): void {
+  if (!setAgentInfo) return
+  if (!hasAgentInfo) {
+    setAgentInfo.textContent = t('loading')
+    return
+  }
+  const agent = lastAgentInfo
+  if (agent) {
+    setAgentInfo.textContent = activeLocale === 'en-US'
+      ? `MCP bridge: ${agent.clientCount} · verified calls: ${agent.verifiedClientCount} · port ${agent.port} · discovery file ${agent.discoveryFile}`
+      : `MCP 桥：${agent.clientCount} 个 · 已验证调用：${agent.verifiedClientCount} 个 · 端口 ${agent.port} · 发现文件 ${agent.discoveryFile}`
+    setAgentInfo.removeAttribute('title')
+  } else {
+    setAgentInfo.textContent = uiText('Agent 服务未启动', 'Agent service is not running')
+  }
+}
+
+/** 客户端注册表里的显示名带中文说明；英文界面按稳定 id 换用英文名，未知 id 保留原名。 */
+const clientEnglishNames: Record<string, string> = {
+  zcode: 'ZCode',
+  claude: 'Claude Code',
+  cursor: 'Cursor',
+  windsurf: 'Windsurf',
+  cline: 'Cline (VS Code extension)',
+  vscode: 'VS Code (native MCP)',
+  gemini: 'Gemini CLI',
+  qwen: 'Qwen Code',
+  opencode: 'OpenCode (open source)',
+  'deepseek-harness': 'DeepSeek Harness (manual install from the plugin marketplace)',
+  codex: 'Codex (Desktop / CLI / IDE)',
+  workbuddy: 'WorkBuddy'
+}
+function clientDisplayName(id: string, fallback: string): string {
+  return activeLocale === 'en-US' ? clientEnglishNames[id] ?? fallback : fallback
+}
+
 function clientStatusBadge(status: ClientSetupResult['status']): string {
   const label = {
     added: uiText('已写入', 'Written'),
@@ -907,8 +1142,13 @@ function clientStatusBadge(status: ClientSetupResult['status']): string {
   return `${status === 'added' || status === 'updated' ? '✅' : status === 'skipped' ? 'ℹ️' : status === 'manual' ? '⚠️' : '❌'} ${label}`
 }
 
-function renderClients(clients: ClientDetectResult[]): void {
+function renderClients(clients: ClientDetectResult[], preserveSelection = false): void {
   if (!setClientList) return
+  lastClients = clients
+  // 语言切换等重渲染要保留用户勾选和当前焦点，不能把选择重置回默认。
+  const existing = setClientList.querySelectorAll<HTMLInputElement>('input[type=checkbox]')
+  const checkedIds = new Set(Array.from(existing).filter((input) => input.checked && !input.disabled).map((input) => input.dataset['id'] ?? ''))
+  const focusedId = preserveSelection && setClientList.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset['id'] : undefined
   const installed = clients.filter((c) => c.installed)
   if (!installed.length) {
     const empty = document.createElement('span')
@@ -927,10 +1167,11 @@ function renderClients(clients: ClientDetectResult[]): void {
     checkbox.type = 'checkbox'
     checkbox.dataset['id'] = client.id
     checkbox.disabled = client.configured
-    checkbox.checked = !client.configured
+    checkbox.checked = client.configured ? false : (preserveSelection && existing.length ? checkedIds.has(client.id) : true)
+    if (focusedId === client.id) checkbox.dataset['focusPending'] = 'true'
     const name = document.createElement('span')
     name.className = 'client-name'
-    name.textContent = client.name
+    name.textContent = clientDisplayName(client.id, client.name)
     const badge = document.createElement('span')
     badge.className = client.configured ? 'client-pill ok' : client.outdated ? 'client-pill warn' : 'client-pill'
     badge.textContent = client.configured ? uiText('已配置', 'Configured') : client.outdated ? uiText('路径待修复', 'Path needs repair') : uiText('未配置', 'Not configured')
@@ -939,8 +1180,9 @@ function renderClients(clients: ClientDetectResult[]): void {
   }
   setClientList.replaceChildren(fragment)
   setClientList.removeAttribute('aria-busy')
+  if (focusedId) setClientList.querySelector<HTMLInputElement>(`input[data-focus-pending="true"]`)?.focus({ preventScroll: true })
   if (btnClientSetup) {
-    btnClientSetup.disabled = setClientList.querySelectorAll('input[type=checkbox]:not(:disabled)').length === 0
+    btnClientSetup.disabled = btnClientSetup.getAttribute('aria-busy') === 'true' || setClientList.querySelectorAll('input[type=checkbox]:not(:disabled)').length === 0
   }
 }
 
@@ -952,6 +1194,7 @@ async function refreshClients(): Promise<void> {
   try {
     renderClients(await window.aa.clientsDetect())
   } catch (err) {
+    lastClients = null
     setClientList.textContent = `${uiText('扫描失败：', 'Scan failed: ')}${err instanceof Error ? err.message : String(err)}`
     setClientList.removeAttribute('aria-busy')
   }
@@ -963,7 +1206,7 @@ btnClientScan?.addEventListener('click', () => {
 })
 
 btnClientSetup?.addEventListener('click', async () => {
-  if (!setClientList || !btnClientSetup) return
+  if (!setClientList || !btnClientSetup || btnClientSetup.getAttribute('aria-busy') === 'true') return
   const ids = Array.from(setClientList.querySelectorAll<HTMLInputElement>('input[type=checkbox]:checked'))
     .filter((input) => !input.disabled)
     .map((input) => input.dataset['id'] ?? '')
@@ -979,7 +1222,7 @@ btnClientSetup?.addEventListener('click', async () => {
     const results = await window.aa.clientsSetup(ids)
     if (setClientResult) {
       setClientResult.textContent = results.length
-        ? results.map((r) => `${clientStatusBadge(r.status)} ${r.name} — ${r.message}`).join('　')
+        ? results.map((r) => `${clientStatusBadge(r.status)} ${clientDisplayName(r.id, r.name)} — ${r.message}`).join('　')
         : uiText('没有可写入的客户端。', 'No clients available to configure.')
     }
     await refreshClients()
@@ -987,6 +1230,7 @@ btnClientSetup?.addEventListener('click', async () => {
     if (setClientResult) setClientResult.textContent = `${uiText('写入失败：', 'Write failed: ')}${err instanceof Error ? err.message : String(err)}`
   } finally {
     btnClientSetup.removeAttribute('aria-busy')
+    btnClientSetup.disabled = setClientList.getAttribute('aria-busy') === 'true' || setClientList.querySelectorAll('input[type=checkbox]:not(:disabled)').length === 0
   }
 })
 
@@ -1008,6 +1252,19 @@ updatePill.addEventListener('click', () => {
 window.addEventListener('online', () => { void window.aa.updateWake() })
 
 /* ── 设置面板 ─────────────────────── */
+const settingsBackground = new Map<HTMLElement, boolean>()
+function isolateSettings(open: boolean): void {
+  if (open) {
+    for (const sibling of Array.from(settingsModal?.parentElement?.children ?? [])) {
+      if (!(sibling instanceof HTMLElement) || sibling === settingsModal) continue
+      if (!settingsBackground.has(sibling)) settingsBackground.set(sibling, sibling.inert)
+      sibling.inert = true
+    }
+  } else {
+    for (const [element, inert] of settingsBackground) element.inert = inert
+    settingsBackground.clear()
+  }
+}
 async function openSettings(): Promise<void> {
   if (!settingsModal) return
   if (settingsModal.hidden) {
@@ -1018,10 +1275,14 @@ async function openSettings(): Promise<void> {
   if (feedDrawer) feedDrawer.hidden = true
   await window.aa.settingsOpen(true)
   settingsModal.hidden = false
+  isolateSettings(true)
   document.getElementById('btn-close-settings')?.focus()
   if (settingsBody) settingsBody.scrollTop = 0
   if (settingsSections[0]) setActiveSettingsSection(settingsSections[0].id)
-  if (settingsStatus) settingsStatus.textContent = ''
+  if (settingsStatus) {
+    settingsStatus.textContent = ''
+    delete settingsStatus.dataset['state']
+  }
   const view = await window.aa.settingsGet().catch(() => null)
   const agent = await window.aa.agentInfo().catch(() => null)
   if (view && setEngine) {
@@ -1032,6 +1293,7 @@ async function openSettings(): Promise<void> {
     for (const p of view.presets) {
       const opt = document.createElement('option')
       opt.value = p.url
+      opt.dataset['presetLabel'] = p.label
       opt.textContent = p.label
       setEngine.appendChild(opt)
     }
@@ -1040,6 +1302,7 @@ async function openSettings(): Promise<void> {
     custom.value = ''
     custom.textContent = t('customSearchAddress')
     setEngine.appendChild(custom)
+    renderSearchPresetLabels()
     setEngine.value = view.presets.some((preset) => preset.url === view.settings.searchEngine) ? view.settings.searchEngine : ''
     if (setEngineUrl) setEngineUrl.value = view.settings.searchEngine
     if (setLocale) setLocale.value = view.settings.locale || 'auto'
@@ -1053,28 +1316,22 @@ async function openSettings(): Promise<void> {
     if (setDownloadDir) setDownloadDir.value = view.settings.downloadDir
     if (setAllowedSites) setAllowedSites.value = view.settings.allowedSites.join('\n')
   }
-  if (setAgentInfo) {
-    if (agent) {
-      setAgentInfo.textContent = activeLocale === 'en-US'
-        ? `MCP bridge: ${agent.clientCount} · verified calls: ${agent.verifiedClientCount} · port ${agent.port} · discovery file ${agent.discoveryFile}`
-        : `MCP 桥：${agent.clientCount} 个 · 已验证调用：${agent.verifiedClientCount} 个 · 端口 ${agent.port} · 发现文件 ${agent.discoveryFile}`
-      setAgentInfo.removeAttribute('title')
-    } else {
-      setAgentInfo.textContent = uiText('Agent 服务未启动', 'Agent service is not running')
-    }
-  }
+  lastAgentInfo = agent
+  hasAgentInfo = true
+  renderAgentInfo()
   void refreshClients()
   renderUpdate(state.update)
 }
 function closeSettings(): void {
   if (!settingsModal) return
   settingsModal.hidden = true
+  isolateSettings(false)
   if (activeLocale !== savedLocale) applyLocale(savedLocale)
   if (activeThemeSetting !== savedThemeSetting) applyTheme(savedThemeSetting)
   void window.aa.settingsOpen(false)
   const returnFocus = settingsReturnFocus
   settingsReturnFocus = null
-  if (returnFocus && document.contains(returnFocus)) returnFocus.focus()
+  if (!focusIfPossible(returnFocus)) focusIfPossible(btnSettings)
 }
 btnSettings?.addEventListener('click', () => {
   if (settingsModal?.hidden) void openSettings()
@@ -1147,7 +1404,10 @@ document.getElementById('btn-save-settings')?.addEventListener('click', async ()
   if (button.disabled) return
   button.disabled = true
   clearTimeout(settingsStatusTimer)
-  if (settingsStatus) settingsStatus.textContent = t('saving')
+  if (settingsStatus) {
+    settingsStatus.textContent = t('saving')
+    settingsStatus.dataset['state'] = 'pending'
+  }
   const patch: Partial<AppSettings> = {}
   if (setEngine) patch.searchEngine = setEngine.value || 'https://www.bing.com/search?q='
   if (setEngineUrl) patch.searchEngine = setEngineUrl.value.trim() || patch.searchEngine
@@ -1163,17 +1423,26 @@ document.getElementById('btn-save-settings')?.addEventListener('click', async ()
   if (setAllowedSites) patch.allowedSites = setAllowedSites.value.split(/\r?\n/).map((site) => site.trim()).filter(Boolean)
   try {
     const saved = await window.aa.settingsSet(patch)
-    if (!saved) throw new Error('设置未保存，请重试。')
+    if (!saved) throw new Error(uiText('设置未保存，请重试。', 'Settings were not saved. Please retry.'))
     savedLocale = resolveUiLocale(saved.locale)
     savedThemeSetting = saved.theme
     applyTheme(saved.theme)
     applyLocale(savedLocale)
     if (settingsStatus) {
       settingsStatus.textContent = t('saved')
-      settingsStatusTimer = setTimeout(() => { if (settingsStatus) settingsStatus.textContent = '' }, 1800)
+      settingsStatus.dataset['state'] = 'success'
+      settingsStatusTimer = setTimeout(() => {
+        if (settingsStatus) {
+          settingsStatus.textContent = ''
+          delete settingsStatus.dataset['state']
+        }
+      }, 1800)
     }
   } catch (error) {
-    if (settingsStatus) settingsStatus.textContent = `${t('saveFailed')}${error instanceof Error ? error.message : String(error)}`
+    if (settingsStatus) {
+      settingsStatus.textContent = `${t('saveFailed')}${error instanceof Error ? error.message : String(error)}`
+      settingsStatus.dataset['state'] = 'error'
+    }
   } finally {
     button.disabled = false
   }
@@ -1186,8 +1455,15 @@ omnibox.addEventListener('keydown', (e) => {
     hideSuggest()
     omnibox.blur()
   } else if (e.key === 'Escape') {
-    hideSuggest()
-    omnibox.blur()
+    // 只有展开的建议消费 Esc；否则交给上层抽屉/查找条处理。
+    if (suggestPanel && !suggestPanel.hidden) {
+      e.preventDefault()
+      e.stopPropagation()
+      hideSuggest()
+    } else {
+      hideSuggest()
+      omnibox.blur()
+    }
   } else if (e.key === 'ArrowDown' && suggestPanel && !suggestPanel.hidden) {
     e.preventDefault()
     const sel = suggestList?.querySelector<HTMLElement>('.suggest-item.selected')
@@ -1220,11 +1496,14 @@ function selectSuggest(el: HTMLElement): void {
   }
 }
 omnibox.addEventListener('focus', () => omnibox.select())
-omnibox.addEventListener('blur', () => setTimeout(hideSuggest, 120))
+omnibox.addEventListener('blur', () => setTimeout(() => {
+  if (document.activeElement !== omnibox) hideSuggest()
+}, 120))
 omnibox.addEventListener('input', onOmniboxInput)
 
 window.aa.onState(applyState)
 window.aa.onFocusOmnibox(() => {
+  if (settingsModal && !settingsModal.hidden) return
   omnibox.focus()
 })
 
@@ -1232,7 +1511,15 @@ window.aa.onFocusOmnibox(() => {
 window.addEventListener('keydown', (e) => {
   const ctrl = e.ctrlKey || e.metaKey
   const modal = settingsModal
-  if (modal && !modal.hidden && e.key === 'Tab') {
+  const target = e.target instanceof HTMLElement ? e.target : null
+  if (modal && !modal.hidden) {
+    // 设置打开时快捷键留在模态内：只处理 Tab 环与 Esc 关闭，不触发背景标签操作。
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      closeSettings()
+      return
+    }
+    if (e.key !== 'Tab') return
     const focusable = Array.from(modal.querySelectorAll<HTMLElement>('button, input, select, textarea, [tabindex]:not([tabindex="-1"])'))
       .filter((element) => element.tabIndex >= 0 && !element.matches(':disabled, [aria-disabled="true"]') && !element.closest('[hidden], [inert], [aria-hidden="true"]') && element.offsetParent !== null)
     if (focusable.length) {
@@ -1247,11 +1534,16 @@ window.addEventListener('keydown', (e) => {
   }
   if (e.key === 'Escape') {
     hideSuggest()
-    if (dlPanel) dlPanel.hidden = true
-    if (feedDrawer) feedDrawer.hidden = true
-    if (!settingsModal?.hidden) closeSettings()
-    else if (state.find?.open) void window.aa.findClose()
-  } else if (ctrl && e.shiftKey && e.key.toLowerCase() === 't') {
+    // Esc 只关最顶层浮层：抽屉 > 查找条，其余层级不动。
+    if (drawerOpen('feed')) closeDrawer('feed')
+    else if (drawerOpen('dl')) closeDrawer('dl')
+    else if (state.find?.open) closeFind()
+    return
+  }
+  // 普通编辑控件里的按键交给控件本身，避免 Ctrl+W/T/L 等改变背景浏览器状态。
+  const editing = target?.closest('input, textarea, select, [contenteditable="true"]')
+  if (editing && target !== omnibox && target !== findQuery) return
+  if (ctrl && e.shiftKey && e.key.toLowerCase() === 't') {
     e.preventDefault()
     void window.aa.tabReopen()
   } else if (ctrl && e.key.toLowerCase() === 'f') {

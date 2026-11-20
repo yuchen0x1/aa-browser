@@ -227,34 +227,34 @@
   </head>
   <body>
     <main class="page">
-      <div class="masthead"><span class="mark" aria-hidden="true">Aa</span><span><strong>Aa Browser</strong>　给 AI 用的桌面浏览器</span></div>
-      <h1>让 AI 直接使用<br />你打开的这个浏览器。</h1>
-      <p class="intro">复制下方通用提示词，发给任意具备本机执行能力的 AI（WorkBuddy、ZCode、Codex/ChatGPT 桌面端、Claude Code、Cursor、DeepSeek Harness 等）。它会自动把 Aa Browser 接入 MCP，并在最后实际调用浏览器工具验证。没有本机执行能力的网页版 AI 会明确说明无法自动完成。</p>
+      <div class="masthead"><span class="mark" aria-hidden="true">Aa</span><span><strong>Aa Browser</strong> <span data-en="— The desktop browser for AI">　给 AI 用的桌面浏览器</span></span></div>
+      <h1><span data-en="Let AI use">让 AI 直接使用</span><br /><span data-en="the browser you have open.">你打开的这个浏览器。</span></h1>
+      <p class="intro" data-en="Copy the prompt below and send it to an AI that can run commands on your computer (such as WorkBuddy, ZCode, Codex/ChatGPT desktop, Claude Code, Cursor, or DeepSeek Harness). The AI will connect Aa Browser through MCP and call a browser tool to verify the connection. A web-only AI without access to your computer will explain why it cannot complete the setup automatically.">复制下方通用提示词，发给任意具备本机执行能力的 AI（WorkBuddy、ZCode、Codex/ChatGPT 桌面端、Claude Code、Cursor、DeepSeek Harness 等）。它会自动把 Aa Browser 接入 MCP，并在最后实际调用浏览器工具验证。没有本机执行能力的网页版 AI 会明确说明无法自动完成。</p>
 
-      <section class="steps" aria-label="安装与连接步骤">
+      <section class="steps" aria-label="安装与连接步骤" data-en-label="Installation and connection steps">
         <article class="step">
-          <div class="step-label"><span class="step-number">1</span>复制接入提示词</div>
-          <h2>打开提示词并复制</h2>
-          <p>Aa Browser 已安装并运行。这段提示词只做接入和验证，不会重复安装浏览器。</p>
+          <div class="step-label"><span class="step-number">1</span><span data-en="Copy the connection prompt">复制接入提示词</span></div>
+          <h2 data-en="Open and copy the prompt">打开提示词并复制</h2>
+          <p data-en="Aa Browser is already installed and running. This prompt only sets up and verifies the connection; it does not reinstall the browser.">Aa Browser 已安装并运行。这段提示词只做接入和验证，不会重复安装浏览器。</p>
         </article>
         <article class="step">
-          <div class="step-label"><span class="step-number">2</span>发给 AI 执行</div>
-          <h2>让 AI 自动配置客户端</h2>
-          <p>AI 会下载官方接入脚本、备份并写入当前客户端的 MCP 配置，然后调用 browser_tabs 验证。它需要本机命令、文件读写和你的授权。</p>
+          <div class="step-label"><span class="step-number">2</span><span data-en="Send it to your AI">发给 AI 执行</span></div>
+          <h2 data-en="Let AI configure your client">让 AI 自动配置客户端</h2>
+          <p><span data-en="The AI downloads the official setup script, backs up and updates your client's MCP configuration, then calls ">AI 会下载官方接入脚本、备份并写入当前客户端的 MCP 配置，然后调用 </span><code>browser_tabs</code><span data-en=" to verify the connection. It needs your permission to run local commands and read and write files."> 验证。它需要本机命令、文件读写和你的授权。</span></p>
         </article>
         <article class="step">
-          <div class="step-label"><span class="step-number">3</span>确认连接状态</div>
-          <h2>看工具栏左侧的状态</h2>
-          <p>只有 AI 成功调用 <code>browser_tabs</code> 并返回本浏览器的标签信息，左侧才会显示「AI 已连接」；配置文件存在不算连接。</p>
+          <div class="step-label"><span class="step-number">3</span><span data-en="Confirm the connection">确认连接状态</span></div>
+          <h2 data-en="Check the left side of the toolbar">看工具栏左侧的状态</h2>
+          <p><span data-en="The toolbar shows that AI is connected only after the AI calls ">只有 AI 成功调用 </span><code>browser_tabs</code><span data-en=" and gets back this browser's tabs. A configuration file alone does not count as a connection."> 并返回本浏览器的标签信息，左侧才会显示「AI 已连接」；配置文件存在不算连接。</span></p>
         </article>
       </section>
 
       <section class="prompt-panel" aria-labelledby="prompt-title">
         <div class="prompt-heading">
-          <h2 id="prompt-title">发给 AI 的安装与接入提示词</h2>
-          <button class="copy-button" id="copy-prompt" type="button">复制接入提示词</button>
+          <h2 id="prompt-title" data-en="Installation and connection prompt for AI">发给 AI 的安装与接入提示词</h2>
+          <button class="copy-button" id="copy-prompt" type="button" data-en="Copy the connection prompt">复制接入提示词</button>
         </div>
-        <textarea id="connection-prompt" readonly aria-label="可复制的通用 AI 安装与接入提示词"><!-- aa-universal-prompt:start -->
+        <textarea id="connection-prompt" lang="zh-CN" readonly aria-label="可复制的通用 AI 安装与接入提示词" data-en-label="Universal AI installation and connection prompt"><!-- aa-universal-prompt:start -->
 你是运行在这台电脑上的 AI Agent。Aa Browser 已经安装（你现在看到的安装/接入提示词就来自它）。你的任务：把 Aa Browser 接入你当前所在的 AI 客户端，并实际验证 MCP 浏览器工具可用。
 
 不要重复安装浏览器本体，不要跳过验证，也不要把「配置已写入」当成「已连接」。
@@ -317,32 +317,89 @@ Linux 终端：
 - 阻塞与手动步骤（没有写「无」）
 - 确认没有输入或泄露任何秘密
 <!-- aa-universal-prompt:end --></textarea>
-        <p class="prompt-note" id="copy-status" role="status" aria-live="polite"><b>前提</b><span>这段提示词要求 AI 执行本机命令；没有终端、文件权限或用户授权时，它不能自动完成。配置写入后仍要实际调用 browser_tabs 才算连接。安装器和浏览器本体都会通过 GitHub Releases 自动更新。</span></p>
+        <p class="prompt-note" id="copy-status" role="status" aria-live="polite"><b data-en="Prerequisites">前提</b><span data-en="This prompt requires an AI that can run local commands. It cannot finish setup automatically without a terminal, file access, or your permission. After updating the configuration, the AI must still call browser_tabs to verify the connection. The installer and browser update automatically through GitHub Releases.">这段提示词要求 AI 执行本机命令；没有终端、文件权限或用户授权时，它不能自动完成。配置写入后仍要实际调用 browser_tabs 才算连接。安装器和浏览器本体都会通过 GitHub Releases 自动更新。</span></p>
       </section>
 
       <div class="footer">
-        <span>AI 需要操作其他网站时，直接告诉它要做什么；页面操作会在此窗口显示。</span>
-        <span><kbd>Ctrl</kbd> + <kbd>T</kbd> 新建标签</span>
+        <span data-en="To have AI work on another site, tell it what to do. Its actions will appear in this window.">AI 需要操作其他网站时，直接告诉它要做什么；页面操作会在此窗口显示。</span>
+        <span><kbd>Ctrl</kbd> + <kbd>T</kbd> <span data-en="New tab">新建标签</span></span>
       </div>
     </main>
     <script>
-      const button = document.getElementById('copy-prompt');
-      const prompt = document.getElementById('connection-prompt');
-      const status = document.getElementById('copy-status');
-      const promptName = '接入提示词';
-      button.addEventListener('click', async () => {
-        try {
-          await navigator.clipboard.writeText(prompt.value);
-          status.textContent = `${promptName}已复制。粘贴到你正在使用的 AI 客户端即可。`;
-        } catch {
-          prompt.focus();
-          prompt.select();
-          const copied = document.execCommand('copy');
-          status.textContent = copied
-            ? `${promptName}已复制。粘贴到你正在使用的 AI 客户端即可。`
-            : `已选中${promptName}，请按 Ctrl+C 复制，再粘贴到 AI 客户端。`;
+      (function () {
+        const button = document.getElementById('copy-prompt');
+        const prompt = document.getElementById('connection-prompt');
+        const status = document.getElementById('copy-status');
+        const note = Array.from(status.childNodes);
+        const title = document.title;
+        const texts = Array.from(document.querySelectorAll('[data-en]'), (node) => [node, node.textContent, node.dataset.en]);
+        const labels = Array.from(document.querySelectorAll('[data-en-label]'), (node) => [node, node.getAttribute('aria-label'), node.dataset.enLabel]);
+        const messages = {
+          'zh-CN': {
+            copied: '接入提示词已复制。粘贴到你正在使用的 AI 客户端即可。',
+            manual: '已选中接入提示词，请按 Ctrl+C 复制，再粘贴到 AI 客户端。'
+          },
+          'en-US': {
+            copied: 'Connection prompt copied. Paste it into your AI client.',
+            manual: 'The connection prompt is selected. Press Ctrl+C to copy it, then paste it into your AI client.'
+          }
+        };
+        let localeSetting = 'auto';
+        let locale;
+        let copyState;
+
+        // Standalone page without a preload. Match shared/locale.ts and the shell's candidate order.
+        function resolveLocale(setting) {
+          if (setting === 'zh-CN' || setting === 'en-US') return setting;
+          const candidates = navigator.languages?.length ? navigator.languages : [navigator.language];
+          for (const candidate of candidates) {
+            const value = String(candidate).toLowerCase();
+            if (value === 'en' || value.startsWith('en-')) return 'en-US';
+            if (value === 'zh' || value.startsWith('zh-')) return 'zh-CN';
+          }
+          return 'zh-CN';
         }
-      });
+
+        function renderStatus() {
+          if (copyState) status.textContent = messages[locale][copyState];
+          else status.replaceChildren(...note);
+        }
+
+        function applyLocale(setting) {
+          localeSetting = setting === 'zh-CN' || setting === 'en-US' ? setting : 'auto';
+          const next = resolveLocale(localeSetting);
+          if (next === locale) return;
+          locale = next;
+          const english = locale === 'en-US';
+          document.documentElement.lang = locale;
+          document.title = english ? 'Aa Browser — Install and connect AI' : title;
+          for (const [node, zh, en] of texts) node.textContent = english ? en : zh;
+          for (const [node, zh, en] of labels) node.setAttribute('aria-label', english ? en : zh);
+          renderStatus();
+        }
+
+        window.__aaApplyLocale = applyLocale;
+        applyLocale('auto');
+        window.addEventListener('languagechange', () => {
+          if (localeSetting === 'auto') applyLocale('auto');
+        });
+
+        button.addEventListener('click', async () => {
+          try {
+            await navigator.clipboard.writeText(prompt.value);
+            copyState = 'copied';
+          } catch {
+            prompt.focus();
+            prompt.select();
+            try {
+              copyState = document.execCommand('copy') ? 'copied' : 'manual';
+            } catch {
+              copyState = 'manual';
+            }
+          }
+          renderStatus();
+        });
+      })();
     </script>
   </body>
 </html>

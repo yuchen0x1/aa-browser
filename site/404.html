@@ -5,17 +5,100 @@
     <title>Aa Browser — 404</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="robots" content="noindex" />
-    <link rel="icon" href="assets/icon.png" type="image/png" />
-    <link rel="stylesheet" href="assets/site.css?v=0.6.6" />
+    <!-- For a custom subdirectory, set href to its absolute path ending in /. -->
+    <base href="/" />
+    <script>
+      const siteBase = document.querySelector('base');
+      if (siteBase.getAttribute('href') === '/') {
+        if (location.protocol === 'file:') {
+          siteBase.href = './';
+        } else if (location.hostname === 'yuchen0x1.github.io' && location.pathname.split('/')[1] === 'aa-browser') {
+          siteBase.href = '/aa-browser/';
+        }
+      }
+    </script>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b0f11'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-family='monospace' font-size='18' font-weight='bold' fill='%2378cbb9'%3EAa%3C/text%3E%3C/svg%3E" />
     <style>
+      /* The host serves this document at the missing URL; rendering needs no assets. */
+      :root {
+        color-scheme: dark;
+        --canvas: #0b0f11;
+        --text: #e8eeec;
+        --muted: #a3b1ae;
+        --dim: #839390;
+        --mint: #78cbb9;
+        --line: rgba(232, 238, 236, 0.09);
+        --line-strong: rgba(232, 238, 236, 0.16);
+        --font-mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: radial-gradient(ellipse 75% 65% at 50% 0%, rgba(120, 203, 185, 0.13), transparent), var(--canvas);
+        color: var(--text);
+        font: 1rem/1.7 "Inter", "Segoe UI", system-ui, "Microsoft YaHei", sans-serif;
+      }
+      h1, p {
+        margin: 0;
+      }
+      :focus-visible {
+        outline: 2px solid var(--mint);
+        outline-offset: 3px;
+      }
       .notfound {
+        min-height: 100vh;
         min-height: 100svh;
         display: grid;
         place-items: center;
-        padding: 40px 0;
+        padding: 40px clamp(20px, 5vw, 44px);
       }
       .notfound__inner {
         max-width: 640px;
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      .eyebrow {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--mint);
+        font: 11px/1.7 var(--font-mono);
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+      .eyebrow::before {
+        content: "";
+        width: 22px;
+        height: 1px;
+        background: currentColor;
+        opacity: 0.55;
+      }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 46px;
+        padding: 0 20px;
+        border: 1px solid var(--line-strong);
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.02);
+        color: inherit;
+        font-size: 0.94rem;
+        font-weight: 580;
+        text-decoration: none;
+      }
+      .btn--ghost:hover {
+        border-color: var(--mint);
+      }
+      .btn--primary {
+        border-color: transparent;
+        background: linear-gradient(180deg, #a9ead9, #7dcdbb);
+        color: #06130f;
+      }
+      .btn--primary:hover {
+        background: #a9ead9;
       }
       .notfound__code {
         font-family: var(--font-mono);
@@ -54,9 +137,8 @@
     </style>
   </head>
   <body>
-    <div class="backdrop" aria-hidden="true"></div>
     <main class="notfound">
-      <div class="shell notfound__inner">
+      <div class="notfound__inner">
         <div class="notfound__code">404</div>
         <span class="eyebrow">Page not found</span>
         <h1>这个页面没有 ref 编号。</h1>

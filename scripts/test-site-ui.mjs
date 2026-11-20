@@ -12,6 +12,9 @@ const SITE = path.join(ROOT, 'site')
 const require = createRequire(import.meta.url)
 const VIEWPORTS = [[1920, 1080], [1600, 900], [1366, 768], [1280, 720], [1024, 768], [768, 1024], [390, 844]]
 const PAGES = ['index.html', 'tools.html', '404.html']
+const PAGES_ORIGIN = 'https://yuchen0x1.github.io'
+const REPO_MOUNT = '/aa-browser/'
+const NOT_FOUND_PATHS = ['/missing/deep', '/missing/deep/']
 const SECONDARY = ['.mini-code .c', '.code .tok-punc', '.code .tok-com']
 const literal = (value) => JSON.stringify(value).replace(/[<>/\u2028\u2029]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`)
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -69,13 +72,13 @@ if (!process.versions.electron) {
 }
 
 async function runElectron() {
-  const { app, BrowserWindow, session } = await import('electron')
+  const { app, BrowserWindow, nativeImage, session } = await import('electron')
   const runDir = process.env.AA_SITE_UI_TEST_DIR
   assert.ok(runDir && path.dirname(runDir) === path.join(ROOT, '.local-verification'), 'launch this suite with Node')
   const report = {
     status: 'RUNNING', startedAt: new Date().toISOString(), runDir,
     viewports: VIEWPORTS.map(([width, height]) => ({ width, height })), pages: PAGES,
-    checks: [], screenshots: [], consoleErrors: [], runtimeErrors: [], blockedRequests: [], requests: [], cleanup: {}
+    checks: [], screenshots: [], consoleErrors: [], expected404Notices: [], runtimeErrors: [], blockedRequests: [], requests: [], cleanup: {}
   }
   const resultFile = path.join(runDir, 'result.json')
   const persist = () => fs.writeFileSync(resultFile, JSON.stringify(report, null, 2))
@@ -281,36 +284,61 @@ async function runElectron() {
     app.commandLine.appendSwitch('no-proxy-server')
     await app.whenReady()
     const mime = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.png': 'image/png' }
+    const missingPaths = [
+      ...NOT_FOUND_PATHS.map((pathname) => `root${pathname}`),
+      `root${REPO_MOUNT}missing/deep`, // The same prefix must not change recovery on a root host.
+      ...NOT_FOUND_PATHS.map((pathname) => `pages${REPO_MOUNT.slice(0, -1)}${pathname}`)
+    ]
     server = http.createServer((req, res) => {
-      const request = { url: req.url, method: req.method }
+      const mount = req.headers['x-site-ui-mount'] === 'pages' ? 'pages' : 'root'
+      const document = req.headers.accept?.includes('text/html') ?? false
+      const request = { url: req.url, method: req.method, mount, document }
       report.requests.push(request)
+      let data
+      let type = 'text/plain; charset=utf-8'
       try {
         assert.ok(req.method === 'GET' || req.method === 'HEAD', 'static server is read-only')
         const pathname = decodeURIComponent(new URL(req.url, 'http://127.0.0.1').pathname)
-        const file = path.resolve(SITE, `.${pathname === '/' ? '/index.html' : pathname}`)
-        assert.ok(file.startsWith(SITE + path.sep), 'static file must stay inside site/')
-        const data = fs.readFileSync(file)
-        res.setHeader('Content-Type', `${mime[path.extname(file)] || 'application/octet-stream'}${/\.(html|css|js)$/.test(file) ? '; charset=utf-8' : ''}`)
-        res.setHeader('Cache-Control', 'no-store')
-        request.status = 200
-        res.writeHead(200)
-        res.end(req.method === 'HEAD' ? undefined : data)
+        const prefix = mount === 'pages' ? REPO_MOUNT : '/'
+        if (pathname.startsWith(prefix)) {
+          const relative = pathname.slice(prefix.length) + (pathname.endsWith('/') ? 'index.html' : '')
+          const file = path.resolve(SITE, relative)
+          assert.ok(file.startsWith(SITE + path.sep), 'static file must stay inside site/')
+          data = fs.readFileSync(file)
+          type = `${mime[path.extname(file)] || 'application/octet-stream'}${/\.(html|css|js)$/.test(file) ? '; charset=utf-8' : ''}`
+        }
       } catch (error) {
-        request.status = 404
-        request.error = errorText(error)
-        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
-        res.end('Not found')
+        if (!['ENOENT', 'ENOTDIR', 'EISDIR'].includes(error.code)) request.error = errorText(error)
       }
+      request.status = data ? 200 : 404
+      if (!data && document) {
+        // Serve the custom body without redirecting the browser or changing the HTTP status.
+        data = fs.readFileSync(path.join(SITE, '404.html'))
+        type = 'text/html; charset=utf-8'
+        request.expected404 = missingPaths.includes(`${mount}${req.url}`)
+      }
+      res.writeHead(request.status, { 'Content-Type': type, 'Cache-Control': 'no-store' })
+      res.end(req.method === 'HEAD' ? undefined : data ?? 'Not found')
     })
     server.on('error', (error) => { void finish(error) })
     await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
     base = `http://127.0.0.1:${server.address().port}`
     report.origin = base
     const isolated = session.fromPartition(`site-ui-${process.pid}`, { cache: false })
+    const allowedOrigins = new Set([base, PAGES_ORIGIN])
+    // Keep the real Pages origin in the renderer, but forward every request to loopback.
+    isolated.protocol.handle('https', (request) => {
+      const url = new URL(request.url)
+      if (url.origin !== PAGES_ORIGIN) return new Response(null, { status: 403 })
+      return fetch(`${base}${url.pathname}${url.search}`, {
+        method: request.method, redirect: 'manual',
+        headers: { 'X-Site-UI-Mount': 'pages', Accept: request.headers.get('accept') || '*/*' }
+      })
+    })
     isolated.setPermissionRequestHandler((_contents, _permission, callback) => callback(false))
     isolated.setPermissionCheckHandler(() => false)
     isolated.webRequest.onBeforeRequest((details, callback) => {
-      const allowed = details.url === 'about:blank' || new URL(details.url).origin === base
+      const allowed = details.url === 'about:blank' || allowedOrigins.has(new URL(details.url).origin)
       if (!allowed) report.blockedRequests.push({ url: details.url, type: details.resourceType })
       callback({ cancel: !allowed })
     })
@@ -329,13 +357,19 @@ async function runElectron() {
       return { action: 'deny' }
     })
     win.webContents.on('will-navigate', (event, url) => {
-      if (new URL(url).origin !== base) {
+      if (!allowedOrigins.has(new URL(url).origin)) {
         event.preventDefault()
         report.blockedRequests.push({ url, type: 'navigation' })
       }
     })
     win.webContents.on('console-message', (event) => {
-      if (event.level === 'error') report.consoleErrors.push({ page, message: event.message, source: event.sourceId, line: event.lineNumber })
+      if (event.level !== 'error') return
+      const entry = { page, message: event.message, source: event.sourceId, line: event.lineNumber }
+      const isMain404Notice = event.sourceId === win.webContents.getURL() &&
+        /^Failed to load resource: the server responded with a status of 404\b/.test(event.message) &&
+        report.requests.some((request) => request.expected404 &&
+          event.sourceId === `${request.mount === 'pages' ? PAGES_ORIGIN : base}${request.url}`)
+      ;(isMain404Notice ? report.expected404Notices : report.consoleErrors).push(entry)
     })
     win.webContents.on('render-process-gone', (_event, details) => { void finish(new Error(`Renderer exited: ${JSON.stringify(details)}`)) })
     win.webContents.on('did-fail-load', (_event, code, description, url) => {
@@ -358,6 +392,56 @@ async function runElectron() {
           assert.ok(details.horizontalOverflow <= 1, JSON.stringify(details))
         })
       }
+    }
+
+    const errorPages = missingPaths.map((key) => {
+      const split = key.indexOf('/')
+      return { mount: key.slice(0, split), pathname: key.slice(split), status: 404 }
+    })
+    errorPages.push({ mount: 'root', pathname: '/404.html', status: 200 },
+      { mount: 'pages', pathname: `${REPO_MOUNT}404.html`, status: 200 })
+    for (const [index, { mount, pathname, status }] of errorPages.entries()) {
+      const origin = mount === 'pages' ? PAGES_ORIGIN : base
+      const directory = `${origin}${mount === 'pages' ? REPO_MOUNT : '/'}`
+      const url = `${origin}${pathname}`
+      page = `${mount}:${pathname}`
+      await resize(...(pathname.endsWith('/') ? [390, 844] : [1366, 768]))
+      await check(`404 recovery on ${mount}: ${pathname}`, async (details) => {
+        const requestStart = report.requests.length
+        const consoleStart = report.consoleErrors.length
+        await win.loadURL(url)
+        await settle()
+        const document = await ui(`({ url: location.href, title: document.title,
+          code: document.querySelector('.notfound__code')?.textContent,
+          bodyMargin: getComputedStyle(document.body).marginTop,
+          canvas: getComputedStyle(document.body).backgroundColor,
+          buttonDisplay: getComputedStyle(document.querySelector('.btn')).display,
+          links: [...document.querySelectorAll('.notfound__actions a')].map(link => link.href) })`)
+        const geometry = await layout()
+        details.document = document
+        details.layout = geometry
+        details.screenshot = await capture(`404-${mount}-${pathname.slice(1).replace(/[^a-z0-9]+/g, '-').replace(/-$/, '')}${pathname.endsWith('/') ? '-slash' : ''}`)
+        details.requests = report.requests.slice(requestStart)
+        details.consoleErrors = report.consoleErrors.slice(consoleStart)
+        assert.deepEqual(document, {
+          url, title: 'Aa Browser — 404', code: '404', bodyMargin: '0px', canvas: 'rgb(11, 15, 17)',
+          buttonDisplay: 'flex', links: [`${directory}index.html`, `${directory}tools.html`, 'https://github.com/yuchen0x1/aa-browser']
+        })
+        assert.ok(geometry.horizontalOverflow <= 1 && geometry.overflowElements.length === 0, JSON.stringify(geometry))
+        assert.deepEqual(details.requests.filter((request) => request.document).map((request) => [request.mount, request.url, request.status]),
+          [[mount, pathname, status]], 'one document request; 404s must not redirect')
+        assert.deepEqual(details.requests.filter((request) => !request.document && request.status !== 200), [])
+        if (status === 404) assert.deepEqual(details.requests.filter((request) => !request.document), [], 'fallback page must not need subresources')
+        assert.deepEqual(details.consoleErrors, [])
+
+        const destination = document.links[index % 2]
+        await click(index % 2 === 0 ? '.notfound__actions .btn--primary' : '.notfound__actions a[href$="tools.html"]')
+        await until(async () => win.webContents.getURL() === destination && !win.webContents.isLoadingMainFrame(), `recovery link loads ${destination}`)
+        details.recovered = { url: win.webContents.getURL(), heading: await ui('document.querySelector("h1")?.textContent.trim()') }
+        assert.ok(details.recovered.heading && details.recovered.heading !== '这个页面没有 ref 编号。')
+        assert.ok(report.requests.slice(requestStart).some((request) => request.document && request.status === 200 &&
+          request.mount === mount && request.url === new URL(destination).pathname), 'recovery target returned HTTP 200')
+      })
     }
 
     await resize(950, 768)
@@ -506,6 +590,46 @@ async function runElectron() {
       }
 
       await load('tools.html')
+      await check(`tool search keyboard focus matches the global ring at ${width}x${height}`, async (details) => {
+        await ui('document.querySelector("#toolSearch").scrollIntoView({ block: "center", behavior: "instant" })')
+        await key('/')
+        await ui('Promise.allSettled(document.activeElement.getAnimations().map(animation => animation.finished))')
+        const focus = await ui(`(() => {
+          const input = document.querySelector('#toolSearch');
+          const css = getComputedStyle(input);
+          const rect = input.getBoundingClientRect();
+          return { focused: document.activeElement === input, focusVisible: input.matches(':focus-visible'),
+            outlineStyle: css.outlineStyle, outlineColor: css.outlineColor, outlineWidth: parseFloat(css.outlineWidth),
+            outlineOffset: parseFloat(css.outlineOffset), borderColor: css.borderTopColor,
+            mint: getComputedStyle(document.querySelector('.tools-hero .eyebrow')).color,
+            x: Math.floor(rect.left + rect.width / 2), top: Math.floor(rect.top) };
+        })()`)
+        details.focus = focus
+        details.screenshot = await capture(`tools-focus-${width}`)
+        const image = nativeImage.createFromPath(path.join(runDir, details.screenshot))
+        const bitmap = image.toBitmap()
+        assert.deepEqual(image.getSize(), { width, height })
+        const rgbAt = (y) => {
+          assert.ok(focus.x >= 0 && focus.x < width && y >= 0 && y < height, 'focus sample must be on screen')
+          const i = (y * width + focus.x) * 4
+          return [bitmap[i + 2], bitmap[i + 1], bitmap[i], bitmap[i + 3] / 255]
+        }
+        const hasOutline = focus.outlineStyle !== 'none'
+        const background = rgbAt(hasOutline ? focus.top - focus.outlineOffset + 1 : focus.top + 5)
+        const rgba = (hasOutline ? focus.outlineColor : focus.borderColor).match(/[\d.]+/g).map(Number)
+        if (rgba.length === 3) rgba.push(1)
+        const indicator = over(rgba, background)
+        const adjacent = hasOutline ? [background, rgbAt(focus.top - focus.outlineOffset - focus.outlineWidth - 2)] : [background]
+        details.adjacent = adjacent
+        details.minimumRatio = Math.min(...adjacent.map((color) => {
+          const light = [luminance(indicator), luminance(color)].sort((a, b) => a - b)
+          return (light[1] + 0.05) / (light[0] + 0.05)
+        }))
+        assert.ok(focus.focused && focus.focusVisible, 'keyboard shortcut must visibly focus the input')
+        assert.ok(details.minimumRatio >= 3, `focus indicator contrast ${details.minimumRatio.toFixed(4)} < 3`)
+        assert.deepEqual([focus.outlineStyle, focus.outlineWidth, focus.outlineOffset, focus.outlineColor],
+          ['solid', 2, 3, focus.mint], 'the site-wide mint focus ring must not be overridden')
+      })
       const tools = await ui('[...document.querySelectorAll("#toolList .tool")].map(el => ({ id: el.id, category: el.dataset.category }))')
       const all = tools.map((tool) => tool.id)
       await check(`tool category filters and counts at ${width}x${height}`, async (details) => {
@@ -567,7 +691,9 @@ async function runElectron() {
       details.runtimeErrors = report.runtimeErrors
       details.blockedRequests = report.blockedRequests
       details.requests = report.requests.length
-      details.localFailures = report.requests.filter((request) => request.status !== 200)
+      details.localFailures = report.requests.filter((request) => request.status !== 200 && !request.expected404)
+      details.expected404s = report.requests.filter((request) => request.expected404).map((request) => `${request.mount}${request.url}`)
+      assert.deepEqual(details.expected404s, missingPaths)
       assert.deepEqual(details.consoleErrors, [])
       assert.deepEqual(details.runtimeErrors, [])
       assert.deepEqual(details.blockedRequests, [])
