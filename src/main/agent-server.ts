@@ -135,7 +135,7 @@ export class AgentServer {
       prev.startedAt !== next.startedAt ||
       prev.paused !== next.paused ||
       (prev.calls?.length ?? 0) !== calls.length ||
-      (prev.calls ?? []).some((call, i) => call.id !== calls[i]?.id || call.tool !== calls[i]?.tool)
+      (prev.calls ?? []).some((call, i) => call.id !== calls[i]?.id || call.client !== calls[i]?.client || call.tool !== calls[i]?.tool)
     const throttled = !force && !structuralChanged && Date.now() - this.lastActivityPushAt < 150
     this.activityState = next
     if (throttled) return
@@ -162,15 +162,22 @@ export class AgentServer {
     this.refreshActivity(Date.now() - this.lastActivityPushAt >= 150)
   }
 
-  /** 只中断一个调用，不影响同客户端或其他客户端的并发调用。 */
-  cancelCall(id: number): boolean {
-    for (const calls of this.active.values()) {
+  /** 按 (client, id) 中断一个调用；旧版仅传 id 时必须唯一，否则拒绝猜测。 */
+  cancelCall(id: number, client?: number): boolean {
+    if (typeof id !== 'number' || !Number.isFinite(id)) return false
+    if (client !== undefined && (!Number.isSafeInteger(client) || client < 1)) return false
+    let target: AbortController | undefined
+    for (const [ws, calls] of this.active) {
+      if (client !== undefined && this.clientIds.get(ws) !== client) continue
       const controller = calls.get(id)
       if (!controller) continue
-      controller.abort()
-      return true
+      // 请求 id 是客户端本地序号；不同连接可能都从 1 开始，不得中断首个匹配项。
+      if (target) return false
+      target = controller
     }
-    return false
+    if (!target) return false
+    target.abort()
+    return true
   }
 
   private onConnection(ws: WebSocket, req: http.IncomingMessage): void {
@@ -219,6 +226,9 @@ export class AgentServer {
       this.active.get(ws)?.get(req.id)?.abort()
       return
     }
+    // 活动 id 的响应权归原调用；忽略同连接的重复请求，既不覆盖 controller，
+    // 也不回同 id 的错误（会让桥把原调用误判为失败）。取消帧仍在上面正常处理。
+    if (this.active.get(ws)?.has(req.id)) return
     if (this.approvals?.isInterrupted()) {
       this.reply(ws, { id: req.id, ok: false, error: 'Agent 已被用户中断；请在浏览器工具栏点击“恢复”后重试。' })
       return

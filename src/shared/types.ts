@@ -39,11 +39,11 @@ export interface ActionLogItem {
 
 /** 单个正在执行的 MCP 调用（多客户端并发时 HUD 需要逐个展示与取消） */
 export interface AgentCallInfo {
-  /** WS 调用 id；同一客户端内唯一，HUD 用它做“停止此调用”。 */
+  /** 原始 WS 调用 id，仅在同一客户端内唯一；HUD 用 (client, id) 定位“停止此调用”。 */
   id: number
   tool: string
   startedAt: number
-  /** 客户端序号（1 起），用于区分并发的不同 MCP 客户端。 */
+  /** 服务端分配的客户端序号（1 起）；同一连接内稳定，服务端生命周期内不复用。 */
   client: number
   /** 进度（0–1 或原始进度值），由工具在长操作中上报。 */
   progress?: number

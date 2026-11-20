@@ -17,11 +17,14 @@ npm run test:update-ui # 更新提示/后台下载/重试交互（模拟 provide
 npm run test:stores  # 设置/历史容错、原子写入与异常备份
 npm run test:updater # 更新器调度/状态测试（模拟更新源，不访问网络）
 npm run test:release # 发布标签/草稿/资产回归（模拟 GitHub API）
+npm run test:agent-cancellation # 真实回环 WS：同号/重复请求、精准取消、连接重建
+npm run test:session-permissions # 生产权限策略：隔离会话、媒体子能力、文档失效（模拟 Electron）
+npm run test:approval-parity # 生产工具 handler：敏感输入与求值审批（模拟页面/审批边界）
 ```
 
 要求使用 Node.js 22.12 或更高版本。Windows 和 Ubuntu 的打包及支持状态见 [平台指南](docs/PLATFORMS.md)。
 
-从 `main` 开发，通过短期分支和 PR 合入。发布提交须通过两平台 CI。发布标签采用 `vX.Y.Z`，指向 `main` 上匹配 `package.json` 的提交。紧急修复采用相同路径，并使用新版本号。
+日常维护直接在默认主分支 `main` 迭代，先完整验证再提交和推送；有未提交用户工作时使用隔离 worktree，不覆盖现场，不制造长期开发分支。外部贡献仍可通过 PR 审查。发布提交须通过两平台 CI 和适用安全检查，禁止强推覆盖历史。发布标签采用新的 `vX.Y.Z`，指向 `main` 上匹配 `package.json` 的提交；紧急修复同样经过验证并使用新版本号。
 
 ## 提交 PR 前
 

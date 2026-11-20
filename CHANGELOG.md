@@ -2,6 +2,14 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
+## v0.6.9 — 2026-11-21
+
+- 地址栏编辑与缩略显示分离，保留协议、编码参数和 hash 路由；重复 Ctrl/Cmd+L 全选、草稿取消和切换标签状态均有真实 Electron 回归。失焦只更新地址，保留停止/审批按钮的一次点击。
+- 单调用停止按客户端与请求 ID 精确定位；歧义、无效和过期目标安全拒绝。同连接重复在途 ID 不覆盖原调用、不产生竞争响应，外部 MCP/WS 契约不变。
+- 批量/iframe 输入补齐敏感字段人工填写流程并去掉值回显；iframe 求值遵循既有操作审批设置。权限待决审批绑定 Session、WebContents、文档及媒体子能力，旧文档审批失效。
+- 证据清理增加文件身份/hash 核验，失败删除不虚减配额；旧临时登记保守遗忘但不删文件，保护被替换或修改的文件。未修改的显式输出仍沿用原 TTL。新增并发取消、审批一致性与权限专项测试及双平台 CI 门槛，桥自动启动也接入 CI。
+- 保持 42 个 MCP 工具、现有数据和运行依赖；完整盘点、七项目开源对照、已知边界与后续优先级见 `docs/project-review-20261121.md`。正式发行与跨平台结果以标签 CI 为准。
+
 ## v0.6.8 — 2026-11-21
 
 - 修复关闭原生窗口时会话文件被空标签覆盖的问题，保留普通标签顺序和活动标签。

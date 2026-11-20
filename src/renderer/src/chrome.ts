@@ -54,7 +54,7 @@ declare global {
       decideApproval: (id: string, allowed: boolean) => Promise<boolean>
       interruptAgent: () => Promise<boolean>
       resumeAgent: () => Promise<boolean>
-      cancelAgentCall: (id: number) => Promise<boolean>
+      cancelAgentCall: (id: number, client?: number) => Promise<boolean>
       downloadsList: () => Promise<DownloadInfo[]>
       downloadOpen: (id: string) => Promise<void>
       downloadShow: (id: string) => Promise<void>
@@ -423,15 +423,32 @@ function activeTab(): TabInfo | null {
   return state.tabs.find((t) => t.active) ?? null
 }
 
-function shortenUrl(u: string): string {
-  if (/^file:\/\//i.test(u)) return u.replace(/^file:\/\/\/?/, '本地文件 ')
+function editableUrl(u: string): string {
   try {
     const url = new URL(u)
-    if (url.protocol === 'http:' || url.protocol === 'https:') return url.host + url.pathname + url.search
-    return u
+    if (url.username || url.password) {
+      url.username = ''
+      url.password = ''
+      return url.href
+    }
+  } catch { /* 非 URL 输入保持原样。 */ }
+  return u
+}
+
+function shortenUrl(u: string): string {
+  if (/^file:\/\//i.test(u)) return u.replace(/^file:\/\/\/?/, uiText('本地文件 ', 'Local file '))
+  try {
+    const url = new URL(u)
+    if (url.protocol === 'http:' || url.protocol === 'https:') return url.host + url.pathname + url.search + url.hash
+    return editableUrl(u)
   } catch {
     return u
   }
+}
+
+function focusOmnibox(): void {
+  omnibox.focus()
+  omnibox.select()
 }
 
 /** 渲染标签条 */
@@ -522,6 +539,7 @@ function renderAgentCallList(activity: AgentActivityState, paused: boolean): voi
     const row = document.createElement('div')
     row.className = 'agent-call-row'
     row.dataset['callId'] = String(call.id)
+    row.dataset['client'] = String(call.client)
 
     const label = document.createElement('span')
     label.className = 'agent-call-label'
@@ -539,10 +557,11 @@ function renderAgentCallList(activity: AgentActivityState, paused: boolean): voi
     const stop = document.createElement('button')
     stop.type = 'button'
     stop.className = 'agent-call-stop'
-    stop.dataset['focusKey'] = `call-stop:${call.id}`
+    stop.dataset['focusKey'] = `call-stop:${call.client}:${call.id}`
     stop.textContent = uiText('停止', 'Stop')
-    stop.title = uiText(`只停止调用 #${call.id}`, `Stop call #${call.id} only`)
-    stop.addEventListener('click', () => void window.aa.cancelAgentCall(call.id))
+    stop.title = uiText(`只停止客户端 ${call.client} 的调用 #${call.id}`, `Stop client ${call.client} call #${call.id} only`)
+    stop.setAttribute('aria-label', stop.title)
+    stop.addEventListener('click', () => void window.aa.cancelAgentCall(call.id, call.client))
     row.appendChild(stop)
     agentActivityCalls.appendChild(row)
   }
@@ -982,7 +1001,15 @@ function applyState(next: UiState): void {
   // 状态流会重建列表；只恢复外壳内同一业务控件，不能抢走网页的焦点。
   const focused = document.hasFocus() ? document.activeElement as HTMLElement | null : null
   const focusKey = focused?.dataset['focusKey']
+  const activeChanged = state.activeId !== next.activeId
   state = next
+  if (activeChanged) {
+    hideSuggest()
+    if (document.activeElement === omnibox) {
+      omnibox.value = editableUrl(activeTab()?.url ?? '')
+      omnibox.select()
+    }
+  }
   if (typeof next.windowHeight === 'number') document.documentElement.style.setProperty('--window-height', `${next.windowHeight}px`)
   renderTabs()
   renderToolbar()
@@ -1495,16 +1522,24 @@ function selectSuggest(el: HTMLElement): void {
     omnibox.setSelectionRange(u.length, u.length)
   }
 }
-omnibox.addEventListener('focus', () => omnibox.select())
-omnibox.addEventListener('blur', () => setTimeout(() => {
-  if (document.activeElement !== omnibox) hideSuggest()
-}, 120))
+omnibox.addEventListener('focus', () => {
+  // 缩略显示不能作为导航输入；编辑时恢复协议、查询与 hash，但不暴露 URL 凭证。
+  omnibox.value = editableUrl(activeTab()?.url ?? '')
+  omnibox.select()
+})
+omnibox.addEventListener('blur', () => {
+  // 只恢复地址；重绘工具栏会在 mousedown 和 click 之间替换审批/停止按钮。
+  omnibox.value = shortenUrl(activeTab()?.url ?? '')
+  setTimeout(() => {
+    if (document.activeElement !== omnibox) hideSuggest()
+  }, 120)
+})
 omnibox.addEventListener('input', onOmniboxInput)
 
 window.aa.onState(applyState)
 window.aa.onFocusOmnibox(() => {
   if (settingsModal && !settingsModal.hidden) return
-  omnibox.focus()
+  focusOmnibox()
 })
 
 /* 键盘快捷键（chrome UI 焦点时） */
@@ -1558,7 +1593,7 @@ window.addEventListener('keydown', (e) => {
     if (active) void window.aa.tabClose(active.id)
   } else if (ctrl && e.key.toLowerCase() === 'l') {
     e.preventDefault()
-    omnibox.focus()
+    focusOmnibox()
   } else if (e.key === 'F5' || (ctrl && e.key.toLowerCase() === 'r')) {
     e.preventDefault()
     void window.aa.reload()

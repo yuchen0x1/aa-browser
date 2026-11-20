@@ -2,7 +2,7 @@
   "name": "aa-browser",
   "productName": "Aa Browser",
   "desktopName": "aa-browser.desktop",
-  "version": "0.6.8",
+  "version": "0.6.9",
   "description": "AI-native browser — browse like a human, drive like an agent (为 Agent 而生的浏览器)",
   "license": "MIT",
   "author": {
@@ -32,6 +32,9 @@
     "check": "npm run typecheck && npm run lint && npm run check:tools && npm run check:prompt && npm run check:dsh && npm run test:page-scripts && npm run test:evidence && npm run check:readme-i18n && npm run check:release-bodies",
     "test:installer": "node scripts/test-installer.mjs",
     "test:bridge": "node scripts/test-bridge-offline.mjs",
+    "test:agent-cancellation": "node scripts/test-agent-cancellation.mjs",
+    "test:session-permissions": "node scripts/test-session-permissions.mjs",
+    "test:approval-parity": "node scripts/test-tools-approval-runtime.mjs",
     "test:bridge-autolaunch": "node scripts/test-bridge-autolaunch.mjs",
     "test:connect": "node scripts/test-connect-flow.mjs",
     "smoke": "node scripts/smoke.mjs",

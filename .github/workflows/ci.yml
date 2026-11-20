@@ -78,6 +78,17 @@ jobs:
       - run: npm run test:release
       - run: npm run test:installer
       - run: npm run test:bridge
+      - run: npm run test:agent-cancellation
+      - run: npm run test:session-permissions
+      - run: npm run test:approval-parity
+      - name: Bridge cold auto-launch regression
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a npm run test:bridge-autolaunch
+          else
+            npm run test:bridge-autolaunch
+          fi
       - name: Package and validate platform assets
         shell: bash
         env:

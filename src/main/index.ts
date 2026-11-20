@@ -534,9 +534,9 @@ function registerIpc(): void {
     return true
   })
   /** HUD 上“停止此调用”：只取消指定调用，不影响其他客户端/其他并发调用。 */
-  ipcMain.handle('aa:agent-cancel-call', (event, callId: number) => {
+  ipcMain.handle('aa:agent-cancel-call', (event, callId: number, client?: number) => {
     if (!isTrustedSender(event)) return false
-    return agentServer?.cancelCall(Number(callId)) ?? false
+    return agentServer?.cancelCall(callId, client) ?? false
   })
   approvals.onChange = () => {
     if (approvals.isInterrupted()) {

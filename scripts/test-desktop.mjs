@@ -274,7 +274,8 @@ if (!process.versions.electron) {
     // 多客户端并发：HUD 必须列出所有调用（而非只显示最近一次），且可以只停止其中一个。
     const ws2 = new WebSocket(`ws://127.0.0.1:${connection.port}/?token=${connection.token}`)
     await new Promise((resolve, reject) => { ws2.once('open', resolve); ws2.once('error', reject) })
-    let callId2 = 0
+    // Independent bridges can reuse the same wire id. Keep both next ids equal.
+    let callId2 = callId
     const pending2 = new Map()
     const progress2 = []
     ws2.on('message', (raw) => {
@@ -301,18 +302,27 @@ if (!process.versions.electron) {
     await until(async () => ((await state()).agentActivity?.calls?.length ?? 0) >= 2, 'concurrent calls visible in activity', 5000)
     const visibleCalls = (await state()).agentActivity.calls
     assert.equal(new Set(visibleCalls.map((c) => c.client)).size, 2, `expected two distinct clients, got ${JSON.stringify(visibleCalls)}`)
+    assert.equal(new Set(visibleCalls.map((c) => c.id)).size, 1, `regression requires colliding request ids: ${JSON.stringify(visibleCalls)}`)
     assert.ok(visibleCalls.every((c) => c.tool === 'browser_wait' && c.id > 0))
     await until(async () => (await ui('document.querySelectorAll("#agent-activity-calls .agent-call-row").length')) >= 2, 'HUD renders a row per concurrent call', 5000)
     await until(() => progress2.length > 0, 'long operation reports progress over WS', 5000)
     const secondClient = visibleCalls.find((c) => c.client === 2)
     assert.ok(secondClient, `second client call missing: ${JSON.stringify(visibleCalls)}`)
     assert.ok(progress2.some((p) => p.id === secondClient.id && p.progress > 0), `progress for second call missing: ${JSON.stringify(progress2)}`)
-    const cancelled = await ui(`window.aa.cancelAgentCall(${secondClient.id})`)
-    assert.equal(cancelled, true, 'per-call cancel should find the active call')
+    const ambiguousCancel = await ui(`window.aa.cancelAgentCall(${secondClient.id})`)
+    assert.equal(ambiguousCancel, false, 'legacy cancellation must reject an ambiguous id without stopping either client')
+    const stopSelector = `[data-focus-key="call-stop:${secondClient.client}:${secondClient.id}"]`
+    assert.match(await ui(`document.querySelector(${jsLiteral(stopSelector)}).getAttribute('aria-label')`), new RegExp(`(?:客户端|client) ${secondClient.client}`, 'i'))
+    await click('#omnibox')
+    assert.equal(await ui('document.activeElement.id'), 'omnibox')
+    await click(stopSelector)
     const aOutcome = await Promise.race([concurrentA, pause(4000).then(() => ({ ok: true, timedOut: true }))])
     assert.equal(aOutcome.timedOut, undefined, 'cancelled call must not keep running')
     assert.equal(aOutcome.ok, false, `cancelled call should fail, got ${JSON.stringify(aOutcome)}`)
     await until(async () => ((await state()).agentActivity?.calls?.length ?? 0) === 1, 'the other call keeps running', 3000)
+    const remainingCall = (await state()).agentActivity.calls[0]
+    assert.equal(remainingCall.client, 1, 'stopping client 2 must not abort client 1 with the same request id')
+    assert.equal(remainingCall.id, secondClient.id)
     await ui('window.aa.interruptAgent()')
     await until(async () => (await state()).agentActivity?.paused === true, 'global pause still works with concurrent calls', 5000)
     await Promise.race([concurrentB, pause(4000)])
@@ -439,6 +449,109 @@ if (!process.versions.electron) {
     assert.equal((await state()).tabs.find((tab) => tab.id === normalId).canBack, false)
     assert.deepEqual(page.navigationHistory.getAllEntries().map(({ url }) => url), [base + '/normal'])
     pass('first page in a new desktop tab has no synthetic blank history entry')
+
+    const roundTripUrl = base + '/address-roundtrip?encoded=%2F%23&query=one%20two#route/part?mode=edit'
+    await ui(`window.aa.submit(${jsLiteral(roundTripUrl)})`)
+    await until(async () => (await state()).tabs.some((t) => t.active && t.url === roundTripUrl && !t.loading), 'address round-trip fixture')
+    await click('#omnibox')
+    const addressSelection = () => ui('({value:document.querySelector("#omnibox").value,start:document.querySelector("#omnibox").selectionStart,end:document.querySelector("#omnibox").selectionEnd})')
+    assert.deepEqual(await addressSelection(), { value: roundTripUrl, start: 0, end: roundTripUrl.length })
+    pass('focusing the address bar selects the complete URL including HTTP scheme, query and hash route')
+    if (process.env.AA_DESKTOP_SCREENSHOTS === '1') {
+      fs.writeFileSync(path.join(runDir, 'omnibox-edit.png'), (await chrome.capturePage()).toPNG())
+    }
+    chrome.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' })
+    chrome.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' })
+    await until(() => ui('document.activeElement.id !== "omnibox"'), 'address submit blur')
+    await until(async () => (await state()).tabs.some((t) => t.active && !t.loading), 'address submit completion')
+    assert.equal(page.getURL(), roundTripUrl)
+    pass('address-bar Enter without edits preserves the HTTP origin and hash route')
+
+    page.focus()
+    page.sendInputEvent({ type: 'keyDown', keyCode: 'L', modifiers: ['control'] })
+    page.sendInputEvent({ type: 'keyUp', keyCode: 'L', modifiers: ['control'] })
+    await until(() => ui('document.activeElement.id === "omnibox"'), 'full URL Ctrl+L')
+    assert.deepEqual(await addressSelection(), { value: roundTripUrl, start: 0, end: roundTripUrl.length })
+    await ui('document.querySelector("#omnibox").setSelectionRange(5, 8)')
+    chrome.sendInputEvent({ type: 'keyDown', keyCode: 'L', modifiers: ['control'] })
+    chrome.sendInputEvent({ type: 'keyUp', keyCode: 'L', modifiers: ['control'] })
+    assert.deepEqual(await addressSelection(), { value: roundTripUrl, start: 0, end: roundTripUrl.length })
+    pass('Ctrl+L selects the complete address both from the page and while already editing')
+
+    const editedUrl = base + '/address-edited?encoded=%2F%23&query=one%20two#route/part?mode=edit'
+    await ui(`document.querySelector("#omnibox").value=${jsLiteral(editedUrl)}`)
+    chrome.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' })
+    chrome.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' })
+    await until(async () => (await state()).tabs.some((t) => t.active && t.url === editedUrl && !t.loading), 'edited URL navigation')
+    assert.equal(page.getURL(), editedUrl)
+    pass('editing a path preserves its HTTP origin, encoded query and hash route')
+
+    await click('#omnibox')
+    const draft = base + '/address-'
+    await ui(`document.querySelector("#omnibox").value=${jsLiteral(draft)}; document.querySelector("#omnibox").dispatchEvent(new Event("input"))`)
+    await ui('window.aa.settingsSet({fullSnapshot:true})')
+    assert.equal((await addressSelection()).value, draft)
+    await until(() => ui('!document.querySelector("#suggest-panel").hidden'), 'draft suggestions')
+    chrome.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' })
+    chrome.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' })
+    await until(() => ui('document.querySelector("#suggest-panel").hidden'), 'first Escape closes suggestions')
+    assert.equal((await addressSelection()).value, draft)
+    assert.equal(await ui('document.activeElement.id'), 'omnibox')
+    chrome.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' })
+    chrome.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' })
+    await until(() => ui('document.activeElement.id !== "omnibox"'), 'second Escape cancels address editing')
+    assert.equal((await addressSelection()).value, new URL(editedUrl).host + new URL(editedUrl).pathname + new URL(editedUrl).search + new URL(editedUrl).hash)
+    assert.equal(page.getURL(), editedUrl)
+    pass('background state preserves a draft; Escape closes suggestions first and then restores the current address without navigation')
+    await click('#omnibox')
+    assert.equal((await addressSelection()).value, editedUrl)
+    await ui(`document.querySelector("#omnibox").value=${jsLiteral(draft)}`)
+    await click('#btn-reload')
+    assert.equal((await addressSelection()).value, new URL(editedUrl).host + new URL(editedUrl).pathname + new URL(editedUrl).search + new URL(editedUrl).hash)
+    pass('blur immediately replaces an unsubmitted draft with the current compact address')
+
+    await click('#omnibox')
+    await ui(`document.querySelector("#omnibox").value=${jsLiteral(draft)}; document.querySelector("#omnibox").dispatchEvent(new Event("input"))`)
+    await until(() => ui('!document.querySelector("#suggest-panel").hidden'), 'suggestions before tab switch')
+    const otherTab = initial.tabs[0]
+    await ui(`window.aa.tabSelect(${jsLiteral(otherTab.id)}, false)`)
+    await until(async () => (await addressSelection()).value === otherTab.url, 'focused address follows tab switch')
+    assert.equal(await ui('document.activeElement.id'), 'omnibox')
+    assert.deepEqual(await addressSelection(), { value: otherTab.url, start: 0, end: otherTab.url.length })
+    assert.equal(await ui('document.querySelector("#suggest-panel").hidden'), true)
+    await ui(`window.aa.tabSelect(${jsLiteral(normalId)}, false)`)
+    await until(async () => (await addressSelection()).value === editedUrl, 'focused address follows original tab')
+    pass('switching tabs while editing resets the address and stale suggestions to the newly active tab')
+
+    await ui(`document.querySelector("#omnibox").value=${jsLiteral(draft)}; document.querySelector("#omnibox").dispatchEvent(new Event("input"))`)
+    await until(() => ui('!document.querySelector("#suggest-panel").hidden'), 'keyboard history suggestions')
+    const suggestedUrl = await ui('document.querySelector("#suggestion-0 .suggest-url").textContent')
+    chrome.sendInputEvent({ type: 'keyDown', keyCode: 'Down' })
+    chrome.sendInputEvent({ type: 'keyUp', keyCode: 'Down' })
+    assert.equal((await addressSelection()).value, suggestedUrl)
+    chrome.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' })
+    chrome.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' })
+    await until(async () => (await state()).tabs.some((t) => t.active && t.url === suggestedUrl && !t.loading), 'keyboard suggestion navigation')
+    await click('#omnibox')
+    await ui(`document.querySelector("#omnibox").value=${jsLiteral(draft)}; document.querySelector("#omnibox").dispatchEvent(new Event("input"))`)
+    await until(() => ui('!document.querySelector("#suggest-panel").hidden'), 'mouse history suggestions')
+    const clickedUrl = await ui('document.querySelector("#suggestion-0 .suggest-url").textContent')
+    await click('#suggestion-0')
+    await until(async () => (await state()).tabs.some((t) => t.active && t.url === clickedUrl && !t.loading), 'mouse suggestion navigation')
+    pass('keyboard and mouse history suggestions still navigate to their complete URL')
+
+    // Renderer-only fixture: Chromium normally strips userinfo. Exercise the
+    // state boundary without sending credentials or navigating to external URLs.
+    const rendererState = await state()
+    chrome.send('aa:state', { ...rendererState, tabs: rendererState.tabs.map((t) => t.active ? { ...t, url: 'https://fixture-user:fixture-secret@example.test/path?x=1#route' } : t) })
+    await click('#omnibox')
+    assert.equal((await addressSelection()).value, 'https://example.test/path?x=1#route')
+    await ui('document.querySelector("#omnibox").blur()')
+    chrome.send('aa:state', rendererState)
+    pass('renderer URL editing strips embedded username and password rather than revealing them')
+
+    await ui(`window.aa.submit(${jsLiteral(base + '/normal')})`)
+    await until(async () => (await state()).tabs.some((t) => t.active && t.url === base + '/normal' && !t.loading), 'restore normal fixture after address checks')
     await ui('window.aa.settingsSet({requireOperationApproval:true})')
     const captured = await tool('browser_network_requests', { tabId: normalId })
     const capturedId = /\[([^\]]+)\]/.exec(toolText(captured))?.[1]
@@ -449,7 +562,8 @@ if (!process.versions.electron) {
     )
     await until(async () => (await state()).pendingApprovals.length === 1, 'sensitive network approval')
     const approvalId = (await state()).pendingApprovals[0].id
-    await ui(`window.aa.decideApproval(${jsLiteral(approvalId)}, false)`)
+    await click('#omnibox')
+    await click(`[data-focus-key="approval-deny:${approvalId}"]`)
     const denied = await sensitiveCall
     assert.match(denied?.message ?? '', /高危操作已取消/)
     await ui('window.aa.settingsSet({requireOperationApproval:false})')

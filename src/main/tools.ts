@@ -1,7 +1,7 @@
 import type { ToolContent } from '@shared/types'
 import { TOOL_DEFS, TOOL_ANNOTATIONS } from '@shared/tool-defs.mjs'
 export { TOOL_ANNOTATIONS }
-import { checkedStateScript, fingerprintScript, refLiteral, tagNameScript } from '@snapshot/scripts'
+import { checkedStateScript, fingerprintScript, jsLiteral, refLiteral, tagNameScript } from '@snapshot/scripts'
 import { TabManager, normalizeUrl } from './tabs'
 import { clipBody, safeNetworkHeaders, safeNetworkUrl } from './network'
 import type { DownloadTracker } from './downloads'
@@ -207,6 +207,79 @@ export function buildTools(
     }
   }
 
+  /** Sensitive fields are always filled by the user, never from an agent-supplied value. */
+  async function approveSensitiveType(
+    tab: ReturnType<typeof resolveWebContents>,
+    ref: string,
+    target: { sensitive?: boolean; label?: string },
+    signal?: unknown
+  ): Promise<void> {
+    if (tabs.activeId !== tab.id) throw new ActionError('敏感输入审批仅支持当前活动标签；请切换到目标标签后重试。')
+    const wc = tab.view.webContents
+    const originalUrl = wc.getURL()
+    const originalFrame = await wc.executeJavaScript(fingerprintScript(ref), false) as { fingerprint?: string; rect?: number[] } | null
+    if (!originalFrame) throw new ActionError('敏感输入目标已失效；请刷新快照后重试。')
+    const url = new URL(originalUrl)
+    const allowed = approvals ? await approvals.request({ site: url.host || url.protocol, tabTitle: tab.title, fieldLabel: target.label || '敏感输入框' }, signal instanceof AbortSignal ? signal : undefined) : false
+    if (!allowed) throw new ActionError('敏感输入已取消或超时；Agent 提供的文本未写入。')
+    if (wc.isDestroyed() || wc.getURL() !== originalUrl || tabs.activeId !== tab.id) throw new ActionError('页面或活动标签在等待确认期间已变化；请重新获取快照后再继续。')
+    const rechecked = await inspectTypeTarget(tab, ref)
+    if (!rechecked.ok || !rechecked.sensitive || rechecked.fingerprint !== originalFrame.fingerprint) throw new ActionError('敏感输入目标已变化；请重新获取快照后再继续。')
+  }
+
+  /** Inspect an iframe input without reading its value; selector is embedded as data. */
+  async function inspectFrameTypeTarget(wc: Electron.WebContents, frameId: string, selector: string): Promise<{
+    ok: boolean; sensitive?: boolean; label?: string; fingerprint?: string; url?: string
+  }> {
+    const source = `(() => {
+      const el = document.querySelector(${jsLiteral(selector)});
+      if (!el) return { ok: false };
+      const type = String(el.type || '').toLowerCase();
+      const label = String(el.labels && Array.from(el.labels).map(x => x.innerText || x.textContent).join(' ') || '');
+      const autocomplete = String(el.autocomplete || '').toLowerCase();
+      const meta = [label, el.name, el.id, autocomplete, el.placeholder, el.getAttribute('aria-label'), el.getAttribute('data-testid')].join(' ').toLowerCase();
+      const pattern = /(token|secret|api.?key|access.?key|private.?key|password|passwd|credential|验证码|密钥|令牌|密码|otp|one.?time.?code|security.?code|auth.?code|card.?number|cc.?number|cvv|cvc|expiry|expiration)/i;
+      const sensitive = type === 'password' || /^(current-password|new-password|one-time-code|cc-csc|cc-number|cc-exp|cc-exp-month|cc-exp-year)$/.test(autocomplete) || pattern.test(meta);
+      const fingerprint = [el.tagName, type, el.name || '', el.id || '', autocomplete, el.getAttribute('aria-label') || '', label].join('|');
+      if (sensitive) el.focus();
+      return { ok: true, sensitive, fingerprint, label: (label || el.getAttribute('aria-label') || el.name || el.id || type || el.tagName).slice(0, 120), url: String(location.href) };
+    })()`
+    return await frameEvaluate(wc, frameId, source) as { ok: boolean; sensitive?: boolean; label?: string; fingerprint?: string; url?: string }
+  }
+
+  /** Gate iframe sensitive input while keeping the supplied text out of page execution. */
+  async function approveSensitiveFrameType(
+    tab: ReturnType<typeof resolveWebContents>,
+    frameId: string,
+    selector: string,
+    signal?: unknown
+  ): Promise<void> {
+    if (tabs.activeId !== tab.id) throw new ActionError('敏感输入审批仅支持当前活动标签；请切换到目标标签后重试。')
+    const wc = tab.view.webContents
+    const original = await inspectFrameTypeTarget(wc, frameId, selector)
+    if (!original.ok || !original.sensitive) throw new ActionError('敏感输入目标已变化；请重新获取 frame 元素后再继续。')
+    const originalUrl = original.url || wc.getURL()
+    let site = originalUrl
+    try {
+      const parsed = new URL(originalUrl)
+      site = parsed.host || parsed.protocol
+    } catch {
+      /* 保留原始 frame URL */
+    }
+    const allowed = approvals
+      ? await approvals.request(
+          { site, tabTitle: tab.title, fieldLabel: original.label || '敏感输入框' },
+          signal instanceof AbortSignal ? signal : undefined
+        )
+      : false
+    if (!allowed) throw new ActionError('敏感输入已取消或超时；Agent 提供的文本未写入。')
+    if (wc.isDestroyed() || tabs.activeId !== tab.id) throw new ActionError('页面或活动标签在等待确认期间已变化；请重新获取 frame 元素后再继续。')
+    const rechecked = await inspectFrameTypeTarget(wc, frameId, selector)
+    if (!rechecked.ok || !rechecked.sensitive || rechecked.fingerprint !== original.fingerprint || rechecked.url !== original.url) {
+      throw new ActionError('敏感输入目标已变化；请重新获取 frame 元素后再继续。')
+    }
+  }
+
   pushTool({
     name: 'browser_navigate',
     handler: async (args) => {
@@ -308,19 +381,8 @@ export function buildTools(
       const target = await inspectTypeTarget(tab, ref)
       if (!target.ok) throw new ActionError(`找不到输入目标 ${ref}；请刷新页面快照后重试。`)
       if (target.sensitive) {
-        if (tabs.activeId !== tab.id) throw new ActionError('敏感输入审批仅支持当前活动标签；请切换到目标标签后重试。')
         // Never write or retain an agent-supplied secret. Let the user type directly into the focused page field.
-        const wc = tab.view.webContents
-        const originalUrl = wc.getURL()
-        const originalFrame = await wc.executeJavaScript(fingerprintScript(ref), false) as { fingerprint?: string; rect?: number[] } | null
-        if (!originalFrame) throw new ActionError('敏感输入目标已失效；请刷新快照后重试。')
-        const url = new URL(originalUrl)
-        const signal = args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
-        const allowed = approvals ? await approvals.request({ site: url.host || url.protocol, tabTitle: tab.title, fieldLabel: target.label || '敏感输入框' }, signal) : false
-        if (!allowed) throw new ActionError('敏感输入已取消或超时；Agent 提供的文本未写入。')
-        if (wc.isDestroyed() || wc.getURL() !== originalUrl || tabs.activeId !== tab.id) throw new ActionError('页面或活动标签在等待确认期间已变化；请重新获取快照后再继续。')
-        const rechecked = await inspectTypeTarget(tab, ref)
-        if (!rechecked.ok || !rechecked.sensitive || rechecked.fingerprint !== originalFrame.fingerprint) throw new ActionError('敏感输入目标已变化；请重新获取快照后再继续。')
+        await approveSensitiveType(tab, ref, target, args['__aaSignal'])
         if (args['submit']) throw new ActionError('敏感字段已填写，但 Agent 不会自动提交；请由你在网页中亲自确认提交。')
         return { content: [text('已允许继续。敏感字段内容由你在网页中输入；Agent 提供的文本未写入、读取或回传。请继续后续步骤。')] }
       }
@@ -936,11 +998,25 @@ pushTool({
             continue
           }
         }
-        const r = await doType(tab, ref, String(field['value'] ?? ''), {
+        const target = await inspectTypeTarget(tab, ref)
+        if (!target.ok) throw new ActionError(`找不到输入目标 ${ref}；请刷新页面快照后重试。`)
+        if (target.sensitive) {
+          await approveSensitiveType(tab, ref, target, args['__aaSignal'])
+          if (field['submit']) throw new ActionError('敏感字段由你在网页中输入；Agent 不会自动提交。')
+          done.push(`${ref} ← [敏感字段请由你输入]`)
+          continue
+        }
+        if (field['submit']) {
+          await opGate(
+            { site: siteOf(tab), tabTitle: tab.title, action: '提交表单/输入后回车' },
+            args['__aaSignal']
+          )
+        }
+        await doType(tab, ref, String(field['value'] ?? ''), {
           submit: !!field['submit'],
           wantSnapshot: false
         })
-        done.push(`${ref} ← ${String(field['value'] ?? '').slice(0, 40)}`)
+        done.push(`${ref} ← [已填写]`)
       }
       const want = args['snapshot'] !== false
       const snapshot = want ? await captureSnapshot(tab.view.webContents) : undefined
@@ -1111,6 +1187,10 @@ pushTool({
         if (action === 'evaluate') {
           const expression = String(args['expression'] ?? '')
           if (!expression.trim()) throw new ActionError('expression 不能为空')
+          await opGate(
+            { site: siteOf(tab), tabTitle: tab.title, action: '在网页中执行 JavaScript', detail: `frame ${frameId} · ${expression.replace(/\s+/g, ' ').slice(0, 120)}` },
+            args['__aaSignal']
+          )
           const value = await raceAbort(
             frameEvaluate(wc, frameId, expression),
             args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
@@ -1133,8 +1213,14 @@ pushTool({
           return { content: [text(`已在 [${frameId}] 内点击: ${r.clicked}`)] }
         }
         if (action === 'type') {
-          const r = await frameType(wc, frameId, selector, String(args['text'] ?? ''))
-          return { content: [text(`已在 [${frameId}] 内输入: ${r.typed} = ${JSON.stringify(String(args['text'] ?? ''))}`)] }
+          const target = await inspectFrameTypeTarget(wc, frameId, selector)
+          if (!target.ok) throw new ActionError(`在 ${frameId} 内找不到输入元素: ${selector}`)
+          if (target.sensitive) {
+            await approveSensitiveFrameType(tab, frameId, selector, args['__aaSignal'])
+            return { content: [text('已允许继续。敏感字段内容由你在网页中输入；Agent 提供的文本未写入、读取或回传。请继续后续步骤。')] }
+          }
+          await frameType(wc, frameId, selector, String(args['text'] ?? ''))
+          return { content: [text(`已在 [${frameId}] 内输入（内容未记录）。`)] }
         }
         if (action === 'select') {
           const r = await frameSelect(wc, frameId, selector, {

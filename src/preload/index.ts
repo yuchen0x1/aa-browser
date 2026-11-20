@@ -20,7 +20,7 @@ contextBridge.exposeInMainWorld('aa', {
   decideApproval: (id: string, allowed: boolean): Promise<boolean> => ipcRenderer.invoke('aa:approval-decide', id, allowed),
   interruptAgent: (): Promise<boolean> => ipcRenderer.invoke('aa:agent-interrupt'),
   resumeAgent: (): Promise<boolean> => ipcRenderer.invoke('aa:agent-resume'),
-  cancelAgentCall: (id: number): Promise<boolean> => ipcRenderer.invoke('aa:agent-cancel-call', id),
+  cancelAgentCall: (id: number, client?: number): Promise<boolean> => ipcRenderer.invoke('aa:agent-cancel-call', id, client),
   downloadsList: (): Promise<unknown> => ipcRenderer.invoke('aa:downloads-list'),
   downloadOpen: (id: string): Promise<void> => ipcRenderer.invoke('aa:download-open', id),
   downloadShow: (id: string): Promise<void> => ipcRenderer.invoke('aa:download-show', id),

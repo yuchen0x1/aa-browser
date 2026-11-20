@@ -58,8 +58,6 @@ export interface PermissionPolicyDeps {
 const configuredSessions = new WeakSet<Electron.Session>()
 /** 每个 Session 的已授权记录：origin -> permissions。隔离分区只在内存里，进程结束即失效。 */
 const grants = new WeakMap<Electron.Session, Map<string, Set<string>>>()
-/** 同一站点同一权限的并发请求去重，避免弹多个相同审批。 */
-const pendingPrompts = new Map<string, Promise<boolean>>()
 
 function originOf(url: string): string {
   try {
@@ -79,60 +77,119 @@ export function applyPermissionPolicy(ses: Electron.Session, deps?: PermissionPo
   const sessionGrants = new Map<string, Set<string>>()
   grants.set(ses, sessionGrants)
 
+  // 审批只能在同一 Session、WebContents 和文档生命周期内合并。
+  // 已完成的授权仍按 Session + origin 保存，保持同站点的原有授权行为。
+  const requestContexts = new WeakMap<Electron.WebContents, {
+    generation: number
+    pendingPrompts: Map<string, Promise<boolean>>
+  }>()
+
   ses.setPermissionRequestHandler((wc, permission, callback, details) => {
     if (!PROMPT_PERMISSIONS.has(permission)) {
       callback(!DENIED_PERMISSIONS.has(permission))
       return
     }
-    const site = originOf(String(details?.requestingUrl || wc.getURL() || ''))
-    if (sessionGrants.get(site)?.has(permission)) {
-      callback(true)
-      return
-    }
-    if (!deps?.requestApproval) {
+    if (wc.isDestroyed()) {
       callback(false)
       return
     }
-    const key = `${site}|${permission}`
-    const existing = pendingPrompts.get(key)
-    if (existing) {
-      void existing.then(callback)
+    // Electron 的请求是 mediaTypes[]，检查才是单数 mediaType。
+    const media = details as Electron.MediaAccessPermissionRequest
+    const mediaTypes = permission === 'media' ? [...new Set(media?.mediaTypes ?? [])].sort() : []
+    if (permission === 'media' && (!mediaTypes.length || mediaTypes.some((type) => type !== 'audio' && type !== 'video'))) {
+      callback(false)
       return
     }
-    const mediaType = String((details as { mediaType?: string } | undefined)?.mediaType ?? '')
-    const label = PERMISSION_LABELS[permission] ?? permission
-    const prompt = deps
-      .requestApproval({
-        site,
-        tabTitle: wc.getTitle() || site,
-        fieldLabel: `允许使用${label}`,
-        detail: mediaType ? `权限类型: ${permission} · ${mediaType}` : `权限类型: ${permission}`,
-        kind: 'permission',
-        permission
+    const requested = permission === 'media' ? mediaTypes.map((type) => `media:${type}`) : [permission]
+    const site = originOf(String((permission === 'media' && media?.securityOrigin) || details?.requestingUrl || wc.getURL() || ''))
+    if (requested.every((scope) => sessionGrants.get(site)?.has(scope))) {
+      callback(true)
+      return
+    }
+    const requestApproval = deps?.requestApproval
+    if (!requestApproval) {
+      callback(false)
+      return
+    }
+    let context = requestContexts.get(wc)
+    if (!context) {
+      const created = { generation: 0, pendingPrompts: new Map<string, Promise<boolean>>() }
+      context = created
+      requestContexts.set(wc, created)
+      const invalidate = (): void => {
+        created.generation++
+        created.pendingPrompts.clear()
+      }
+      const onNavigate = (details: Electron.WebContentsDidStartNavigationEventParams): void => {
+        // PermissionRequest 没有 frame ID；任何换文档导航都使未完成审批失效。
+        // 不能只比较 URL，否则同 URL 的刷新或离开后返回仍会复用旧审批。
+        if (!details.isSameDocument) invalidate()
+      }
+      wc.on('did-start-navigation', onNavigate)
+      wc.on('render-process-gone', invalidate)
+      wc.once('destroyed', () => {
+        invalidate()
+        wc.removeListener('did-start-navigation', onNavigate)
+        wc.removeListener('render-process-gone', invalidate)
+        requestContexts.delete(wc)
       })
+    }
+    const { generation, pendingPrompts } = context
+    const isCurrent = (): boolean => !wc.isDestroyed() && context.generation === generation
+    const respond = (allowed: boolean): void => {
+      const approved = allowed === true && isCurrent()
+      if (approved) {
+        const set = sessionGrants.get(site) ?? new Set<string>()
+        for (const scope of requested) set.add(scope)
+        sessionGrants.set(site, set)
+      }
+      // 逐个回调前重新验证；即使共享审批，也不能批准已销毁/已导航的请求。
+      try {
+        callback(approved)
+      } catch {
+        /* Electron 可能已在销毁过程中移除了原生请求。 */
+      }
+    }
+    const key = JSON.stringify([site, ...requested])
+    const existing = pendingPrompts.get(key)
+    if (existing) {
+      void existing.then(respond)
+      return
+    }
+    const label = permission === 'media'
+      ? mediaTypes.map((type) => type === 'audio' ? '麦克风' : '摄像头').join(' / ')
+      : PERMISSION_LABELS[permission] ?? permission
+    const meta: PermissionApprovalMeta = {
+      site,
+      tabTitle: wc.getTitle() || site,
+      fieldLabel: `允许使用${label}`,
+      detail: mediaTypes.length ? `权限类型: ${permission} · ${mediaTypes.join(', ')}` : `权限类型: ${permission}`,
+      kind: 'permission',
+      permission
+    }
+    // 同步抛错、拒绝和超时都不授权；只接受明确的 true。
+    const prompt = Promise.resolve()
+      .then(() => isCurrent() ? requestApproval(meta) : false)
+      .then((allowed) => allowed === true, () => false)
       .then((allowed) => {
-        pendingPrompts.delete(key)
-        // 只有明确允许才记入本次会话；拒绝/超时都不授权。
-        if (allowed) {
-          const set = sessionGrants.get(site) ?? new Set<string>()
-          set.add(permission)
-          sessionGrants.set(site, set)
-        }
+        // 旧文档的完成不能删掉新文档刚发起的同 key 审批。
+        if (pendingPrompts.get(key) === prompt) pendingPrompts.delete(key)
         return allowed
       })
-      .catch(() => {
-        pendingPrompts.delete(key)
-        return false
-      })
     pendingPrompts.set(key, prompt)
-    void prompt.then(callback)
+    void prompt.then(respond)
   })
 
   // 同步检查路径（如 navigator.permissions.query）必须给出一致答案，
   // 否则页面会看到"能查询到权限但请求失败"的矛盾状态。
-  ses.setPermissionCheckHandler((wc, permission, requestingOrigin) => {
+  ses.setPermissionCheckHandler((wc, permission, requestingOrigin, details) => {
     if (!PROMPT_PERMISSIONS.has(permission)) return !DENIED_PERMISSIONS.has(permission)
-    const site = originOf(String(requestingOrigin || wc?.getURL() || ''))
+    const site = originOf(String((permission === 'media' && details?.securityOrigin) || requestingOrigin || wc?.getURL() || ''))
+    if (permission === 'media') {
+      const mediaType = details?.mediaType
+      if (mediaType !== 'audio' && mediaType !== 'video') return false
+      return sessionGrants.get(site)?.has(`media:${mediaType}`) ?? false
+    }
     return sessionGrants.get(site)?.has(permission) ?? false
   })
 }

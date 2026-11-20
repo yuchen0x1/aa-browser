@@ -108,6 +108,12 @@
 
 15 秒录屏。点击画面或[观看原片（MP4，1280×720，约 1.9 MB）](./docs/media/aa-browser-demo.mp4)；GitHub 的 README 不支持内嵌视频播放，这里用一份等长动图预览代替。
 
+### 地址栏编辑
+
+聚焦地址栏或按 `Ctrl/Cmd+L` 时编辑完整地址，保留协议、查询参数与 `#` 路由；未编辑直接回车不会改变原地址。按 Esc 先收起历史建议，再按一次取消编辑。以下截图来自本地真实 Electron 回归页面：
+
+![完整地址编辑（本地 HTTP 测试页面）](./docs/screenshots/omnibox-edit.png)
+
 ## 快照示例
 
 在必应首页调用 `browser_snapshot` 得到：
