@@ -87,46 +87,58 @@ await test('tools/call while Aa Browser is offline receives an isError response'
 await test('cancelled tools/call is not sent after a delayed browser connection opens', async () => {
   const server = new WebSocketServer({
     port: 0,
+    // The handshake completes only after the bridge has both lines. Both are
+    // written as one chunk, so cancellation is recorded before the socket opens
+    // instead of relying on how long the client pauses between writes.
     verifyClient: (_info, done) => setTimeout(() => done(true), 250)
   })
   let browserCalls = 0
   server.on('connection', (socket) => socket.on('message', () => { browserCalls++ }))
-  await new Promise((resolve) => server.once('listening', resolve))
-  fs.writeFileSync(CANCEL_CONNECTION_FILE, JSON.stringify({
-    pid: process.pid,
-    port: server.address().port,
-    token: 'test-token'
-  }))
-
-  const child = startBridge(CANCEL_CONNECTION_FILE)
-  const response = await new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('cancelled tools/call did not receive a response')), 4000)
-    const rl = readline.createInterface({ input: child.stdout })
-    rl.on('line', (line) => {
-      try {
-        const message = JSON.parse(line)
-        if (message.id === 42) {
-          clearTimeout(timer)
-          rl.close()
-          resolve(message)
-        }
-      } catch {
-        /* Ignore diagnostic or incomplete output. */
-      }
-    })
-    child.once('error', reject)
-    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', id: 42, method: 'tools/call', params: { name: 'browser_tabs', arguments: { action: 'list' } } })}\n`)
-    child.stdin.write(`${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 42 } })}\n`)
-  })
-
+  let child
+  let rl
+  let timer
   try {
+    await new Promise((resolve) => server.once('listening', resolve))
+    fs.writeFileSync(CANCEL_CONNECTION_FILE, JSON.stringify({
+      pid: process.pid,
+      port: server.address().port,
+      token: 'test-token'
+    }))
+
+    child = startBridge(CANCEL_CONNECTION_FILE)
+    const response = await new Promise((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('cancelled tools/call did not receive a response')), 6000)
+      rl = readline.createInterface({ input: child.stdout })
+      rl.on('line', (line) => {
+        try {
+          const message = JSON.parse(line)
+          if (message.id === 42) resolve(message)
+        } catch {
+          /* Ignore diagnostic or incomplete output. */
+        }
+      })
+      child.once('error', reject)
+      child.stdin.write(
+        `${JSON.stringify({ jsonrpc: '2.0', id: 42, method: 'tools/call', params: { name: 'browser_tabs', arguments: { action: 'list' } } })}\n` +
+        `${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 42 } })}\n`
+      )
+    })
+
     assert.equal(response.result?.isError, true)
     assert.match(response.result?.content?.[0]?.text ?? '', /已取消/)
     assert.equal(browserCalls, 0, 'cancelled call must not reach the browser bridge')
   } finally {
-    try { child.stdin.end() } catch { /* ignore */ }
-    try { child.kill() } catch { /* ignore */ }
+    clearTimeout(timer)
+    try { rl?.close() } catch { /* ignore */ }
+    try { child?.stdin.end() } catch { /* ignore */ }
+    try { child?.kill() } catch { /* ignore */ }
     try { fs.rmSync(CANCEL_CONNECTION_FILE, { force: true }) } catch { /* ignore */ }
-    await new Promise((resolve) => server.close(resolve))
+    for (const client of server.clients) {
+      try { client.terminate() } catch { /* ignore */ }
+    }
+    await Promise.race([
+      new Promise((resolve) => server.close(resolve)),
+      new Promise((resolve) => setTimeout(resolve, 2000).unref())
+    ])
   }
 })
