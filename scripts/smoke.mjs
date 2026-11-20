@@ -670,12 +670,13 @@ async function main() {
         const acceptedText = mcp.text(await mcp.call('browser_dialogs', {}))
         check('browser_dialog_respond 让 confirm 返回 true', acceptedText.includes('返回 true'), acceptedText.slice(0, 300))
         await mcp.call('browser_dialogs', { clear: true })
-        await mcp.call('browser_dialog_respond', { prompt: 'SMOKE_ANSWER' })
+        const promptAnswer = `SMOKE_ANSWER：'"\\ <示例/>\u2028\u2029`
+        await mcp.call('browser_dialog_respond', { prompt: promptAnswer })
         const pmtRef = findRef(mcp.text(await mcp.call('browser_snapshot', { full: true })), /- button "提示输入"/)
         await mcp.call('browser_click', { ref: pmtRef, snapshot: false })
         await sleep(300)
         const promptOut = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.getElementById("out").textContent' }))
-        check('browser_dialog_respond 让 prompt 返回指定文本', promptOut.includes('prompt=SMOKE_ANSWER'), promptOut.slice(0, 200))
+        check('browser_dialog_respond 原样保留 prompt 答案', promptOut === JSON.stringify(`prompt=${promptAnswer}`), promptOut.slice(0, 200))
         const promptDlg = mcp.text(await mcp.call('browser_dialogs', {}))
         check('prompt 记录包含页面实际拿到的答案', promptDlg.includes('SMOKE_PROMPT') && promptDlg.includes('SMOKE_ANSWER'), promptDlg.slice(0, 300))
         await mcp.call('browser_dialog_respond', { reset: true })
@@ -769,9 +770,10 @@ async function main() {
         const frameEls = mcp.text(await mcp.call('browser_frame', { action: 'elements', frameId }))
         check('browser_frame elements 给出可用选择器', frameEls.includes('#fin') && frameEls.includes('#fbtn'), frameEls.slice(0, 500))
 
-        await mcp.call('browser_frame', { action: 'type', frameId, selector: '#fin', text: '跨域输入' })
+        const frameInput = `跨域输入：'"\\ <示例/>\u2028\u2029`
+        await mcp.call('browser_frame', { action: 'type', frameId, selector: '[id="fin"]', text: frameInput })
         const typedBack = mcp.text(await mcp.call('browser_frame', { action: 'evaluate', frameId, expression: 'document.querySelector("#fin").value' }))
-        check('browser_frame type 在 iframe 内真实写入', typedBack.includes('跨域输入'), typedBack.slice(0, 200))
+        check('browser_frame type 在 iframe 内原样写入文本', typedBack === JSON.stringify(frameInput), typedBack.slice(0, 200))
 
         await mcp.call('browser_frame', { action: 'select', frameId, selector: '#fsel', value: 'b' })
         const selectBack = mcp.text(await mcp.call('browser_frame', { action: 'evaluate', frameId, expression: 'document.querySelector("#fsel").value' }))

@@ -357,6 +357,9 @@ function createWindow(): void {
   win.on('resize', pushState)
   win.on('focus', () => { void updater?.checkIfDue() })
   win.on('closed', () => {
+    // 两种退出路径都会关闭窗口；在清理 WebContentsView 之前保留最终标签快照。
+    try { flushSessionRecord?.(true) } catch { /* 会话记录是尽力而为，不阻塞退出 */ }
+    scheduleSessionSave = () => {}
     win = null
     const cv = chromeView
     chromeView = null
@@ -814,15 +817,12 @@ app.whenReady().then(() => {
 })
 
 app.on('before-quit', () => {
-  try { flushSessionRecord?.(true) } catch { /* 会话记录是尽力而为，不阻塞退出 */ }
   updater?.dispose()
   approvals.cancelAll()
   agentServer?.stop()
-  tabManager?.closeAll()
 })
 
 app.on('window-all-closed', () => {
-  tabManager?.closeAll()
   app.quit()
 })
 

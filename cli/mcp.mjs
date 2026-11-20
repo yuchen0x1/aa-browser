@@ -12,7 +12,6 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import readline from 'node:readline'
 import process from 'node:process'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -79,6 +78,7 @@ let ws = null
 let nextCallId = 1
 const pending = new Map() // id -> { resolve, reject, timer, mcpId }
 const mcpToBridge = new Map()
+const cancelledMcpRequests = new Set()
 const bridgeToProgressToken = new Map() // 桥调用 id -> MCP progressToken（仅在调用期间存在）
 
 function readConnection() {
@@ -346,7 +346,17 @@ function startEagerConnect() {
 startEagerConnect()
 
 async function callTool(name, args, progressToken) {
-  const socket = await getWs()
+  const mcpId = args?.__mcpId
+  let socket
+  try {
+    socket = await getWs()
+  } catch (error) {
+    if (mcpId !== undefined) cancelledMcpRequests.delete(mcpId)
+    throw error
+  }
+  if (mcpId !== undefined && cancelledMcpRequests.delete(mcpId)) {
+    throw new Error('MCP 请求已取消。')
+  }
   const id = nextCallId++
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -371,14 +381,20 @@ async function callTool(name, args, progressToken) {
 
 /* ──────────────────── MCP stdio 协议 ──────────────────── */
 
+function writeStdioMessage(message) {
+  // JSON 允许这两个字符，但有些客户端的逐行读取器会把它们当成换行。
+  const json = JSON.stringify(message).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029')
+  process.stdout.write(`${json}\n`)
+}
+
 function send(msg) {
   log('stdio response', msg.id, msg.error ? 'error' : 'result')
-  process.stdout.write(JSON.stringify(msg) + '\n')
+  writeStdioMessage(msg)
 }
 
 // JSON-RPC 通知（无 id，不需要响应）：进度事件走这里发往 MCP 客户端。
 function notify(method, params) {
-  process.stdout.write(JSON.stringify({ jsonrpc: '2.0', method, params }) + '\n')
+  writeStdioMessage({ jsonrpc: '2.0', method, params })
 }
 
 function rpcResult(id, result) {
@@ -400,9 +416,7 @@ function toolResultForMcp(result) {
   return { content, isError: !!result?.isError }
 }
 
-const rl = readline.createInterface({ input: process.stdin, terminal: false })
-
-rl.on('line', (line) => {
+function handleStdioLine(line) {
   const s = line.trim()
   if (!s) return
   let msg
@@ -425,7 +439,8 @@ rl.on('line', (line) => {
         p.reject(new Error('MCP 请求已取消。'))
       }
       // -1 是"仍在等待建立连接"的占位 id；此时没有可发送的浏览器调用。
-      if (bridgeId > 0) {
+      if (bridgeId === -1) cancelledMcpRequests.add(requestId)
+      else if (bridgeId > 0) {
         try { ws?.send(JSON.stringify({ id: bridgeId, cancel: true })) } catch {}
       }
       mcpToBridge.delete(requestId)
@@ -509,9 +524,22 @@ rl.on('line', (line) => {
     default:
       rpcError(id, -32601, `方法不支持: ${method}`)
   }
-})
+}
 
-rl.on('close', () => {
+// MCP stdio 只以 LF 分帧；readline 还会把合法 JSON 字符串里的 U+2028/U+2029 分开。
+let stdioBuffer = ''
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk) => {
+  stdioBuffer += chunk
+  let start = 0
+  for (let end = stdioBuffer.indexOf('\n'); end !== -1; end = stdioBuffer.indexOf('\n', start)) {
+    handleStdioLine(stdioBuffer.slice(start, end))
+    start = end + 1
+  }
+  stdioBuffer = stdioBuffer.slice(start)
+})
+process.stdin.on('end', () => {
+  if (stdioBuffer) handleStdioLine(stdioBuffer)
   try { ws?.close() } catch {}
   process.exit(0)
 })
