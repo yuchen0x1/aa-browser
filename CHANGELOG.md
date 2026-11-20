@@ -2,6 +2,14 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
+## v0.6.7 — 2026-11-21
+
+- 新标签接入教程全量中英双语，后端可见诊断（客户端接入结果、下载重试原因）按已保存语言输出；路径、命令与原始异常逐字保留，生成提示词保持原文。
+- 新增 Ctrl/Cmd+P 打印快捷键与打印失败/取消的可见双语反馈；修复右键打印失败完全无反馈的问题。
+- 修复新标签慢导航窗口内主题/语言同步脚本可能注入外站的竞态；冒烟测试隔离实例固定简体中文，修复 en-US 区域 CI 下向导断言超时。
+- 新增 `test:newtab-i18n`、`test:app-i18n`、`test:main-diagnostics`（114 项）、`test:printing`（14 项）回归并接入 CI；本地 Windows、WSLg 真实 Linux renderer 与远程 CI 双平台通过。
+- MCP 工具保持 42 个，既有设置、历史、Cookie、下载及会话数据无需迁移。
+
 ## v0.6.6 — 2026-11-20
 
 - 修复设置禁用控件造成 Tab 焦点卡住、状态刷新丢失按钮焦点，以及方向键切换标签后焦点进入网页的问题；补齐 Left / Right / Home / End 与边界切换。

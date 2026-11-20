@@ -32,9 +32,9 @@
 
 <!-- github-release:start -->
 
-**[v0.6.6](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.6.6)** · 2026-11-20
+**[v0.6.7](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.6.7)** · 2026-11-21
 
-本版修复双主题文字对比度、键盘焦点连续性、最小窗口抽屉裁切和官网手机首屏溢出；补齐基础设计 Token，新增桌面 UI/UX 38 项与官网 UI 44 项回归，DPI 覆盖 100% / 125% / 150% / 200%。MCP 工具集保持 42 个。
+本版把新标签接入教程与后端可见诊断扩展为中英双语，新增打印快捷键与可见失败反馈，并修复新标签同步脚本可能注入外站的竞态。新增 4 项专项回归接入 CI，本地 Windows、WSLg 真实 Linux renderer 与远程 CI 双平台通过。MCP 工具集保持 42 个。
 
 [全部发行记录](https://github.com/yuchen0x1/aa-browser/releases)
 

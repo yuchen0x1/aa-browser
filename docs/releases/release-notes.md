@@ -6,6 +6,7 @@
 
 | 版本 | 完整 Release 正文 |
 | --- | --- |
+| v0.6.7 | [bodies/v0.6.7.md](./bodies/v0.6.7.md) |
 | v0.6.6 | [bodies/v0.6.6.md](./bodies/v0.6.6.md) |
 | v0.6.5 | [bodies/v0.6.5.md](./bodies/v0.6.5.md) |
 | v0.6.4 | [bodies/v0.6.4.md](./bodies/v0.6.4.md) |
@@ -20,6 +21,14 @@
 | v0.0.3 | [bodies/v0.0.3.md](./bodies/v0.0.3.md) |
 | v0.0.2 | [bodies/v0.0.2.md](./bodies/v0.0.2.md) |
 | v0.0.1 | [bodies/v0.0.1.md](./bodies/v0.0.1.md) |
+
+## v0.6.7 — 2026-11-21
+
+- 新标签接入教程全量中英双语（正式 `__aaApplyLocale` 接口，auto 按系统语言解析、回退中文）；生成提示词保持原文。后端可见诊断（客户端接入结果、下载重试原因）按已保存语言输出，路径、命令与原始异常逐字保留。
+- 新增 Ctrl/Cmd+P 打印快捷键与统一的打印失败/取消双语反馈（原始 failureReason 进详情，同页面单飞，无静默打印）。
+- 修复新标签慢导航窗口内主题/语言同步脚本可能注入外站的竞态（执行时精确校验页面地址）；冒烟测试在 en-US 区域 CI 下因向导断言超时的问题（测试实例固定简体中文）。
+- 新增 `test:newtab-i18n`、`test:app-i18n`、`test:main-diagnostics`（114 项）、`test:printing`（14 项）并接入 CI；本地 Windows、WSLg 真实 Linux renderer 与远程 CI 双平台通过。
+- MCP 工具保持 42 个，已有用户数据无需迁移；多物理显示器跨屏、真实打印输出、读屏完整流程与安装向导 GUI 未实测。
 
 ## v0.6.6 — 2026-11-20
 
