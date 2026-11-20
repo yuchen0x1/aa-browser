@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import Module, { createRequire } from 'node:module'
 import { EventEmitter } from 'node:events'
 import { spawn } from 'node:child_process'
+import { BOUNDS_TOLERANCE, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, fitWindowToDisplay } from './display-fit.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const require = createRequire(import.meta.url)
@@ -187,7 +188,13 @@ if (!process.versions.electron) {
       const dpr = await ui('window.devicePixelRatio')
       assert.ok(Math.abs(dpr - displayScale) < 0.02, `devicePixelRatio ${dpr} should match forced scale ${displayScale}`)
       const viewport = await ui('({width: innerWidth, height: innerHeight, minWidth: document.documentElement.scrollWidth})')
-      assert.ok(viewport.width >= 960, `renderer viewport too narrow at ${displayScale}: ${JSON.stringify(viewport)}`)
+      // Even on a small screen the app retains its minimum window. Only allow
+      // native frame rounding (observed as 959 CSS px at forced 2x on Windows),
+      // never lower the renderer's minimum to the display work area.
+      const contentBounds = currentWindow.getContentBounds()
+      assert.ok(viewport.width >= MIN_WINDOW_WIDTH - BOUNDS_TOLERANCE, `renderer viewport too narrow at ${displayScale}: ${JSON.stringify({ viewport, contentBounds })}`)
+      assert.ok(Math.abs(viewport.width - contentBounds.width) <= BOUNDS_TOLERANCE, `renderer must fill the native content width: ${JSON.stringify({ viewport, contentBounds })}`)
+      assert.ok(viewport.minWidth <= viewport.width + 1, `renderer overflows horizontally: ${JSON.stringify(viewport)}`)
       await click('#btn-settings')
       assert.equal(await ui('document.querySelector("#settings-modal").hidden'), false)
       const navState = await ui('({width: innerWidth, display: getComputedStyle(document.querySelector(".settings-nav")).display})')
@@ -196,24 +203,31 @@ if (!process.versions.electron) {
       pass(`renderer layout remains usable at ${Math.round(displayScale * 100)}% device scale`)
 
       const originalBounds = currentWindow.getBounds()
+      const placements = []
       for (const [index, display] of displays.entries()) {
         const area = display.workArea
-        const width = Math.min(originalBounds.width, area.width)
-        const height = Math.min(originalBounds.height, area.height)
-        currentWindow.setBounds({ x: area.x + Math.min(24, area.width - width), y: area.y + Math.min(24, area.height - height), width, height })
+        const { fits, ...target } = fitWindowToDisplay(originalBounds, area)
+        currentWindow.setBounds(target)
         await pause(100)
         const bounds = currentWindow.getBounds()
-        assert.ok(bounds.x >= area.x && bounds.y >= area.y, `window origin outside display ${index}: ${JSON.stringify({ bounds, area })}`)
-        assert.ok(bounds.x + bounds.width <= area.x + area.width && bounds.y + bounds.height <= area.y + area.height, `window exceeds display ${index} work area: ${JSON.stringify({ bounds, area })}`)
+        const details = JSON.stringify({ bounds, area, target })
+        assert.ok(bounds.x >= area.x - BOUNDS_TOLERANCE && bounds.y >= area.y - BOUNDS_TOLERANCE && bounds.x < area.x + area.width && bounds.y < area.y + area.height, `window origin outside display ${index}: ${details}`)
+        assert.ok(Math.abs(bounds.width - target.width) <= BOUNDS_TOLERANCE && Math.abs(bounds.height - target.height) <= BOUNDS_TOLERANCE, `window size differs from requested minimum-constrained bounds on display ${index}: ${details}`)
+        if (fits) {
+          assert.ok(bounds.x + bounds.width <= area.x + area.width + BOUNDS_TOLERANCE && bounds.y + bounds.height <= area.y + area.height + BOUNDS_TOLERANCE, `window exceeds display ${index} work area: ${details}`)
+        } else {
+          console.log(`[display-matrix] display ${index} work area ${area.width}×${area.height} cannot contain the ${MIN_WINDOW_WIDTH}×${MIN_WINDOW_HEIGHT} minimum window; origin and minimum size verified, full containment not possible`)
+        }
+        placements.push({ display: index, area, target, bounds, containment: fits ? 'verified' : 'constrained' })
       }
       currentWindow.setBounds(originalBounds)
       if (displays.length < 2) console.log('[display-matrix] multiple physical displays unavailable; single-display placement verified, multi-display iteration skipped')
-      else pass(`window placement remains within all ${displays.length} display work areas`)
-      if (displays.length < 2) pass('window placement remains within the available display work area')
+      const constrained = placements.filter((placement) => placement.containment === 'constrained').length
+      pass(`window placement verified on ${displays.length} display(s): ${displays.length - constrained} contained, ${constrained} below minimum window size`)
       ws.close()
       await new Promise((resolve) => server.close(resolve))
       await new Promise((resolve) => { app.once('will-quit', resolve); app.quit() })
-      fs.writeFileSync(path.join(runDir, 'result.json'), JSON.stringify({ status: 'PASS', scale: displayScale, devicePixelRatio: dpr, displays: displays.map((display) => ({ bounds: display.bounds, workArea: display.workArea, scaleFactor: display.scaleFactor })), checks: results }, null, 2))
+      fs.writeFileSync(path.join(runDir, 'result.json'), JSON.stringify({ status: 'PASS', scale: displayScale, devicePixelRatio: dpr, viewport, contentBounds, placements, displays: displays.map((display) => ({ bounds: display.bounds, workArea: display.workArea, scaleFactor: display.scaleFactor })), checks: results }, null, 2))
       console.log(`PASS: display matrix at ${Math.round(displayScale * 100)}%`)
       return
     }

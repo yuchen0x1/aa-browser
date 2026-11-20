@@ -21,7 +21,7 @@ python -m http.server 4321 --directory site
 ```text
 site/
 ├── index.html            落地页（单页 8 个区块）
-├── tools.html            34 个 MCP 工具手册（搜索 + 分类过滤）
+├── tools.html            42 个 MCP 工具手册（搜索 + 分类过滤）
 ├── 404.html              自定义 404
 ├── assets/
 │   ├── site.css          设计系统与全部布局
@@ -69,7 +69,7 @@ error_page 404 /404.html;
 
 - `index.html`：hero 徽章 `v0.2.0`、统计数字、下载卡文件名（`aa-browser-setup-0.2.0.exe` /
   `aa-browser-0.2.0-linux-x86_64.AppImage`）、发行条日期与链接、JSON-LD `softwareVersion`。
-- `tools.html`：工具总数（当前 34）与新增工具条目；侧栏与筛选器里的分类计数。
+- `tools.html`：工具总数（当前 42）与新增工具条目；侧栏与筛选器里的分类计数。
 - CSS / JS 引用上的 `?v=0.2.0`：与产品版本一同递增，避免静态托管缓存旧样式。
 - 本文件与 `sitemap.xml` 的 `lastmod`。
 
@@ -87,7 +87,7 @@ error_page 404 /404.html;
 
 在当前版本上检查过：
 
-- 34 个工具条目与 `src/main` 中的 MCP 工具名一一对应；分类计数 4 / 9 / 12 / 6 / 3。
+- 42 个工具条目与 `src/main` 中的 MCP 工具名一一对应；分类计数 5 / 9 / 19 / 6 / 3。
 - 本地链接、跨页锚点、`<symbol>` 引用静态检查 0 问题（3 个页面、85 个 id、13 个外链）。
 - 390 / 768 / 900 / 1440 宽度下无横向溢出；导航在 900 及以下折叠为菜单。
 - 演示切换、工具分类过滤 + 搜索、复制按钮（含真实点击）与 404 页面均正常；控制台无报错。

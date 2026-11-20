@@ -137,7 +137,7 @@ Eine geschriebene Konfiguration ist **keine** funktionierende Verbindung. Verifi
 
 ## MCP-Tools
 
-**34 Tools** in fünf Gruppen: Navigation & Snapshot (4), Interaktion (9), Lesen & Status (12), Netzwerk & Mock (6), Diagnose & Tabs (3). Tool-Namen im Client können das Präfix `mcp__aa-browser__` tragen.
+**42 Tools** in fünf Gruppen: Navigation & Snapshot (5), Interaktion (9), Lesen & Status (19), Netzwerk & Mock (6), Diagnose & Tabs (3). Tool-Namen im Client können das Präfix `mcp__aa-browser__` tragen.
 
 | Gruppe | Tools |
 | --- | --- |
@@ -192,7 +192,7 @@ Die ausführliche Dokumentation ist derzeit auf Chinesisch verfügbar:
 | [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | Installation und Verifikation des DeepSeek-Harness-Plugins |
 | [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | Release-Nachweise, Regressionsprotokolle und Wartungsgrenzen |
 | [Versionshinweise](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | Änderungsverlauf je Version |
-| [site/tools.html](../../../site/tools.html) | Vollständiges Handbuch der 34 Tools (lokal öffnen, kein Deployment nötig) |
+| [site/tools.html](../../../site/tools.html) | Vollständiges Handbuch der 42 Tools (lokal öffnen, kein Deployment nötig) |
 
 ## Mitwirken und Lizenz
 

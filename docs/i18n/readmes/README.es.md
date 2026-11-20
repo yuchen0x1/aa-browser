@@ -137,7 +137,7 @@ Una configuración escrita **no** es una conexión funcional. Verifícala con `n
 
 ## Herramientas MCP
 
-**34 herramientas** en cinco grupos: navegación y snapshot (4), interacción (9), lectura y estado (12), red y Mock (6), diagnóstico y pestañas (3). Los nombres de herramienta en el cliente pueden llevar el prefijo `mcp__aa-browser__`.
+**42 herramientas** en cinco grupos: navegación y snapshot (5), interacción (9), lectura y estado (19), red y Mock (6), diagnóstico y pestañas (3). Los nombres de herramienta en el cliente pueden llevar el prefijo `mcp__aa-browser__`.
 
 | Grupo | Herramientas |
 | --- | --- |
@@ -192,7 +192,7 @@ La documentación detallada está actualmente en chino:
 | [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | Instalación y verificación del plugin de DeepSeek Harness |
 | [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | Evidencia de versiones, registros de regresión y límites de mantenimiento |
 | [release notes](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | Historial de cambios por versión |
-| [site/tools.html](../../../site/tools.html) | Manual completo de las 34 herramientas (ábrelo en local, sin despliegue) |
+| [site/tools.html](../../../site/tools.html) | Manual completo de las 42 herramientas (ábrelo en local, sin despliegue) |
 
 ## Contribuir y licencia
 

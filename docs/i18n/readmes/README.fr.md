@@ -137,7 +137,7 @@ Une configuration écrite **n'est pas** une connexion qui fonctionne. Vérifiez 
 
 ## Outils MCP
 
-**34 outils** en cinq groupes : navigation et snapshot (4), interaction (9), lecture et état (12), réseau et Mock (6), diagnostic et onglets (3). Les noms d'outils côté client peuvent porter le préfixe `mcp__aa-browser__`.
+**42 outils** en cinq groupes : navigation et snapshot (5), interaction (9), lecture et état (19), réseau et Mock (6), diagnostic et onglets (3). Les noms d'outils côté client peuvent porter le préfixe `mcp__aa-browser__`.
 
 | Groupe | Outils |
 | --- | --- |
@@ -192,7 +192,7 @@ La documentation détaillée est actuellement en chinois :
 | [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | Installation et vérification du plugin DeepSeek Harness |
 | [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | Preuves de publication, registres de régression et limites de maintenance |
 | [release notes](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | Historique des changements par version |
-| [site/tools.html](../../../site/tools.html) | Manuel complet des 34 outils (à ouvrir en local, aucun déploiement nécessaire) |
+| [site/tools.html](../../../site/tools.html) | Manuel complet des 42 outils (à ouvrir en local, aucun déploiement nécessaire) |
 
 ## Contribution et licence
 

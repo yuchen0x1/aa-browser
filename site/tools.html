@@ -6,15 +6,15 @@
     <title>MCP 工具手册 — Aa Browser</title>
     <meta
       name="description"
-      content="Aa Browser 的 34 个 MCP 工具完整参考：导航与快照、交互、读取与状态、网络与 Mock、诊断与标签。含参数示例与返回说明。"
+      content="Aa Browser 的 42 个 MCP 工具完整参考：导航与快照、交互、读取与状态、网络与 Mock、诊断与标签。含参数示例与返回说明。"
     />
     <meta name="theme-color" content="#0b0f11" />
     <meta name="color-scheme" content="dark" />
     <link rel="icon" href="assets/icon.png" type="image/png" />
-    <link rel="stylesheet" href="assets/site.css?v=0.2.0" />
+    <link rel="stylesheet" href="assets/site.css?v=0.6.5" />
     <meta property="og:type" content="article" />
     <meta property="og:title" content="MCP 工具手册 — Aa Browser" />
-    <meta property="og:description" content="34 个 MCP 工具的参数、返回与示例，一次说清。" />
+    <meta property="og:description" content="42 个 MCP 工具的参数、返回与示例，一次说清。" />
     <meta property="og:image" content="assets/og-image.png" />
     <meta name="twitter:card" content="summary_large_image" />
   </head>
@@ -77,7 +77,7 @@
           <div class="tools-hero__head">
             <div>
               <span class="eyebrow">MCP Reference</span>
-              <h1 class="display">34 个工具，<br />一次说清。</h1>
+              <h1 class="display">42 个工具，<br />一次说清。</h1>
             </div>
             <div class="tools-hero__meta">
               <span class="chip chip--mint"><span class="chip__dot"></span>v0.2.0</span>
@@ -99,10 +99,10 @@
             <kbd>/</kbd>
           </label>
           <div class="filters" role="group" aria-label="按类别筛选">
-            <button class="filter" type="button" data-filter="all" aria-pressed="true">全部 <span>34</span></button>
-            <button class="filter" type="button" data-filter="nav" aria-pressed="false">导航 <span>4</span></button>
+            <button class="filter" type="button" data-filter="all" aria-pressed="true">全部 <span>42</span></button>
+            <button class="filter" type="button" data-filter="nav" aria-pressed="false">导航 <span>5</span></button>
             <button class="filter" type="button" data-filter="interact" aria-pressed="false">交互 <span>9</span></button>
-            <button class="filter" type="button" data-filter="read" aria-pressed="false">读取 <span>12</span></button>
+            <button class="filter" type="button" data-filter="read" aria-pressed="false">读取 <span>19</span></button>
             <button class="filter" type="button" data-filter="network" aria-pressed="false">网络 <span>6</span></button>
             <button class="filter" type="button" data-filter="diag" aria-pressed="false">诊断 <span>3</span></button>
           </div>
@@ -112,9 +112,9 @@
       <div class="shell tools-layout">
         <aside class="tools-side" aria-label="类别导航">
           <span class="tools-side__title">类别</span>
-          <a href="#nav">导航与快照 <span>4</span></a>
+          <a href="#nav">导航与快照 <span>5</span></a>
           <a href="#interact">交互 <span>9</span></a>
-          <a href="#read">读取与状态 <span>12</span></a>
+          <a href="#read">读取与状态 <span>19</span></a>
           <a href="#network">网络与 Mock <span>6</span></a>
           <a href="#diag">诊断与标签 <span>3</span></a>
 
@@ -134,7 +134,7 @@
 
         <div class="tools-main">
           <div class="tools-status" aria-live="polite">
-            <span>显示 <b id="toolCount">34</b> 个工具</span>
+            <span>显示 <b id="toolCount">42</b> 个工具</span>
             <span aria-hidden="true">·</span>
             <span id="toolScope">全部分类</span>
           </div>
@@ -188,6 +188,18 @@
               </div>
               <p>历史前进一页，返回增量快照。</p>
               <div class="tool__example">{ }</div>
+            </article>
+
+            <article class="tool" id="tool-reload" data-category="nav" data-search="browser_reload 刷新 缓存 标签页">
+              <div class="tool__head">
+                <span class="tool__name">browser_reload</span>
+                <span class="tool__cat">NAV</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_reload" aria-label="复制工具名 browser_reload">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>刷新当前或指定标签页；<code>hard: true</code> 绕过缓存。</p>
+              <div class="tool__example">{ <span class="j-key">"hard"</span>: <span class="j-bool">true</span> }</div>
             </article>
 
             <div class="tools-section-anchor" id="interact"></div>
@@ -398,18 +410,6 @@
               <div class="tool__example">{ <span class="j-key">"ref"</span>: <span class="j-str">"e12"</span> }</div>
             </article>
 
-            <article class="tool" id="tool-resize" data-category="read" data-search="browser_resize 视口 尺寸 响应式">
-              <div class="tool__head">
-                <span class="tool__name">browser_resize</span>
-                <span class="tool__cat">READ</span>
-                <button class="copy-btn tool__copy" type="button" data-copy="browser_resize" aria-label="复制工具名 browser_resize">
-                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
-                </button>
-              </div>
-              <p>调整视口尺寸，用于响应式测试；随后重新快照即可看到适配后的结构。</p>
-              <div class="tool__example">{ <span class="j-key">"width"</span>: <span class="j-num">390</span>, <span class="j-key">"height"</span>: <span class="j-num">844</span> }</div>
-            </article>
-
             <article class="tool" id="tool-cookies" data-category="read" data-search="browser_cookies cookie 登录态 读写 清除">
               <div class="tool__head">
                 <span class="tool__name">browser_cookies</span>
@@ -444,6 +444,102 @@
               </div>
               <p>下载捕获列表：下载被静默保存到 <code>~/.aabrowser/downloads/</code>，没有保存对话框。</p>
               <div class="tool__example">{ <span class="j-key">"limit"</span>: <span class="j-num">10</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-dialog-respond" data-category="read" data-search="browser_dialog_respond confirm prompt 弹窗 应答">
+              <div class="tool__head">
+                <span class="tool__name">browser_dialog_respond</span>
+                <span class="tool__cat">READ</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_dialog_respond" aria-label="复制工具名 browser_dialog_respond">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>为下一次或持续的 confirm / prompt 预设返回值，便于测试需要确认或文本输入的流程。</p>
+              <div class="tool__example">{ <span class="j-key">"confirm"</span>: <span class="j-bool">true</span>, <span class="j-key">"once"</span>: <span class="j-bool">true</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-assert" data-category="read" data-search="browser_assert 断言 URL 文本 选择器 网络">
+              <div class="tool__head">
+                <span class="tool__name">browser_assert</span>
+                <span class="tool__cat">READ</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_assert" aria-label="复制工具名 browser_assert">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>断言 URL、标题、文本、选择器、表单值、控制台或网络请求；不满足时返回期望值与实际结果。</p>
+              <div class="tool__example">{ <span class="j-key">"checks"</span>: [{ <span class="j-key">"kind"</span>: <span class="j-str">"title"</span>, <span class="j-key">"expected"</span>: <span class="j-str">"Dashboard"</span> }] }</div>
+            </article>
+
+            <article class="tool" id="tool-frame" data-category="read" data-search="browser_frame iframe 跨域 frame 支付 OAuth">
+              <div class="tool__head">
+                <span class="tool__name">browser_frame</span>
+                <span class="tool__cat">READ</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_frame" aria-label="复制工具名 browser_frame">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>列出 frame，并在其上下文读取、查找元素、执行表达式或交互；支持跨域 iframe。</p>
+              <div class="tool__example">{ <span class="j-key">"action"</span>: <span class="j-str">"list"</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-visual-diff" data-category="read" data-search="browser_visual_diff 视觉 回归 像素 基线">
+              <div class="tool__head">
+                <span class="tool__name">browser_visual_diff</span>
+                <span class="tool__cat">READ</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_visual_diff" aria-label="复制工具名 browser_visual_diff">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>保存页面视觉基线并逐像素比较；生成差异图，变化超过阈值时可作为失败断言。</p>
+              <div class="tool__example">{ <span class="j-key">"action"</span>: <span class="j-str">"compare"</span>, <span class="j-key">"name"</span>: <span class="j-str">"settings"</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-contrast-audit" data-category="read" data-search="browser_contrast_audit WCAG AA AAA 对比度 可读性">
+              <div class="tool__head">
+                <span class="tool__name">browser_contrast_audit</span>
+                <span class="tool__cat">READ</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_contrast_audit" aria-label="复制工具名 browser_contrast_audit">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>审计可见文本的 WCAG AA / AAA 对比度，列出未达标元素与比值。</p>
+              <div class="tool__example">{ <span class="j-key">"level"</span>: <span class="j-str">"AA"</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-viewport-matrix" data-category="read" data-search="browser_viewport_matrix 响应式 多视口 DPI 溢出">
+              <div class="tool__head">
+                <span class="tool__name">browser_viewport_matrix</span>
+                <span class="tool__cat">READ</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_viewport_matrix" aria-label="复制工具名 browser_viewport_matrix">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>一次在多个视口尺寸与 DPI 下截图，报告每个视口的尺寸和横向溢出。</p>
+              <div class="tool__example">{ <span class="j-key">"preset"</span>: <span class="j-str">"mobile"</span>, <span class="j-key">"includeImages"</span>: <span class="j-bool">true</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-evidence" data-category="read" data-search="browser_evidence 证据 sha256 TTL 配额 截图 HAR PDF">
+              <div class="tool__head">
+                <span class="tool__name">browser_evidence</span>
+                <span class="tool__cat">READ</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_evidence" aria-label="复制工具名 browser_evidence">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>管理截图、HAR、PDF 与视觉基线证据；可查看 SHA-256、清理到期文件和校验哈希。</p>
+              <div class="tool__example">{ <span class="j-key">"action"</span>: <span class="j-str">"list"</span> }</div>
+            </article>
+
+            <article class="tool" id="tool-console" data-category="read" data-search="browser_console 控制台 日志 错误">
+              <div class="tool__head">
+                <span class="tool__name">browser_console</span>
+                <span class="tool__cat">READ</span>
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_console" aria-label="复制工具名 browser_console">
+                  <svg aria-hidden="true"><use href="#i-copy" /></svg>
+                </button>
+              </div>
+              <p>读取页面控制台消息，可按 error / warning / info 过滤。</p>
+              <div class="tool__example">{ <span class="j-key">"level"</span>: <span class="j-str">"error"</span>, <span class="j-key">"limit"</span>: <span class="j-num">20</span> }</div>
             </article>
 
             <div class="tools-section-anchor" id="network"></div>
@@ -534,16 +630,16 @@
               <div class="tool__example">{ <span class="j-key">"slowest"</span>: <span class="j-num">5</span> }</div>
             </article>
 
-            <article class="tool" id="tool-console" data-category="diag" data-search="browser_console 控制台 日志 错误">
+            <article class="tool" id="tool-resize" data-category="diag" data-search="browser_resize 视口 尺寸 响应式">
               <div class="tool__head">
-                <span class="tool__name">browser_console</span>
+                <span class="tool__name">browser_resize</span>
                 <span class="tool__cat">DIAG</span>
-                <button class="copy-btn tool__copy" type="button" data-copy="browser_console" aria-label="复制工具名 browser_console">
+                <button class="copy-btn tool__copy" type="button" data-copy="browser_resize" aria-label="复制工具名 browser_resize">
                   <svg aria-hidden="true"><use href="#i-copy" /></svg>
                 </button>
               </div>
-              <p>读取页面控制台消息，可按 error / warning / info 过滤。</p>
-              <div class="tool__example">{ <span class="j-key">"level"</span>: <span class="j-str">"error"</span>, <span class="j-key">"limit"</span>: <span class="j-num">20</span> }</div>
+              <p>调整视口尺寸，用于响应式测试；随后重新快照即可看到适配后的结构。</p>
+              <div class="tool__example">{ <span class="j-key">"width"</span>: <span class="j-num">390</span>, <span class="j-key">"height"</span>: <span class="j-num">844</span> }</div>
             </article>
 
             <article class="tool" id="tool-tabs" data-category="diag" data-search="browser_tabs 标签页 列表 新建 切换 关闭">

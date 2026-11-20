@@ -137,7 +137,7 @@ A written config is **not** a working connection. Verify with `node install.mjs 
 
 ## MCP tools
 
-**34 tools** in five groups: navigation & snapshot (4), interaction (9), read & state (12), network & Mock (6), diagnostics & tabs (3). Client tool names may carry a `mcp__aa-browser__` prefix.
+**42 tools** in five groups: navigation & snapshot (5), interaction (9), read & state (19), network & Mock (6), diagnostics & tabs (3). Client tool names may carry a `mcp__aa-browser__` prefix.
 
 | Group | Tools |
 | --- | --- |
@@ -192,7 +192,7 @@ The detailed documentation is currently in Chinese:
 | [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | DeepSeek Harness plugin install and verification |
 | [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | Release evidence, regression records and maintenance boundaries |
 | [release notes](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | Change history per version |
-| [site/tools.html](../../../site/tools.html) | Complete 34-tool manual (open locally, no deploy needed) |
+| [site/tools.html](../../../site/tools.html) | Complete 42-tool manual (open locally, no deploy needed) |
 
 ## Contributing and license
 

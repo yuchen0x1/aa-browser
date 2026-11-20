@@ -137,7 +137,7 @@ npm start          # launch the built app
 
 ## MCP ツール
 
-5 つのグループに **34 個のツール**：ナビゲーションとスナップショット（4）、操作（9）、読み取りと状態（12）、ネットワークと Mock（6）、診断とタブ（3）。クライアント側のツール名には `mcp__aa-browser__` プレフィックスが付く場合があります。
+5 つのグループに **42 個のツール**：ナビゲーションとスナップショット（5）、操作（9）、読み取りと状態（19）、ネットワークと Mock（6）、診断とタブ（3）。クライアント側のツール名には `mcp__aa-browser__` プレフィックスが付く場合があります。
 
 | グループ | ツール |
 | --- | --- |
@@ -192,7 +192,7 @@ npm start          # launch the built app
 | [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | DeepSeek Harness プラグインのインストールと検証 |
 | [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | リリース証跡、回帰記録、保守の境界 |
 | [リリースノート](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | バージョンごとの変更履歴 |
-| [site/tools.html](../../../site/tools.html) | 34 ツールの完全なマニュアル（ローカルで開けばよく、デプロイ不要） |
+| [site/tools.html](../../../site/tools.html) | 42 ツールの完全なマニュアル（ローカルで開けばよく、デプロイ不要） |
 
 ## コントリビューションとライセンス
 

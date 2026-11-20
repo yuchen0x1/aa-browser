@@ -137,7 +137,7 @@ npm start          # launch the built app
 
 ## MCP 도구
 
-다섯 그룹에 걸쳐 **34개 도구**: 탐색과 스냅샷(4), 상호작용(9), 읽기와 상태(12), 네트워크와 Mock(6), 진단과 탭(3). 클라이언트의 도구 이름에는 `mcp__aa-browser__` 접두사가 붙을 수 있습니다.
+다섯 그룹에 걸쳐 **42개 도구**: 탐색과 스냅샷(5), 상호작용(9), 읽기와 상태(19), 네트워크와 Mock(6), 진단과 탭(3). 클라이언트의 도구 이름에는 `mcp__aa-browser__` 접두사가 붙을 수 있습니다.
 
 | 그룹 | 도구 |
 | --- | --- |
@@ -192,7 +192,7 @@ npm start          # launch the built app
 | [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | DeepSeek Harness 플러그인 설치와 검증 |
 | [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | 릴리스 증거, 회귀 기록, 유지 관리 경계 |
 | [릴리스 노트](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | 버전별 변경 이력 |
-| [site/tools.html](../../../site/tools.html) | 34개 도구 전체 설명서(로컬에서 열면 되고 배포는 필요 없음) |
+| [site/tools.html](../../../site/tools.html) | 42개 도구 전체 설명서(로컬에서 열면 되고 배포는 필요 없음) |
 
 ## 기여와 라이선스
 

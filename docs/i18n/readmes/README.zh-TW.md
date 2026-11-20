@@ -137,7 +137,7 @@ npm start          # launch the built app
 
 ## MCP 工具
 
-共 **34 個工具**，分為五組：導航與快照（4）、互動（9）、讀取與狀態（12）、網路與 Mock（6）、診斷與分頁（3）。用戶端的工具名稱可能帶有 `mcp__aa-browser__` 前綴。
+共 **42 個工具**，分為五組：導航與快照（5）、互動（9）、讀取與狀態（19）、網路與 Mock（6）、診斷與分頁（3）。用戶端的工具名稱可能帶有 `mcp__aa-browser__` 前綴。
 
 | 分組 | 工具 |
 | --- | --- |
@@ -192,7 +192,7 @@ npm start          # launch the built app
 | [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | DeepSeek Harness 外掛安裝與驗證 |
 | [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | 發行證據、回歸紀錄與維護邊界 |
 | [版本說明](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | 各版本的變更歷史 |
-| [site/tools.html](../../../site/tools.html) | 完整的 34 工具手冊（本機開啟，無須部署） |
+| [site/tools.html](../../../site/tools.html) | 完整的 42 工具手冊（本機開啟，無須部署） |
 
 ## 參與貢獻與授權
 

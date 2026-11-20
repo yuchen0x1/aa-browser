@@ -137,7 +137,7 @@ Uma configuração gravada **não** é uma conexão funcionando. Verifique com `
 
 ## Ferramentas MCP
 
-**34 ferramentas** em cinco grupos: navegação e snapshot (4), interação (9), leitura e estado (12), rede e Mock (6), diagnóstico e abas (3). Os nomes de ferramenta no cliente podem trazer o prefixo `mcp__aa-browser__`.
+**42 ferramentas** em cinco grupos: navegação e snapshot (5), interação (9), leitura e estado (19), rede e Mock (6), diagnóstico e abas (3). Os nomes de ferramenta no cliente podem trazer o prefixo `mcp__aa-browser__`.
 
 | Grupo | Ferramentas |
 | --- | --- |
@@ -192,7 +192,7 @@ A documentação detalhada está atualmente em chinês:
 | [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | Instalação e verificação do plugin do DeepSeek Harness |
 | [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | Evidências de release, registros de regressão e limites de manutenção |
 | [release notes](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | Histórico de mudanças por versão |
-| [site/tools.html](../../../site/tools.html) | Manual completo das 34 ferramentas (abra localmente, sem deploy) |
+| [site/tools.html](../../../site/tools.html) | Manual completo das 42 ferramentas (abra localmente, sem deploy) |
 
 ## Contribuição e licença
 
