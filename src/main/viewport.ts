@@ -215,6 +215,8 @@ export async function captureViewportMatrix(
     // 关键：一定要先清除覆盖（并吞掉清理过程中的异常），再分离本次附加的调试器。
     try {
       await dbg.sendCommand('Emulation.clearDeviceMetricsOverride')
+      // Linux 上 renderer 应用“恢复原尺寸”比 CDP 响应略慢，留一帧避免后续 evaluate 读到旧尺寸。
+      await delay(150)
     } catch {
       /* 调试器可能已分离或页面已销毁 */
     }

@@ -822,7 +822,14 @@ async function main() {
         check('多视口矩阵返回全部视口', !matrix.isError && ['narrow', 'tablet', 'hidpi'].every((n) => matrixText.includes(n)), matrixText.slice(0, 500))
         check('矩阵按 DPI 输出真实像素尺寸', /640×960/.test(matrixText) && /800×600/.test(matrixText), matrixText.slice(0, 700))
         check('矩阵报告小屏横向溢出', matrixText.includes('横向溢出'), matrixText.slice(0, 700))
-        const widthAfter = Number((await mcp.call('browser_evaluate', { expression: 'window.innerWidth' })).content?.[0]?.text ?? '0')
+        // Linux 上 renderer 恢复视口可能比 CDP clear 命令稍晚，给一个短轮询窗口
+        let widthAfter = 0
+        const restoreDeadline = Date.now() + 3000
+        while (Date.now() < restoreDeadline) {
+          widthAfter = Number((await mcp.call('browser_evaluate', { expression: 'window.innerWidth' })).content?.[0]?.text ?? '0')
+          if (widthAfter === widthBefore) break
+          await sleep(150)
+        }
         check('矩阵结束后设备指标覆盖已清除', widthAfter === widthBefore, `before=${widthBefore} after=${widthAfter}`)
 
         const progressBefore = mcp.progress.length
