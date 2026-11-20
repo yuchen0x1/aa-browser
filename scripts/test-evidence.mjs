@@ -249,8 +249,12 @@ console.log('  PASS: legacy records are readable without trust-on-first-use dele
   const entry = f.manager.record(file, 'screenshot', { ttlMs: 1000 })
   entry.ts = Date.now() - 2 * 3600 * 1000
   const invalid = [null, false, 1, 'entry', [], { file }]
+  // Windows CI checks out on D: but creates fixtures on C:. path.relative
+  // across drives returns an absolute path, which is a valid registry entry.
+  const relativeFile = path.join('relative', 'user.png')
+  assert.equal(path.isAbsolute(relativeFile), false, 'invalid-path fixture must actually be relative')
   for (const [key, value] of [
-    ['file', path.relative(process.cwd(), file)], ['file', `${file}\0`],
+    ['file', relativeFile], ['file', `${file}\0`],
     ['kind', 'unknown'], ['kind', 'constructor'], ['kind', '__proto__'],
     ['bytes', -1], ['bytes', 1.5], ['bytes', '8'], ['bytes', Number.MAX_SAFE_INTEGER + 1],
     ['hash', ''], ['hash', 'not-a-sha256'], ['hash', null],
