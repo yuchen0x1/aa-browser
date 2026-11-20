@@ -1,4 +1,5 @@
 import type { WebContents } from 'electron'
+import { jsLiteral } from '@snapshot/scripts'
 
 /**
  * 跨域 iframe 支持。
@@ -98,9 +99,14 @@ export function resolveFrame(wc: WebContents, id: string): Electron.WebFrameMain
 
 /** 在指定帧内执行脚本（跨域也可用，因为走的是该帧自己的上下文） */
 export async function frameEvaluate(wc: WebContents, frameId: string, expression: string): Promise<unknown> {
+  // evaluate 是显式执行表达式的工具操作；固定动作不经由这个入口。
+  return runFrameScript(wc, frameId, `(() => { return (${expression}) })()`)
+}
+
+async function runFrameScript(wc: WebContents, frameId: string, script: string): Promise<unknown> {
   const frame = resolveFrame(wc, frameId)
   if (!frame) throw new Error(`找不到 iframe: ${frameId}（先用 browser_frame action=list 查看）`)
-  return await frame.executeJavaScript(`(() => { return (${expression}) })()`, true)
+  return await frame.executeJavaScript(script, true)
 }
 
 /** 生成元素选择器的页面内片段：优先 id / data-testid / name，退回结构路径 */
@@ -152,7 +158,7 @@ export interface FrameElement {
 
 /** 列出帧内可交互元素（带可用选择器），让 AI 知道能点什么 */
 export async function frameElements(wc: WebContents, frameId: string, limit = 80): Promise<FrameElement[]> {
-  const list = await frameEvaluate(
+  const list = await runFrameScript(
     wc,
     frameId,
     `(() => {
@@ -176,7 +182,7 @@ export async function frameElements(wc: WebContents, frameId: string, limit = 80
 
 /** 帧内文本（innerText），用于读取跨域 iframe 内容 */
 export async function frameText(wc: WebContents, frameId: string, maxChars = 4000): Promise<{ url: string; text: string; truncated: boolean }> {
-  return (await frameEvaluate(
+  return (await runFrameScript(
     wc,
     frameId,
     `(() => {
@@ -189,13 +195,13 @@ export async function frameText(wc: WebContents, frameId: string, maxChars = 400
 
 /** 帧内点击（合成 click，跨域可用；不受顶层命中测试影响） */
 export async function frameClick(wc: WebContents, frameId: string, selector: string, index = 0): Promise<{ clicked: string }> {
-  const result = (await frameEvaluate(
+  const result = (await runFrameScript(
     wc,
     frameId,
     `(() => {
       ${SELECTOR_HELPER}
       let nodes = [];
-      try { nodes = Array.prototype.slice.call(document.querySelectorAll(${JSON.stringify(selector)})) } catch (e) { return { ok: false, reason: 'invalid-selector' } }
+      try { nodes = Array.prototype.slice.call(document.querySelectorAll(${jsLiteral(selector)})) } catch (e) { return { ok: false, reason: 'invalid-selector' } }
       if (!nodes.length) return { ok: false, reason: 'not-found' };
       const el = nodes[${Math.max(0, Math.floor(index))}] || nodes[0];
       if (!el) return { ok: false, reason: 'index-out-of-range' };
@@ -218,15 +224,15 @@ export async function frameClick(wc: WebContents, frameId: string, selector: str
 
 /** 帧内输入：原生 setter + input/change 事件，兼容 React/Vue 受控组件 */
 export async function frameType(wc: WebContents, frameId: string, selector: string, text: string): Promise<{ typed: string }> {
-  const result = (await frameEvaluate(
+  const result = (await runFrameScript(
     wc,
     frameId,
     `(() => {
       ${SELECTOR_HELPER}
       let el = null;
-      try { el = document.querySelector(${JSON.stringify(selector)}) } catch (e) { return { ok: false, reason: 'invalid-selector' } }
+      try { el = document.querySelector(${jsLiteral(selector)}) } catch (e) { return { ok: false, reason: 'invalid-selector' } }
       if (!el) return { ok: false, reason: 'not-found' };
-      const value = ${JSON.stringify(text)};
+      const value = ${jsLiteral(text)};
       el.focus();
       const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
       const desc = Object.getOwnPropertyDescriptor(proto, 'value');
@@ -247,16 +253,16 @@ export async function frameSelect(
   selector: string,
   opts: { value?: string; label?: string }
 ): Promise<{ selected: string }> {
-  const result = (await frameEvaluate(
+  const result = (await runFrameScript(
     wc,
     frameId,
     `(() => {
       ${SELECTOR_HELPER}
       let el = null;
-      try { el = document.querySelector(${JSON.stringify(selector)}) } catch (e) { return { ok: false, reason: 'invalid-selector' } }
+      try { el = document.querySelector(${jsLiteral(selector)}) } catch (e) { return { ok: false, reason: 'invalid-selector' } }
       if (!el) return { ok: false, reason: 'not-found' };
-      const wantLabel = ${JSON.stringify(opts.label ?? null)};
-      const wantValue = ${JSON.stringify(opts.value ?? null)};
+      const wantLabel = ${jsLiteral(opts.label ?? null)};
+      const wantValue = ${jsLiteral(opts.value ?? null)};
       const options = Array.prototype.slice.call(el.options || []);
       const target = options.find((o) => wantLabel !== null && ((o.label || '') === wantLabel || (o.text || '').trim() === wantLabel))
         || options.find((o) => wantValue !== null && String(o.value) === String(wantValue));

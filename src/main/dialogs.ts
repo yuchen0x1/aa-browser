@@ -1,4 +1,5 @@
 import type { WebContents } from 'electron'
+import { jsLiteral } from '@snapshot/scripts'
 
 /**
  * 页面对话框守卫。
@@ -63,7 +64,7 @@ export interface DialogPolicy {
 
 /** 设定对话框策略；页面需已安装守卫，未安装时返回 false 由调用方提示 */
 export async function setDialogPolicy(wc: WebContents, policy: DialogPolicy): Promise<boolean> {
-  const payload = JSON.stringify({ confirm: policy.confirm, prompt: policy.prompt, once: policy.once !== false })
+  const payload = jsLiteral({ confirm: policy.confirm, prompt: policy.prompt, once: policy.once !== false })
   try {
     const ok = (await wc.executeJavaScript(
       `(() => { try { window.__aaDialogPolicy = ${payload}; return true } catch (e) { return false } })()`,

@@ -702,11 +702,26 @@ if (!process.versions.electron) {
     await until(() => webContents.getAllWebContents().filter((wc) => wc !== chrome).every((wc) => !wc.isLoading()), 'all pages settle before shutdown')
     assert.equal(errors.length, 0, errors.join('\n'))
     pass('chrome renderer reports no console errors')
+
+    const finalUrl = base + '/shutdown-final'
+    await ui(`window.aa.tabNew(${jsLiteral(finalUrl)})`)
+    await until(async () => (await state()).tabs.some((tab) => tab.active && tab.url === finalUrl), 'final shutdown tab')
+    const persistedBeforeClose = JSON.parse(fs.readFileSync(sessionFile, 'utf8'))
+    assert.equal(persistedBeforeClose.tabs.some((tab) => tab.url === finalUrl), false, 'shutdown fixture must observe the debounced save before close')
+    const beforeClose = await state()
+    const orderedUrls = [...new Set(beforeClose.tabs.filter((tab) => !tab.isolated && tab.url.startsWith(base + '/')).map((tab) => tab.url))]
+    const activeUrl = beforeClose.tabs.find((tab) => tab.active)?.url
+    assert.ok(orderedUrls.indexOf(activeUrl) > 0, 'shutdown fixture must have a non-first active tab')
+    await new Promise((resolve) => { app.once('will-quit', resolve); window.close() })
+    const saved = JSON.parse(fs.readFileSync(sessionFile, 'utf8'))
+    assert.deepEqual(saved.tabs.map((tab) => tab.url), orderedUrls)
+    assert.equal(saved.tabs[saved.activeIndex].url, activeUrl)
+    pass('closing the native window preserves tab order and active tab in the session record')
+
     fs.writeFileSync(path.join(runDir, 'result.json'), JSON.stringify({ status: 'PASS', checks: results, screenshot: process.env.AA_DESKTOP_SCREENSHOTS === '1' ? 'docs/screenshots/page-find-toolbar.png' : undefined }, null, 2))
     console.log(`PASS: all ${results.length} desktop checks; report ${path.join(runDir, 'result.json')}`)
     ws.close()
     server.close()
-    app.quit()
   } catch (error) {
     console.error('FAIL:', error)
     fs.writeFileSync(path.join(runDir, 'result.json'), JSON.stringify({ status: 'FAIL', checks: results, error: error.stack }, null, 2))

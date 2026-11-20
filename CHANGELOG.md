@@ -2,6 +2,13 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
+## v0.6.8 — 2026-11-21
+
+- 修复关闭原生窗口时会话文件被空标签覆盖的问题，保留普通标签顺序和活动标签。
+- 修复 MCP stdio 请求含 Unicode 行、段落分隔符时被误拆而超时的问题；响应也兼容逐行读取客户端。
+- 对话框策略和固定 iframe 动作复用脚本字面量编码，保持显式求值语义与 42 个 MCP 工具不变。用户数据无需迁移。
+- 增加真实 Electron 关窗和 Unicode 数据往返回归；正式发行资产以标签 CI 验证为准。
+
 ## v0.6.7 — 2026-11-21
 
 - 新标签接入教程全量中英双语，后端可见诊断（客户端接入结果、下载重试原因）按已保存语言输出；路径、命令与原始异常逐字保留，生成提示词保持原文。

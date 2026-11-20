@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-globalThis.__AA_BRIDGE_VERSION__ = "0.6.7";
+globalThis.__AA_BRIDGE_VERSION__ = "0.6.8";
 // \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -28,8 +28,6 @@ let node_os = require("node:os");
 node_os = __toESM(node_os, 1);
 let node_path = require("node:path");
 node_path = __toESM(node_path, 1);
-let node_readline = require("node:readline");
-node_readline = __toESM(node_readline, 1);
 let node_process = require("node:process");
 node_process = __toESM(node_process, 1);
 let node_child_process = require("node:child_process");
@@ -5293,6 +5291,7 @@ let ws = null;
 let nextCallId = 1;
 const pending = /* @__PURE__ */ new Map();
 const mcpToBridge = /* @__PURE__ */ new Map();
+const cancelledMcpRequests = /* @__PURE__ */ new Set();
 const bridgeToProgressToken = /* @__PURE__ */ new Map();
 function readConnection() {
 	try {
@@ -5553,7 +5552,15 @@ function startEagerConnect() {
 }
 startEagerConnect();
 async function callTool(name, args, progressToken) {
-	const socket = await getWs();
+	const mcpId = args?.__mcpId;
+	let socket;
+	try {
+		socket = await getWs();
+	} catch (error) {
+		if (mcpId !== void 0) cancelledMcpRequests.delete(mcpId);
+		throw error;
+	}
+	if (mcpId !== void 0 && cancelledMcpRequests.delete(mcpId)) throw new Error("MCP 请求已取消。");
 	const id = nextCallId++;
 	return new Promise((resolve, reject) => {
 		const timer = setTimeout(() => {
@@ -5588,16 +5595,20 @@ async function callTool(name, args, progressToken) {
 		socket.send(JSON.stringify(request));
 	});
 }
+function writeStdioMessage(message) {
+	const json = JSON.stringify(message).replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029");
+	node_process.default.stdout.write(`${json}\n`);
+}
 function send(msg) {
 	log("stdio response", msg.id, msg.error ? "error" : "result");
-	node_process.default.stdout.write(JSON.stringify(msg) + "\n");
+	writeStdioMessage(msg);
 }
 function notify(method, params) {
-	node_process.default.stdout.write(JSON.stringify({
+	writeStdioMessage({
 		jsonrpc: "2.0",
 		method,
 		params
-	}) + "\n");
+	});
 }
 function rpcResult(id, result) {
 	send({
@@ -5632,11 +5643,7 @@ function toolResultForMcp(result) {
 		isError: !!result?.isError
 	};
 }
-const rl = node_readline.default.createInterface({
-	input: node_process.default.stdin,
-	terminal: false
-});
-rl.on("line", (line) => {
+function handleStdioLine(line) {
 	const s = line.trim();
 	if (!s) return;
 	let msg;
@@ -5658,7 +5665,8 @@ rl.on("line", (line) => {
 				bridgeToProgressToken.delete(bridgeId);
 				p.reject(/* @__PURE__ */ new Error("MCP 请求已取消。"));
 			}
-			if (bridgeId > 0) try {
+			if (bridgeId === -1) cancelledMcpRequests.add(requestId);
+			else if (bridgeId > 0) try {
 				ws?.send(JSON.stringify({
 					id: bridgeId,
 					cancel: true
@@ -5741,8 +5749,20 @@ rl.on("line", (line) => {
 			break;
 		default: rpcError(id, -32601, `方法不支持: ${method}`);
 	}
+}
+let stdioBuffer = "";
+node_process.default.stdin.setEncoding("utf8");
+node_process.default.stdin.on("data", (chunk) => {
+	stdioBuffer += chunk;
+	let start = 0;
+	for (let end = stdioBuffer.indexOf("\n"); end !== -1; end = stdioBuffer.indexOf("\n", start)) {
+		handleStdioLine(stdioBuffer.slice(start, end));
+		start = end + 1;
+	}
+	stdioBuffer = stdioBuffer.slice(start);
 });
-rl.on("close", () => {
+node_process.default.stdin.on("end", () => {
+	if (stdioBuffer) handleStdioLine(stdioBuffer);
 	try {
 		ws?.close();
 	} catch {}
