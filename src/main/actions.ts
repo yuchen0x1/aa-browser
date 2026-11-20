@@ -1,4 +1,4 @@
-import { WebContents, webContents } from 'electron'
+import { WebContents, webContents, nativeImage } from 'electron'
 import type { PageSnapshot, SnapshotElement, ToolContent } from '@shared/types'
 import { __aaSnapshot } from '@snapshot/engine'
 import {
@@ -23,11 +23,57 @@ import {
   laserCursorScript
 } from '@snapshot/scripts'
 import type { Tab, TabManager } from './tabs'
+import { reportProgress } from './progress'
+import { getEvidenceManager } from './evidence'
 
 export class ActionError extends Error {}
 
+/**
+ * 中断检查：长操作在每一步开始前调用，用户一旦中断就立刻停止，
+ * 而不是等操作自然跑完再报“已取消”（那样副作用已经发生）。
+ */
+export function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new ActionError('工具调用已被用户中断。')
+}
+
+/** 把可能很长的 Promise 与中断信号竞速；中断时执行 onAbort（如停止页面加载）后立即失败 */
+export async function raceAbort<T>(
+  work: Promise<T>,
+  signal?: AbortSignal,
+  onAbort?: () => void
+): Promise<T> {
+  if (!signal) return work
+  if (signal.aborted) {
+    throw new ActionError('工具调用已被用户中断。')
+  }
+  return await new Promise<T>((resolve, reject) => {
+    const handle = (): void => {
+      try {
+        onAbort?.()
+      } catch {
+        /* 页面可能已关闭 */
+      }
+      reject(new ActionError('工具调用已被用户中断。'))
+    }
+    signal.addEventListener('abort', handle, { once: true })
+    work.then(
+      (value) => {
+        signal.removeEventListener('abort', handle)
+        resolve(value)
+      },
+      (error) => {
+        signal.removeEventListener('abort', handle)
+        reject(error)
+      }
+    )
+  })
+}
+
 /** 从 webContents 上执行注入的快照引擎（mode=full 强制完整快照，默认增量） */
-export async function captureSnapshot(wc: WebContents, opts?: { mode?: 'full' | 'auto' }): Promise<PageSnapshot> {
+export async function captureSnapshot(
+  wc: WebContents,
+  opts?: { mode?: 'full' | 'auto'; maxNodes?: number; cursor?: number }
+): Promise<PageSnapshot> {
   const source = `(${__aaSnapshot.toString()})(${jsLiteral(opts ?? {})})`
   const snap = (await wc.executeJavaScript(source, false)) as PageSnapshot
   if (!snap || typeof snap !== 'object') {
@@ -135,8 +181,9 @@ async function waitClickProbe(wc: WebContents, urlBefore: string, timeoutMs = 70
 export async function doNavigate(
   tabs: TabManager,
   url: string,
-  opts: { newTab?: boolean; tabId?: string }
+  opts: { newTab?: boolean; tabId?: string; signal?: AbortSignal }
 ): Promise<{ tabId: string; url: string; title: string }> {
+  reportProgress(0, 1, '正在导航')
   tabs.assertUrlAllowed(url)
   const existing = opts.tabId ? tabs.get(opts.tabId) : opts.newTab ? null : tabs.active()
   if (opts.tabId && !existing) throw new ActionError(`标签不存在: ${opts.tabId}`)
@@ -144,11 +191,20 @@ export async function doNavigate(
   const wc = tab.view.webContents
   try {
     // 新标签的首个加载由 TabManager 发起，避免两个 loadURL 互相打断。
-    await (existing ? tabs.navigate(tab, url, true) : tab.initialNavigation)
+    const load = existing ? tabs.navigate(tab, url, true) : tab.initialNavigation
+    // 中断时停止加载，避免“用户已中断但页面继续跳转”的副作用
+    await raceAbort(load, opts.signal, () => {
+      try {
+        wc.stop()
+      } catch {
+        /* 已销毁 */
+      }
+    })
   } catch (error) {
     throw new ActionError(`导航失败：${error instanceof Error ? error.message : String(error)}`)
   }
   if (wc.isDestroyed()) throw new ActionError('页面已关闭')
+  reportProgress(1, 1, '导航完成')
   return { tabId: tab.id, url: wc.getURL(), title: wc.getTitle() }
 }
 
@@ -227,8 +283,9 @@ export async function doClick(
 export async function doDrag(
   tab: Tab,
   ref: string,
-  opts: { toRef?: string; dx?: number; dy?: number; wantSnapshot?: boolean }
+  opts: { toRef?: string; dx?: number; dy?: number; wantSnapshot?: boolean; signal?: AbortSignal }
 ): Promise<{ dragged: string; snapshot?: PageSnapshot }> {
+  throwIfAborted(opts.signal)
   const wc = tab.view.webContents
   const loc1 = (await wc.executeJavaScript(locateScript(ref), false)) as {
     ok: boolean
@@ -268,19 +325,36 @@ export async function doDrag(
   void wc.executeJavaScript(laserCursorScript(x2, y2, 'drag'), false).catch(() => {})
 
   // 模拟真实轨迹平滑拖动（5 步插值）
-  wc.sendInputEvent({ type: 'mouseMove', x: x1, y: y1 })
-  wc.sendInputEvent({ type: 'mouseDown', x: x1, y: y1, button: 'left', clickCount: 1 })
-  await delay(50)
+  let mouseDown = false
+  try {
+    wc.sendInputEvent({ type: 'mouseMove', x: x1, y: y1 })
+    wc.sendInputEvent({ type: 'mouseDown', x: x1, y: y1, button: 'left', clickCount: 1 })
+    mouseDown = true
+    await delay(50)
+    throwIfAborted(opts.signal)
 
-  const steps = 7
-  for (let i = 1; i <= steps; i++) {
-    const curX = Math.round(x1 + ((x2 - x1) * i) / steps)
-    const curY = Math.round(y1 + ((y2 - y1) * i) / steps)
-    wc.sendInputEvent({ type: 'mouseMove', x: curX, y: curY })
-    await delay(20)
+    const steps = 7
+    for (let i = 1; i <= steps; i++) {
+      throwIfAborted(opts.signal)
+      const curX = Math.round(x1 + ((x2 - x1) * i) / steps)
+      const curY = Math.round(y1 + ((y2 - y1) * i) / steps)
+      wc.sendInputEvent({ type: 'mouseMove', x: curX, y: curY })
+      await delay(20)
+    }
+
+    throwIfAborted(opts.signal)
+    wc.sendInputEvent({ type: 'mouseUp', x: x2, y: y2, button: 'left', clickCount: 1 })
+    mouseDown = false
+  } finally {
+    // 中断/异常路径也必须释放鼠标，否则页面可能停在“按住不放”状态
+    if (mouseDown) {
+      try {
+        wc.sendInputEvent({ type: 'mouseUp', x: x2, y: y2, button: 'left', clickCount: 1 })
+      } catch {
+        /* 页面已关闭 */
+      }
+    }
   }
-
-  wc.sendInputEvent({ type: 'mouseUp', x: x2, y: y2, button: 'left', clickCount: 1 })
   await settle(wc)
 
   const snapshot = opts.wantSnapshot ? await captureSnapshot(wc) : undefined
@@ -433,28 +507,105 @@ export async function doWaitForText(tab: Tab, text: string, timeoutMs: number): 
  */
 export async function doWaitForCondition(
   tab: Tab,
-  opts: { text?: string; textGone?: string; timeoutMs: number }
+  opts: { text?: string; textGone?: string; timeoutMs: number; signal?: AbortSignal }
 ): Promise<{ found: boolean; elapsedMs: number; which?: 'appeared' | 'gone' }> {
   const wc = tab.view.webContents
   const start = Date.now()
-  const deadline = start + Math.min(30000, Math.max(1000, opts.timeoutMs))
+  const timeoutMs = Math.min(30000, Math.max(1000, opts.timeoutMs))
+  const deadline = start + timeoutMs
   const textScript = opts.text !== undefined ? containsTextScript(opts.text) : null
   const goneScript = opts.textGone !== undefined ? containsTextScript(opts.textGone) : null
+  let lastReport = 0
   // eslint-disable-next-line no-constant-condition
   while (true) {
+    throwIfAborted(opts.signal)
+    const elapsed = Date.now() - start
+    if (elapsed - lastReport >= 100) {
+      lastReport = elapsed
+      reportProgress(elapsed, timeoutMs, '等待条件')
+    }
     try {
       if (textScript) {
         const seen = (await wc.executeJavaScript(textScript, false)) as boolean
-        if (seen) return { found: true, elapsedMs: Date.now() - start, which: 'appeared' }
+        if (seen) {
+          reportProgress(1, 1, '完成')
+          return { found: true, elapsedMs: Date.now() - start, which: 'appeared' }
+        }
       }
       if (goneScript) {
         const stillThere = (await wc.executeJavaScript(goneScript, false)) as boolean
-        if (!stillThere) return { found: true, elapsedMs: Date.now() - start, which: 'gone' }
+        if (!stillThere) {
+          reportProgress(1, 1, '完成')
+          return { found: true, elapsedMs: Date.now() - start, which: 'gone' }
+        }
       }
     } catch {
       /* 页面导航中，继续等 */
     }
-    if (Date.now() >= deadline) return { found: false, elapsedMs: Date.now() - start }
+    if (Date.now() >= deadline) {
+      reportProgress(1, 1, '完成')
+      return { found: false, elapsedMs: Date.now() - start }
+    }
+    await delay(250)
+  }
+}
+
+/**
+ * 等待 DOM/URL 条件：选择器出现或消失、地址包含某串。
+ *
+ * 文本等待覆盖不了 SPA 场景（文案相同、节点替换、路由变化），
+ * 因此按选择器与 URL 等待才是稳定做法；同样 250ms 轮询、上限 30s。
+ */
+export async function doWaitForDom(
+  tab: Tab,
+  opts: { selector?: string; selectorGone?: string; urlContains?: string; timeoutMs: number; signal?: AbortSignal }
+): Promise<{ found: boolean; elapsedMs: number; which?: 'selector' | 'selectorGone' | 'url' }> {
+  const wc = tab.view.webContents
+  const start = Date.now()
+  const timeoutMs = Math.min(30000, Math.max(1000, opts.timeoutMs))
+  const deadline = start + timeoutMs
+  const selectorScriptBody = opts.selector
+    ? `(() => { const el = document.querySelector(${jsLiteral(opts.selector)}); if (!el) return false; try { const cs = getComputedStyle(el); if (cs.display === 'none' || cs.visibility === 'hidden') return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 } catch (e) { return true } })()`
+    : null
+  const goneScriptBody = opts.selectorGone
+    ? `(() => !document.querySelector(${jsLiteral(opts.selectorGone)}))()`
+    : null
+  const urlNeedle = opts.urlContains ? opts.urlContains : null
+  let lastReport = 0
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    throwIfAborted(opts.signal)
+    const elapsed = Date.now() - start
+    if (elapsed - lastReport >= 100) {
+      lastReport = elapsed
+      reportProgress(elapsed, timeoutMs, '等待条件')
+    }
+    try {
+      if (selectorScriptBody) {
+        const seen = (await wc.executeJavaScript(selectorScriptBody, false)) as boolean
+        if (seen) {
+          reportProgress(1, 1, '完成')
+          return { found: true, elapsedMs: Date.now() - start, which: 'selector' }
+        }
+      }
+      if (goneScriptBody) {
+        const gone = (await wc.executeJavaScript(goneScriptBody, false)) as boolean
+        if (gone) {
+          reportProgress(1, 1, '完成')
+          return { found: true, elapsedMs: Date.now() - start, which: 'selectorGone' }
+        }
+      }
+      if (urlNeedle !== null && wc.getURL().includes(urlNeedle)) {
+        reportProgress(1, 1, '完成')
+        return { found: true, elapsedMs: Date.now() - start, which: 'url' }
+      }
+    } catch {
+      /* 页面导航中，继续等 */
+    }
+    if (Date.now() >= deadline) {
+      reportProgress(1, 1, '完成')
+      return { found: false, elapsedMs: Date.now() - start }
+    }
     await delay(250)
   }
 }
@@ -466,32 +617,140 @@ const VALID_KEYS = new Set([
   'Space'
 ])
 
-export async function doPressKey(tab: Tab, key: string): Promise<{ pressed: string }> {
-  const wc = tab.view.webContents
-  const k = key.trim()
-  if (VALID_KEYS.has(k)) {
-    if (k === 'Space') {
-      wc.sendInputEvent({ type: 'keyDown', keyCode: ' ' })
-      wc.sendInputEvent({ type: 'keyUp', keyCode: ' ' })
-    } else {
-      wc.sendInputEvent({ type: 'keyDown', keyCode: k })
-      wc.sendInputEvent({ type: 'keyUp', keyCode: k })
-    }
-    await delay(120)
-    return { pressed: k }
-  }
-  if (/^[a-zA-Z0-9]$/.test(k)) {
-    wc.sendInputEvent({ type: 'keyDown', keyCode: k })
-    wc.sendInputEvent({ type: 'char', keyCode: k })
-    wc.sendInputEvent({ type: 'keyUp', keyCode: k })
-    await delay(120)
-    return { pressed: k }
-  }
-  throw new ActionError(`不支持的按键: ${key}（支持 Enter/Escape/Tab/Arrow*/F1-F12/单字符等）`)
+type InputModifier = 'alt' | 'control' | 'shift' | 'meta'
+const MODIFIER_ALIASES: Record<string, InputModifier> = {
+  ctrl: 'control', control: 'control', alt: 'alt', shift: 'shift',
+  meta: 'meta', cmd: 'meta', command: 'meta'
 }
 
-export async function doScreenshot(tab: Tab): Promise<ToolContent> {
+function normalizePressKey(key: string, modifiers: string[] = []): { key: string; modifiers: InputModifier[] } {
+  const parts = key.split('+').map((part) => part.trim()).filter(Boolean)
+  const base = parts.pop() ?? ''
+  const allModifiers = [...modifiers, ...parts]
+  const normalized = [...new Set(allModifiers.map((item) => MODIFIER_ALIASES[String(item).toLowerCase()]).filter(Boolean))] as InputModifier[]
+  if (allModifiers.some((item) => !MODIFIER_ALIASES[String(item).toLowerCase()])) {
+    throw new ActionError(`不支持的修饰键: ${allModifiers.find((item) => !MODIFIER_ALIASES[String(item).toLowerCase()])}`)
+  }
+  return { key: base, modifiers: normalized }
+}
+
+export async function doReload(tab: Tab, hard = false, signal?: AbortSignal): Promise<{ url: string; title: string }> {
+  throwIfAborted(signal)
   const wc = tab.view.webContents
+  await raceAbort(new Promise<void>((resolve, reject) => {
+    let settled = false
+    const finish = (): void => {
+      if (settled) return
+      settled = true
+      wc.removeListener('did-finish-load', finish)
+      wc.removeListener('did-fail-load', fail)
+      resolve()
+    }
+    const fail = (_event: Electron.Event, errorCode: number, errorDescription: string, _validatedURL: string, isMainFrame: boolean): void => {
+      if (isMainFrame && errorCode !== -3 && !settled) {
+        settled = true
+        wc.removeListener('did-finish-load', finish)
+        wc.removeListener('did-fail-load', fail)
+        reject(new ActionError(`刷新失败：${errorDescription || errorCode}`))
+      }
+    }
+    wc.once('did-finish-load', finish)
+    wc.on('did-fail-load', fail)
+    if (hard) wc.reloadIgnoringCache()
+    else wc.reload()
+  }), signal, () => {
+    try {
+      wc.stop()
+    } catch {
+      /* 已销毁 */
+    }
+  })
+  return { url: wc.getURL(), title: wc.getTitle() }
+}
+
+export async function doPressKey(tab: Tab, key: string, modifiers: string[] = []): Promise<{ pressed: string; modifiers: InputModifier[] }> {
+  const wc = tab.view.webContents
+  const parsed = normalizePressKey(key.trim(), modifiers)
+  const k = parsed.key
+  if (VALID_KEYS.has(k)) {
+    const keyCode = k === 'Space' ? ' ' : k
+    wc.sendInputEvent({ type: 'keyDown', keyCode, modifiers: parsed.modifiers })
+    wc.sendInputEvent({ type: 'keyUp', keyCode, modifiers: parsed.modifiers })
+    await delay(120)
+    return { pressed: k, modifiers: parsed.modifiers }
+  }
+  if (/^[a-zA-Z0-9]$/.test(k)) {
+    wc.sendInputEvent({ type: 'keyDown', keyCode: k, modifiers: parsed.modifiers })
+    if (!parsed.modifiers.length) wc.sendInputEvent({ type: 'char', keyCode: k })
+    wc.sendInputEvent({ type: 'keyUp', keyCode: k, modifiers: parsed.modifiers })
+    await delay(120)
+    return { pressed: k, modifiers: parsed.modifiers }
+  }
+  throw new ActionError(`不支持的按键: ${key}（支持 Enter/Escape/Tab/Arrow*/F1-F12/单字符及 Ctrl/Alt/Shift/Meta 组合）`)
+}
+
+/**
+ * 整页截图：用 CDP 的 captureBeyondViewport 抓完整文档，而不是只抓视口。
+ *
+ * UI 评审必须能一次看到长页面的页脚、折叠区、首屏之外的内容；
+ * 高度上限 8000px，避免超长页面生成几十 MB 的图片。
+ */
+async function captureFullPage(wc: WebContents): Promise<{ base64: string; width: number; height: number; capped: boolean }> {
+  const dbg = wc.debugger
+  let attachedHere = false
+  try {
+    if (!dbg.isAttached()) {
+      dbg.attach('1.3')
+      attachedHere = true
+    }
+    const metrics = (await dbg.sendCommand('Page.getLayoutMetrics')) as {
+      cssContentSize?: { width?: number; height?: number }
+      contentSize?: { width?: number; height?: number }
+    }
+    const size = metrics.cssContentSize ?? metrics.contentSize ?? {}
+    const fullHeight = Math.ceil(size.height ?? 0) || 720
+    const width = Math.ceil(size.width ?? 0) || 1280
+    const MAX_HEIGHT = 8000
+    const height = Math.min(fullHeight, MAX_HEIGHT)
+    const shot = (await dbg.sendCommand('Page.captureScreenshot', {
+      format: 'png',
+      captureBeyondViewport: true,
+      clip: { x: 0, y: 0, width, height, scale: 1 }
+    })) as { data?: string }
+    if (!shot?.data) throw new ActionError('整页截图失败：浏览器未返回图像数据')
+    return { base64: shot.data, width, height, capped: fullHeight > MAX_HEIGHT }
+  } catch (error) {
+    if (error instanceof ActionError) throw error
+    throw new ActionError(`整页截图失败：${error instanceof Error ? error.message : String(error)}`)
+  } finally {
+    if (attachedHere) {
+      try {
+        dbg.detach()
+      } catch {
+        /* 已销毁或仍被占用 */
+      }
+    }
+  }
+}
+
+export async function doScreenshot(tab: Tab, signal?: AbortSignal, opts?: { fullPage?: boolean }): Promise<ToolContent> {
+  throwIfAborted(signal)
+  const wc = tab.view.webContents
+  if (opts?.fullPage) {
+    try {
+      wc.focus()
+    } catch {
+      /* 忽略 */
+    }
+    reportProgress(0.5, 1, '正在捕获整页')
+    const full = await raceAbort(captureFullPage(wc), signal)
+    throwIfAborted(signal)
+    let img = nativeImage.createFromBuffer(Buffer.from(full.base64, 'base64'))
+    if (img.isEmpty()) throw new ActionError('整页截图失败：图像为空')
+    if (full.width > 1440) img = img.resize({ width: 1440 })
+    reportProgress(1, 1, '截图完成')
+    return { type: 'image', data: img.toPNG().toString('base64'), mimeType: 'image/png' }
+  }
   // capturePage 偶发 UnknownVizError（合成器首帧未就绪）：聚焦 + 重试
   let image: Electron.NativeImage | null = null
   try {
@@ -500,6 +759,7 @@ export async function doScreenshot(tab: Tab): Promise<ToolContent> {
     /* 忽略 */
   }
   for (let i = 0; i < 3; i++) {
+    throwIfAborted(signal)
     try {
       image = await wc.capturePage()
       if (!image.isEmpty()) break
@@ -843,6 +1103,7 @@ export async function doPdf(tab: Tab, filePath?: string, landscape = false): Pro
   const file = filePath || pathMod.join(process.env['AA_BROWSER_DOWNLOAD_DIR'] || pathMod.join(osMod.homedir(), '.aabrowser', 'downloads'), `aa-page-${Date.now()}.pdf`)
   fsMod.mkdirSync(pathMod.dirname(file), { recursive: true })
   fsMod.writeFileSync(file, pdf)
+  getEvidenceManager().record(file, 'pdf')
   return { savedPath: file }
 }
 

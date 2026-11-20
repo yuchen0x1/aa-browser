@@ -24,12 +24,27 @@ const GUARD_SOURCE = `(() => {
       if (window.__aaDialogs.length > 50) window.__aaDialogs.shift()
     } catch (e) {}
   }
+  const takePolicy = () => {
+    try {
+      const policy = window.__aaDialogPolicy || null
+      if (policy && policy.once) window.__aaDialogPolicy = null
+      return policy || {}
+    } catch (e) { return {} }
+  }
   try {
     window.alert = function (message) { push({ type: 'alert', message: String(message ?? ''), ts: Date.now() }); return undefined }
-    window.confirm = function (message) { push({ type: 'confirm', message: String(message ?? ''), ts: Date.now() }); return false }
+    window.confirm = function (message) {
+      const policy = takePolicy()
+      const accepted = typeof policy.confirm === 'boolean' ? policy.confirm : false
+      push({ type: 'confirm', message: String(message ?? ''), ts: Date.now(), accepted })
+      return accepted
+    }
     window.prompt = function (message, def) {
-      push({ type: 'prompt', message: String(message ?? ''), defaultValue: def == null ? null : String(def), ts: Date.now() })
-      return null
+      const policy = takePolicy()
+      const answered = policy.prompt !== undefined && policy.prompt !== null
+      const value = answered ? String(policy.prompt) : null
+      push({ type: 'prompt', message: String(message ?? ''), defaultValue: def == null ? null : String(def), ts: Date.now(), answered: answered ? value : null })
+      return value
     }
     // beforeunload 返回值会触发"离开此页面？"系统弹窗，同样会卡住 Agent
     window.onbeforeunload = null
@@ -38,6 +53,46 @@ const GUARD_SOURCE = `(() => {
     }
   } catch (e) {}
 })()`
+
+/** 让 Agent 预先决定下一次（或之后每次）confirm / prompt 的返回值 */
+export interface DialogPolicy {
+  confirm?: boolean
+  prompt?: string
+  once?: boolean
+}
+
+/** 设定对话框策略；页面需已安装守卫，未安装时返回 false 由调用方提示 */
+export async function setDialogPolicy(wc: WebContents, policy: DialogPolicy): Promise<boolean> {
+  const payload = JSON.stringify({ confirm: policy.confirm, prompt: policy.prompt, once: policy.once !== false })
+  try {
+    const ok = (await wc.executeJavaScript(
+      `(() => { try { window.__aaDialogPolicy = ${payload}; return true } catch (e) { return false } })()`,
+      false
+    )) as boolean
+    return ok === true
+  } catch {
+    return false
+  }
+}
+
+/** 清除对话框策略，恢复默认（confirm→false，prompt→null） */
+export async function clearDialogPolicy(wc: WebContents): Promise<void> {
+  try {
+    await wc.executeJavaScript('(() => { window.__aaDialogPolicy = null })()', false)
+  } catch {
+    /* 页面可能已跳转 */
+  }
+}
+
+/** 当前页面的对话框守护是否可用（调试通道被 DevTools 占用时可能不可用） */
+export async function dialogGuardReady(wc: WebContents): Promise<boolean> {
+  try {
+    const ready = (await wc.executeJavaScript('(() => !!window.__aaDialogGuardInstalled)()', false)) as boolean
+    return ready === true
+  } catch {
+    return false
+  }
+}
 
 /**
  * 为单个 WebContents 安装对话框守卫（幂等）。
@@ -71,12 +126,20 @@ export async function installDialogGuard(wc: WebContents): Promise<void> {
   }
 }
 
+/** 单条对话框记录：accepted/answered 表示守卫实际返回给页面的值 */
+export interface DialogRecord {
+  type: string
+  message: string
+  defaultValue?: string | null
+  ts: number
+  accepted?: boolean
+  answered?: string | null
+}
+
 /** 读取页面记录的对话框（Agent 视角：页面弹了什么，而不真的弹出来） */
-export async function readDialogs(wc: WebContents): Promise<{ type: string; message: string; defaultValue?: string | null; ts: number }[]> {
+export async function readDialogs(wc: WebContents): Promise<DialogRecord[]> {
   try {
-    const list = (await wc.executeJavaScript('(window.__aaDialogs || []).slice(-50)', false)) as
-      | { type: string; message: string; defaultValue?: string | null; ts: number }[]
-      | null
+    const list = (await wc.executeJavaScript('(window.__aaDialogs || []).slice(-50)', false)) as DialogRecord[] | null
     return Array.isArray(list) ? list : []
   } catch {
     return []

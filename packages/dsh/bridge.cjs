@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-globalThis.__AA_BRIDGE_VERSION__ = "0.3.0";
+globalThis.__AA_BRIDGE_VERSION__ = "0.6.4";
 // \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -32,6 +32,7 @@ let node_readline = require("node:readline");
 node_readline = __toESM(node_readline, 1);
 let node_process = require("node:process");
 node_process = __toESM(node_process, 1);
+let node_child_process = require("node:child_process");
 let node_url = require("node:url");
 // node_modules/ws/lib/constants.js
 var require_constants = /* @__PURE__ */ __commonJSMin(((exports, module) => {
@@ -3661,51 +3662,14 @@ require_subprotocol();
 var import_websocket = /* @__PURE__ */ __toESM(require_websocket(), 1);
 require_websocket_server();
 var wrapper_default = import_websocket.default;
-// cli/mcp.mjs
+// src/shared/tool-defs.mjs
 /**
-* aa-browser-mcp —— MCP stdio 桥。
-*
-* 把 MCP（stdio 上的 JSON-RPC）连接转发到正在运行的 Aa Browser 桌面应用
-* （通过 ~/.aabrowser/connection.json 发现，走本地 WebSocket）。
-*
-* 协议：MCP stdio 为换行分隔的 JSON-RPC 2.0。实现最小子集：
-*   initialize / notifications/* / tools/list / tools/call / ping
-* 零依赖，直接 `node cli/mcp.mjs` 运行。
+* MCP 工具定义的唯一来源（single source of truth）。
+* 主进程 src/main/tools.ts 与 stdio 桥 cli/mcp.mjs 都从这里读取
+* name / title / description / inputSchema / annotations；handler 只存在于主进程。
+* 本文件为无依赖的纯 ESM，便于桥直接 import 并被 rolldown 内联。
+* 修改工具 schema 时只改这里，三方一致性由 npm run check 守护。
 */
-/**
-* 版本号单一来源：优先使用构建期注入的 package.json 版本；
-* 源码直接运行时回退到逐级查找 package.json。
-* 构建产物 out/bridge/mcp.cjs 位于 <root>/out/bridge/，源码位于 <root>/cli/。
-*
-* ⚠️ 注入走 globalThis 动态属性，而不是"常量与字面量比较"：
-* 打包器会把 `X !== '0.0.0-dev'` 这种常量比较直接折叠掉，
-* 连注入点一起删除，构建期就再也找不到可替换的位置。
-*/
-function readVersion() {
-	try {
-		const injected = globalThis.__AA_BRIDGE_VERSION__;
-		if (typeof injected === "string" && injected) return injected;
-	} catch {}
-	let dir = node_path.default.dirname((0, node_url.fileURLToPath)(require("url").pathToFileURL(__filename).href));
-	for (let i = 0; i < 5; i++) {
-		try {
-			const pkg = JSON.parse(node_fs.default.readFileSync(node_path.default.join(dir, "package.json"), "utf-8"));
-			if (pkg?.name === "aa-browser" && typeof pkg.version === "string") return pkg.version;
-		} catch {}
-		const up = node_path.default.dirname(dir);
-		if (up === dir) break;
-		dir = up;
-	}
-	return "0.0.0";
-}
-const VERSION = readVersion();
-const CONNECT_FILE = node_process.default.env["AA_BROWSER_CONNECTION_FILE"] || node_path.default.join(node_os.default.homedir(), ".aabrowser", "connection.json");
-/**
-* 必须大于主进程的审批等待窗口（ApprovalManager 默认 120s），
-* 否则用户还在审批时桥已超时并发出 cancel，审批结果永远无法送达。
-*/
-const CALL_TIMEOUT_MS = 18e4;
-const log = (...a) => console.error("[aa-browser-mcp]", ...a);
 const TOOL_DEFS = [
 	{
 		name: "browser_navigate",
@@ -3735,15 +3699,45 @@ const TOOL_DEFS = [
 		}
 	},
 	{
+		name: "browser_reload",
+		title: "刷新",
+		description: "Reload the active tab or the tab identified by tabId. Set hard:true to bypass the cache. Returns the page URL, title, and an incremental snapshot by default.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				hard: {
+					type: "boolean",
+					description: "Bypass the HTTP cache (default false)"
+				},
+				snapshot: {
+					type: "boolean",
+					description: "Return a snapshot after reload (default true)"
+				},
+				tabId: {
+					type: "string",
+					description: "Tab id (default: active tab)"
+				}
+			}
+		}
+	},
+	{
 		name: "browser_snapshot",
 		title: "页面快照",
-		description: "Capture a structured accessibility snapshot of the active tab as a YAML-style tree. Interactive elements carry [ref=eN] ids; pass a ref to browser_click / browser_type / browser_select_option to act on them. Snapshots are incremental: unchanged page returns a one-line reply, small changes return only the changed region, and refs stay stable across snapshots. Pass full:true to force a complete tree (automatic after navigation or large changes).",
+		description: "Capture a structured accessibility snapshot of the active tab as a YAML-style tree. Interactive elements carry [ref=eN] ids; pass a ref to browser_click / browser_type / browser_select_option to act on them. Snapshots are incremental: unchanged page returns a one-line reply, small changes return only the changed region, and refs stay stable across snapshots. Pass full:true to force a complete tree (automatic after navigation or large changes). For very long pages, pass maxNodes to page through the tree: the response reports totalLines and nextCursor; pass cursor on the next call. Paging still assigns refs for the whole tree, so refs from any page remain usable.",
 		inputSchema: {
 			type: "object",
 			properties: {
 				full: {
 					type: "boolean",
 					description: "Force a full snapshot instead of incremental (default false)"
+				},
+				maxNodes: {
+					type: "number",
+					description: "Page size: max lines to return per call (1–2000). Omit for the normal full/incremental snapshot."
+				},
+				cursor: {
+					type: "number",
+					description: "Line offset for a paged snapshot, from the previous response nextCursor (default 0)"
 				},
 				tabId: {
 					type: "string",
@@ -3943,7 +3937,7 @@ const TOOL_DEFS = [
 	{
 		name: "browser_wait",
 		title: "等待",
-		description: "Wait for one of: text to appear (`text`), text to disappear (`textGone`), or a fixed delay (`time`, ms). When both text and textGone are given, waits for whichever happens first. Polls every 250ms. Use after submit/navigation to wait for results, or after an action to wait for a loading state to clear.",
+		description: "Wait for one of: text to appear (`text`), text to disappear (`textGone`), a selector to appear (`selector`) or disappear (`selectorGone`), the URL to contain a string (`urlContains`), or a fixed delay (`time`, ms). Multiple conditions wait for whichever happens first. Polls every 250ms. Prefer selector/urlContains on SPAs where text is reused; use text conditions for plain pages.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -3954,6 +3948,18 @@ const TOOL_DEFS = [
 				textGone: {
 					type: "string",
 					description: "Wait until this text disappears from the page"
+				},
+				selector: {
+					type: "string",
+					description: "Wait until this CSS selector matches a visible element"
+				},
+				selectorGone: {
+					type: "string",
+					description: "Wait until this CSS selector matches nothing"
+				},
+				urlContains: {
+					type: "string",
+					description: "Wait until the page URL contains this string"
 				},
 				time: {
 					type: "number",
@@ -3973,13 +3979,26 @@ const TOOL_DEFS = [
 	{
 		name: "browser_press_key",
 		title: "按键",
-		description: "Press a key on the focused element: Enter, Escape, Tab, Backspace, Delete, ArrowUp/Down/Left/Right, PageUp/PageDown, Home/End, F1-F12, or a single character.",
+		description: "Press a key on the focused element, optionally with Ctrl/Alt/Shift/Meta modifiers. Supports Enter, Escape, Tab, Backspace, Delete, ArrowUp/Down/Left/Right, PageUp/PageDown, Home/End, F1-F12, a single character, or common combinations such as Ctrl+C and Ctrl+Shift+R.",
 		inputSchema: {
 			type: "object",
 			properties: {
 				key: {
 					type: "string",
-					description: "Key name, e.g. \"Enter\", \"Escape\", \"ArrowDown\""
+					description: "Key name or combination, e.g. \"Enter\", \"Escape\", \"Ctrl+C\", \"Ctrl+Shift+R\""
+				},
+				modifiers: {
+					type: "array",
+					items: {
+						type: "string",
+						enum: [
+							"ctrl",
+							"alt",
+							"shift",
+							"meta"
+						]
+					},
+					description: "Optional modifier keys; equivalent to including them in key with +."
 				},
 				tabId: {
 					type: "string",
@@ -3992,13 +4011,17 @@ const TOOL_DEFS = [
 	{
 		name: "browser_screenshot",
 		title: "截图",
-		description: "Take a PNG screenshot of the active tab, or of a specific element (pass ref — the view is scrolled to it and the image is cropped to its bounding box). Returns the image inline (for vision-capable models) and saves it under ~/.aabrowser/screenshots/.",
+		description: "Take a PNG screenshot of the active tab, or of a specific element (pass ref — the view is scrolled to it and the image is cropped to its bounding box). Pass fullPage:true to capture the whole document (not just the viewport) — use that when reviewing long pages or comparing layout. Returns the image inline (for vision-capable models) and saves it under ~/.aabrowser/screenshots/.",
 		inputSchema: {
 			type: "object",
 			properties: {
 				ref: {
 					type: "string",
 					description: "Element ref: screenshot only this element (default: whole viewport)"
+				},
+				fullPage: {
+					type: "boolean",
+					description: "Capture the whole document instead of the viewport (max 8000px tall)"
 				},
 				tabId: {
 					type: "string",
@@ -4212,13 +4235,28 @@ const TOOL_DEFS = [
 	{
 		name: "browser_downloads",
 		title: "下载列表",
-		description: "List files captured by the browser (downloads are saved silently under ~/.aabrowser/downloads/, no save dialog). Shows filename, source URL, size and progress/state.",
+		description: "List files captured by the browser (downloads are saved silently under ~/.aabrowser/downloads/, no save dialog). action=list (default) shows filename, source URL, size and progress/state. action=cancel stops an in-progress download; action=retry re-downloads a finished one into a new -r file (URL is re-validated against the site allowlist).",
 		inputSchema: {
 			type: "object",
-			properties: { limit: {
-				type: "number",
-				description: "Max entries (default 20, newest last)"
-			} }
+			properties: {
+				action: {
+					type: "string",
+					enum: [
+						"list",
+						"cancel",
+						"retry"
+					],
+					description: "Download operation (default list)"
+				},
+				id: {
+					type: "string",
+					description: "(cancel/retry) download id from action=list"
+				},
+				limit: {
+					type: "number",
+					description: "(list) Max entries (default 20, newest last)"
+				}
+			}
 		}
 	},
 	{
@@ -4545,7 +4583,7 @@ const TOOL_DEFS = [
 	{
 		name: "browser_dialogs",
 		title: "页面对话框记录",
-		description: "Read (and optionally clear) dialogs the page tried to open — alert / confirm / prompt. Dialogs are intercepted instead of blocking: confirm always returns false, prompt returns null. Use this to detect \"are you sure?\" style interruptions without stalling the automation.",
+		description: "Read (and optionally clear) dialogs the page tried to open — alert / confirm / prompt. Dialogs are intercepted instead of blocking: by default confirm returns false and prompt returns null. Use browser_dialog_respond first to choose what confirm/prompt return, then click the control that triggers them. Use this tool to detect \"are you sure?\" style interruptions without stalling the automation.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -4558,6 +4596,201 @@ const TOOL_DEFS = [
 					description: "Tab id (default: active tab)"
 				}
 			}
+		}
+	},
+	{
+		name: "browser_dialog_respond",
+		title: "对话框应答策略",
+		description: "Decide what the next (or every following) window.confirm / window.prompt returns, so flows that need confirmation or text input can be tested. Set confirm:true to accept, confirm:false to cancel, prompt:\"text\" to answer a prompt (prompt with no value returns null). Default is once:true — the policy is consumed by the next dialog; pass once:false to keep it. Pass reset:true to clear the policy.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				confirm: {
+					type: "boolean",
+					description: "What window.confirm returns (true = accept, false = cancel)"
+				},
+				prompt: {
+					type: "string",
+					description: "What window.prompt returns as the entered text"
+				},
+				once: {
+					type: "boolean",
+					description: "Consume the policy after the next dialog (default true)"
+				},
+				reset: {
+					type: "boolean",
+					description: "Clear any policy and restore the default (confirm→false, prompt→null)"
+				},
+				tabId: {
+					type: "string",
+					description: "Tab id (default: active tab)"
+				}
+			}
+		}
+	},
+	{
+		name: "browser_assert",
+		title: "断言校验",
+		description: "Verify that what you just did actually worked. Pass one or more checks; each is reported as passed or failed with expected vs actual, and the tool returns isError when any check fails — that is how you distinguish \"the click happened\" from \"the feature works\". Supported kinds: url, title, text, selector, count, value, checked, attribute, console, network. match defaults to contains for text-like kinds, equals for count/console, and exists for selector. Use this after every meaningful step of a website test.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				checks: {
+					type: "array",
+					description: "Assertions to verify, evaluated in order",
+					items: {
+						type: "object",
+						properties: {
+							kind: {
+								type: "string",
+								enum: [
+									"url",
+									"title",
+									"text",
+									"selector",
+									"count",
+									"value",
+									"checked",
+									"attribute",
+									"console",
+									"network"
+								],
+								description: "What to check"
+							},
+							target: {
+								type: "string",
+								description: "CSS selector or snapshot ref (e.g. e12) for selector/count/value/checked/attribute"
+							},
+							match: {
+								type: "string",
+								enum: [
+									"equals",
+									"contains",
+									"notContains",
+									"regex",
+									"gte",
+									"lte",
+									"exists",
+									"absent"
+								],
+								description: "Comparison mode (default depends on kind)"
+							},
+							expected: { description: "Expected value: string, number (count/console) or boolean (checked)" },
+							message: {
+								type: "string",
+								description: "Human-readable label shown in the result"
+							},
+							attribute: {
+								type: "string",
+								description: "(attribute) attribute name"
+							},
+							level: {
+								type: "string",
+								enum: [
+									"error",
+									"warning",
+									"all"
+								],
+								description: "(console) level filter, default error"
+							},
+							since: {
+								type: "number",
+								description: "(console) only logs after this Unix ms timestamp"
+							},
+							urlContains: {
+								type: "string",
+								description: "(network) request URL substring"
+							},
+							method: {
+								type: "string",
+								description: "(network) HTTP method filter"
+							},
+							status: {
+								type: "number",
+								description: "(network) exact status code required"
+							},
+							statusMin: {
+								type: "number",
+								description: "(network) minimum status"
+							},
+							statusMax: {
+								type: "number",
+								description: "(network) maximum status"
+							}
+						},
+						required: ["kind"]
+					}
+				},
+				tabId: {
+					type: "string",
+					description: "Tab id (default: active tab)"
+				}
+			},
+			required: ["checks"]
+		}
+	},
+	{
+		name: "browser_frame",
+		title: "iframe 操作",
+		description: "Operate inside any frame, including cross-origin iframes that browser_snapshot cannot see into (payment widgets, OAuth, embedded editors, third-party chat). action=list shows every frame with its id, URL and whether it is cross-origin. action=text reads that frame text, action=elements lists interactive elements with usable CSS selectors, action=evaluate runs an expression inside the frame, and action=click/type/select act on a CSS selector inside the frame. Always start with action=list.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				action: {
+					type: "string",
+					enum: [
+						"list",
+						"text",
+						"elements",
+						"evaluate",
+						"click",
+						"type",
+						"select"
+					],
+					description: "Frame operation"
+				},
+				frameId: {
+					type: "string",
+					description: "Frame id from action=list, e.g. \"f3\""
+				},
+				selector: {
+					type: "string",
+					description: "(click/type/select) CSS selector inside that frame"
+				},
+				expression: {
+					type: "string",
+					description: "(evaluate) JavaScript expression evaluated inside the frame"
+				},
+				text: {
+					type: "string",
+					description: "(type) text to enter"
+				},
+				value: {
+					type: "string",
+					description: "(select) option value"
+				},
+				label: {
+					type: "string",
+					description: "(select) option visible label"
+				},
+				index: {
+					type: "number",
+					description: "(click) which match to click, 0-based (default 0)"
+				},
+				maxChars: {
+					type: "number",
+					description: "(text) max characters to return (default 4000)"
+				},
+				limit: {
+					type: "number",
+					description: "(elements) max elements to list (default 80)"
+				},
+				tabId: {
+					type: "string",
+					description: "Tab id (default: active tab)"
+				}
+			},
+			required: ["action"]
 		}
 	},
 	{
@@ -4592,6 +4825,165 @@ const TOOL_DEFS = [
 			},
 			required: ["action"]
 		}
+	},
+	{
+		name: "browser_visual_diff",
+		title: "视觉基线对比",
+		description: "Visual regression loop for UI review. action=save stores the current page screenshot as a named baseline (under ~/.aabrowser/baselines/, override with AA_BROWSER_BASELINE_DIR); action=compare captures again and returns a pixel-level diff (changed pixels, percent, bounding box, mean/max channel difference) plus a red diff image path. compare returns isError when the change exceeds maxDiffPercent, so it can be used as a visual assertion. action=list shows baselines; action=delete removes one. Use fullPage:true for long pages.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				action: {
+					type: "string",
+					enum: [
+						"save",
+						"compare",
+						"list",
+						"delete"
+					],
+					description: "Baseline operation"
+				},
+				name: {
+					type: "string",
+					description: "Baseline name: letters/digits/dot/underscore/hyphen, max 80 chars"
+				},
+				fullPage: {
+					type: "boolean",
+					description: "Capture the whole document instead of the viewport (default false)"
+				},
+				pixelThreshold: {
+					type: "number",
+					description: "Per-channel difference that counts as a changed pixel (0–255, default 16)"
+				},
+				maxDiffPercent: {
+					type: "number",
+					description: "Fail the comparison when changed pixels exceed this percent (default 0.5)"
+				},
+				writeDiff: {
+					type: "boolean",
+					description: "Write a red-highlighted diff PNG (default true)"
+				},
+				tabId: {
+					type: "string",
+					description: "Tab id (default: active tab)"
+				}
+			},
+			required: ["action"]
+		}
+	},
+	{
+		name: "browser_contrast_audit",
+		title: "对比度审计",
+		description: "Audit WCAG text contrast on the current page. Reads computed foreground/background colors of visible text elements (compositing alpha over ancestors), computes contrast ratio and flags AA (4.5:1 / 3:1 large) or AAA (7:1 / 4.5:1 large) violations with a CSS selector and text snippet. Use this to find unreadable text before shipping. Returns isError when violations exist unless failOnViolation:false.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				level: {
+					type: "string",
+					enum: ["AA", "AAA"],
+					description: "WCAG conformance level (default AA)"
+				},
+				maxResults: {
+					type: "number",
+					description: "Max violations to report (1–200, default 50)"
+				},
+				failOnViolation: {
+					type: "boolean",
+					description: "Return isError when violations exist (default true)"
+				},
+				tabId: {
+					type: "string",
+					description: "Tab id (default: active tab)"
+				}
+			}
+		}
+	},
+	{
+		name: "browser_viewport_matrix",
+		title: "多视口矩阵",
+		description: "Capture the same page at multiple viewport sizes and DPI scales in one call — use it for responsive-design review. Uses CDP device-metrics emulation, so it can render real 320/480/768px viewports and 2x high-DPI even though the BrowserWindow itself has a 960×640 minimum; the override is always cleared afterwards. Each entry reports actual PNG pixels and horizontal overflow. preset defaults to all; pass viewports to define exact sizes. Screenshots are saved under ~/.aabrowser/screenshots/.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				preset: {
+					type: "string",
+					enum: [
+						"mobile",
+						"tablet",
+						"desktop",
+						"hi-dpi",
+						"all"
+					],
+					description: "Viewport preset (default all)"
+				},
+				viewports: {
+					type: "array",
+					description: "Explicit viewport list; overrides preset. Max 12 entries.",
+					items: {
+						type: "object",
+						properties: {
+							name: {
+								type: "string",
+								description: "Short label (letters/digits/_/-)"
+							},
+							width: {
+								type: "number",
+								description: "CSS width in px (200–5000)"
+							},
+							height: {
+								type: "number",
+								description: "CSS height in px (200–5000)"
+							},
+							deviceScaleFactor: {
+								type: "number",
+								description: "DPI scale 1–4 (default 1)"
+							},
+							mobile: {
+								type: "boolean",
+								description: "Emulate mobile viewport (default false)"
+							}
+						},
+						required: ["width", "height"]
+					}
+				},
+				includeImages: {
+					type: "boolean",
+					description: "Attach up to 4 screenshots as image blocks in the result (default false)"
+				},
+				tabId: {
+					type: "string",
+					description: "Tab id (default: active tab)"
+				}
+			}
+		}
+	},
+	{
+		name: "browser_evidence",
+		title: "证据文件管理",
+		description: "Inspect and maintain generated evidence files (screenshots, viewport PNGs, HAR, PDF, visual baselines/diffs, context-menu shots). action=list shows registered files with sha256, size, TTL and age; action=sweep deletes expired or over-quota temporary evidence (baselines/downloads are preserved); action=hash computes a file sha256; action=forget removes a registry entry without deleting the file. Registry path can be overridden with AA_BROWSER_EVIDENCE_FILE.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				action: {
+					type: "string",
+					enum: [
+						"list",
+						"sweep",
+						"hash",
+						"forget"
+					],
+					description: "Evidence operation (default list)"
+				},
+				file: {
+					type: "string",
+					description: "(hash/forget) absolute file path"
+				},
+				limit: {
+					type: "number",
+					description: "(list) max entries, default 50"
+				}
+			}
+		}
 	}
 ];
 const TOOL_ANNOTATIONS = Object.freeze({
@@ -4599,6 +4991,12 @@ const TOOL_ANNOTATIONS = Object.freeze({
 		readOnlyHint: false,
 		destructiveHint: false,
 		idempotentHint: false,
+		openWorldHint: true
+	},
+	browser_reload: {
+		readOnlyHint: false,
+		destructiveHint: false,
+		idempotentHint: true,
 		openWorldHint: true
 	},
 	browser_snapshot: {
@@ -4710,9 +5108,9 @@ const TOOL_ANNOTATIONS = Object.freeze({
 		openWorldHint: true
 	},
 	browser_downloads: {
-		readOnlyHint: true,
-		destructiveHint: false,
-		idempotentHint: true,
+		readOnlyHint: false,
+		destructiveHint: true,
+		idempotentHint: false,
 		openWorldHint: false
 	},
 	browser_pdf: {
@@ -4793,13 +5191,100 @@ const TOOL_ANNOTATIONS = Object.freeze({
 		idempotentHint: false,
 		openWorldHint: true
 	},
+	browser_dialog_respond: {
+		readOnlyHint: false,
+		destructiveHint: false,
+		idempotentHint: true,
+		openWorldHint: false
+	},
+	browser_frame: {
+		readOnlyHint: false,
+		destructiveHint: true,
+		idempotentHint: false,
+		openWorldHint: true
+	},
+	browser_assert: {
+		readOnlyHint: true,
+		destructiveHint: false,
+		idempotentHint: true,
+		openWorldHint: true
+	},
 	browser_evaluate: {
 		readOnlyHint: false,
 		destructiveHint: true,
 		idempotentHint: false,
 		openWorldHint: true
+	},
+	browser_visual_diff: {
+		readOnlyHint: false,
+		destructiveHint: true,
+		idempotentHint: false,
+		openWorldHint: false
+	},
+	browser_contrast_audit: {
+		readOnlyHint: true,
+		destructiveHint: false,
+		idempotentHint: true,
+		openWorldHint: true
+	},
+	browser_viewport_matrix: {
+		readOnlyHint: false,
+		destructiveHint: false,
+		idempotentHint: true,
+		openWorldHint: false
+	},
+	browser_evidence: {
+		readOnlyHint: false,
+		destructiveHint: true,
+		idempotentHint: false,
+		openWorldHint: false
 	}
 });
+// cli/mcp.mjs
+/**
+* aa-browser-mcp —— MCP stdio 桥。
+*
+* 把 MCP（stdio 上的 JSON-RPC）连接转发到 Aa Browser 桌面应用
+* （通过 ~/.aabrowser/connection.json 发现，未运行时首次工具调用会按受信路径自动启动，走本地 WebSocket）。
+*
+* 协议：MCP stdio 为换行分隔的 JSON-RPC 2.0。实现最小子集：
+*   initialize / notifications/* / tools/list / tools/call / ping
+* 零依赖，直接 `node cli/mcp.mjs` 运行。
+*/
+/**
+* 版本号单一来源：优先使用构建期注入的 package.json 版本；
+* 源码直接运行时回退到逐级查找 package.json。
+* 构建产物 out/bridge/mcp.cjs 位于 <root>/out/bridge/，源码位于 <root>/cli/。
+*
+* ⚠️ 注入走 globalThis 动态属性，而不是"常量与字面量比较"：
+* 打包器会把 `X !== '0.0.0-dev'` 这种常量比较直接折叠掉，
+* 连注入点一起删除，构建期就再也找不到可替换的位置。
+*/
+function readVersion() {
+	try {
+		const injected = globalThis.__AA_BRIDGE_VERSION__;
+		if (typeof injected === "string" && injected) return injected;
+	} catch {}
+	let dir = node_path.default.dirname((0, node_url.fileURLToPath)(require("url").pathToFileURL(__filename).href));
+	for (let i = 0; i < 5; i++) {
+		try {
+			const pkg = JSON.parse(node_fs.default.readFileSync(node_path.default.join(dir, "package.json"), "utf-8"));
+			if (pkg?.name === "aa-browser" && typeof pkg.version === "string") return pkg.version;
+		} catch {}
+		const up = node_path.default.dirname(dir);
+		if (up === dir) break;
+		dir = up;
+	}
+	return "0.0.0";
+}
+const VERSION = readVersion();
+const CONNECT_FILE = node_process.default.env["AA_BROWSER_CONNECTION_FILE"] || node_path.default.join(node_os.default.homedir(), ".aabrowser", "connection.json");
+/**
+* 必须大于主进程的审批等待窗口（ApprovalManager 默认 120s），
+* 否则用户还在审批时桥已超时并发出 cancel，审批结果永远无法送达。
+*/
+const CALL_TIMEOUT_MS = 18e4;
+const log = (...a) => console.error("[aa-browser-mcp]", ...a);
 for (const tool of TOOL_DEFS) {
 	const annotations = TOOL_ANNOTATIONS[tool.name];
 	if (!annotations || Object.keys(annotations).length !== 4 || Object.values(annotations).some((value) => typeof value !== "boolean")) throw new Error(`工具缺少完整 MCP annotations：${tool.name}`);
@@ -4808,6 +5293,7 @@ let ws = null;
 let nextCallId = 1;
 const pending = /* @__PURE__ */ new Map();
 const mcpToBridge = /* @__PURE__ */ new Map();
+const bridgeToProgressToken = /* @__PURE__ */ new Map();
 function readConnection() {
 	try {
 		const info = JSON.parse(node_fs.default.readFileSync(CONNECT_FILE, "utf-8"));
@@ -4824,6 +5310,144 @@ function isPidAlive(pid) {
 	} catch {
 		return false;
 	}
+}
+const AUTO_LAUNCH_TIMEOUT_MS = Math.min(12e4, Math.max(5e3, Number(node_process.default.env["AA_BROWSER_LAUNCH_TIMEOUT_MS"]) || 3e4));
+const CONNECT_RETRY_MS = Math.min(2e3, Math.max(100, Number(node_process.default.env["AA_BROWSER_CONNECT_RETRY_MS"]) || 500));
+let launchPromise = null;
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+function isRegularFile(file) {
+	try {
+		return node_fs.default.statSync(file).isFile();
+	} catch {
+		return false;
+	}
+}
+function addPathCandidate(list, value) {
+	if (!value || !node_path.default.isAbsolute(value)) return;
+	const resolved = node_path.default.resolve(value);
+	if (!list.includes(resolved)) list.push(resolved);
+}
+function browserLaunchSpec() {
+	const candidates = [];
+	const explicit = node_process.default.env["AA_BROWSER_APP_PATH"]?.trim();
+	if (explicit) {
+		if (!node_path.default.isAbsolute(explicit)) throw new Error("AA_BROWSER_APP_PATH 必须是绝对路径。");
+		const file = node_path.default.resolve(explicit);
+		if (!(node_process.default.platform === "win32" ? /^(Aa Browser|aa-browser)\.exe$/i : node_process.default.platform === "linux" ? /^(?:AppRun|(?:Aa Browser|aa-browser)(?:\.AppImage|-[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9._-]+)?\.AppImage)?)$/i : /^(Aa Browser|aa-browser)$/i).test(node_path.default.basename(file)) || !isRegularFile(file)) throw new Error("AA_BROWSER_APP_PATH 不是受支持的 Aa Browser 可执行文件。");
+		return {
+			command: file,
+			args: [],
+			cwd: node_path.default.dirname(file)
+		};
+	}
+	const bridgeDir = node_path.default.dirname(node_path.default.resolve((0, node_url.fileURLToPath)(require("url").pathToFileURL(__filename).href)));
+	const installRoot = node_path.default.resolve(bridgeDir, "../../../..");
+	if (node_fs.default.existsSync(node_path.default.join(installRoot, "resources", "app.asar.unpacked"))) {
+		addPathCandidate(candidates, node_path.default.join(installRoot, node_process.default.platform === "win32" ? "Aa Browser.exe" : "aa-browser"));
+		if (node_process.default.platform === "linux") {
+			addPathCandidate(candidates, node_path.default.join(installRoot, "Aa Browser"));
+			addPathCandidate(candidates, node_path.default.join(installRoot, "usr", "bin", "aa-browser"));
+			addPathCandidate(candidates, node_path.default.join(installRoot, "AppRun"));
+		}
+	}
+	if (node_process.default.platform === "win32") {
+		const localAppData = node_process.default.env["LOCALAPPDATA"];
+		const programFiles = node_process.default.env["PROGRAMFILES"];
+		const programFilesX86 = node_process.default.env["PROGRAMFILES(X86)"];
+		for (const dir of [
+			localAppData && node_path.default.join(localAppData, "Programs", "Aa Browser"),
+			programFiles && node_path.default.join(programFiles, "Aa Browser"),
+			programFilesX86 && node_path.default.join(programFilesX86, "Aa Browser")
+		]) addPathCandidate(candidates, dir && node_path.default.join(dir, "Aa Browser.exe"));
+	} else if (node_process.default.platform === "darwin") {
+		addPathCandidate(candidates, "/Applications/Aa Browser.app/Contents/MacOS/Aa Browser");
+		addPathCandidate(candidates, node_path.default.join(node_os.default.homedir(), "Applications", "Aa Browser.app", "Contents", "MacOS", "Aa Browser"));
+	} else {
+		addPathCandidate(candidates, "/usr/bin/aa-browser");
+		addPathCandidate(candidates, "/usr/local/bin/aa-browser");
+		addPathCandidate(candidates, "/opt/Aa Browser/aa-browser");
+		addPathCandidate(candidates, node_path.default.join(node_os.default.homedir(), ".local", "bin", "aa-browser"));
+	}
+	let sourceSpec = null;
+	let sourceRoot = bridgeDir;
+	for (let i = 0; i < 6; i++) {
+		try {
+			if (JSON.parse(node_fs.default.readFileSync(node_path.default.join(sourceRoot, "package.json"), "utf8"))?.name === "aa-browser") {
+				const electronBinary = node_process.default.platform === "win32" ? node_path.default.join(sourceRoot, "node_modules", "electron", "dist", "electron.exe") : node_process.default.platform === "darwin" ? node_path.default.join(sourceRoot, "node_modules", "electron", "dist", "Electron.app", "Contents", "MacOS", "Electron") : node_path.default.join(sourceRoot, "node_modules", "electron", "dist", "electron");
+				if (isRegularFile(electronBinary)) sourceSpec = {
+					command: electronBinary,
+					args: [sourceRoot],
+					cwd: sourceRoot
+				};
+				break;
+			}
+		} catch {}
+		const parent = node_path.default.dirname(sourceRoot);
+		if (parent === sourceRoot) break;
+		sourceRoot = parent;
+	}
+	const file = candidates.find((candidate) => isRegularFile(candidate));
+	if (file) return {
+		command: file,
+		args: [],
+		cwd: node_path.default.dirname(file)
+	};
+	return sourceSpec;
+}
+function connectionReady() {
+	const info = readConnection();
+	return !!info && isPidAlive(info.pid);
+}
+async function waitForConnection() {
+	const deadline = Date.now() + AUTO_LAUNCH_TIMEOUT_MS;
+	while (Date.now() < deadline) {
+		if (connectionReady()) return;
+		await delay(CONNECT_RETRY_MS);
+	}
+	throw new Error(`Aa Browser 已启动但在 ${Math.round(AUTO_LAUNCH_TIMEOUT_MS / 1e3)} 秒内没有写入连接信息。`);
+}
+async function ensureBrowserStarted() {
+	if (node_process.default.env["AA_BROWSER_AUTO_LAUNCH"] === "0" || node_process.default.env["AA_BROWSER_AUTO_LAUNCH"]?.toLowerCase() === "false") throw new Error("Aa Browser 未运行，且已通过 AA_BROWSER_AUTO_LAUNCH 禁用自动启动。");
+	if (connectionReady()) return;
+	if (launchPromise) return launchPromise;
+	launchPromise = (async () => {
+		const spec = browserLaunchSpec();
+		if (!spec) throw new Error("未找到可启动的 Aa Browser。请安装桌面应用，或设置 AA_BROWSER_APP_PATH 指向 Aa Browser.exe/aa-browser。");
+		log("Aa Browser 未运行，正在自动启动…");
+		await new Promise((resolve, reject) => {
+			let settled = false;
+			const launchEnv = {
+				...node_process.default.env,
+				AA_BROWSER_CONNECTION_FILE: CONNECT_FILE
+			};
+			delete launchEnv.ELECTRON_RUN_AS_NODE;
+			const child = (0, node_child_process.spawn)(spec.command, spec.args, {
+				cwd: spec.cwd,
+				env: launchEnv,
+				detached: false,
+				stdio: "ignore",
+				windowsHide: true
+			});
+			child.once("error", (error) => {
+				if (!settled) {
+					settled = true;
+					reject(/* @__PURE__ */ new Error(`自动启动 Aa Browser 失败：${error.message}`));
+				}
+			});
+			child.once("spawn", () => {
+				if (!settled) {
+					settled = true;
+					resolve();
+				}
+			});
+			child.unref();
+		});
+		await waitForConnection();
+		log("Aa Browser 已启动，等待 MCP 连接就绪");
+	})().finally(() => {
+		launchPromise = null;
+	});
+	return launchPromise;
 }
 function connectWs() {
 	return new Promise((resolve, reject) => {
@@ -4854,10 +5478,24 @@ function connectWs() {
 				} catch {
 					return;
 				}
+				if (msg?.event === "progress") {
+					const token = bridgeToProgressToken.get(msg.id);
+					if (token !== void 0) {
+						const params = {
+							progressToken: token,
+							progress: msg.progress
+						};
+						if (typeof msg.total === "number") params.total = msg.total;
+						if (typeof msg.message === "string") params.message = msg.message;
+						notify("notifications/progress", params);
+					}
+					return;
+				}
 				if (typeof msg?.id === "number" && pending.has(msg.id)) {
 					const p = pending.get(msg.id);
 					clearTimeout(p.timer);
 					pending.delete(msg.id);
+					bridgeToProgressToken.delete(msg.id);
 					log("received browser tool response", msg.id, !!msg.ok);
 					if (msg.ok) p.resolve(msg.result);
 					else p.reject(new Error(msg.error || "工具执行失败"));
@@ -4870,6 +5508,7 @@ function connectWs() {
 					p.reject(/* @__PURE__ */ new Error("与 Aa Browser 的连接已断开。"));
 				}
 				pending.clear();
+				bridgeToProgressToken.clear();
 			});
 			socket.on("error", (err) => {
 				log("ws error:", err.message);
@@ -4884,28 +5523,43 @@ function connectWs() {
 }
 async function getWs() {
 	if (ws && ws.readyState === wrapper_default.OPEN) return ws;
-	return connectWs();
+	let lastError;
+	try {
+		return await connectWs();
+	} catch (error) {
+		lastError = error;
+	}
+	await ensureBrowserStarted();
+	const deadline = Date.now() + AUTO_LAUNCH_TIMEOUT_MS;
+	while (Date.now() < deadline) try {
+		return await connectWs();
+	} catch (error) {
+		lastError = error;
+		await delay(CONNECT_RETRY_MS);
+	}
+	throw lastError instanceof Error ? lastError : /* @__PURE__ */ new Error("无法连接 Aa Browser。");
 }
 /**
 * 启动即连接（带重试）：桥被 AI 客户端拉起时立刻连上浏览器，
 * 让桌面端"Agent 已连接"指示灯在会话开始时就点亮；
 * 浏览器未启动/正在重启时静默重试，浏览器重启（换端口）后也会自动重连。
 */
-const CONNECT_RETRY_MS = 5e3;
+const EAGER_CONNECT_RETRY_MS = 5e3;
 function startEagerConnect() {
 	setInterval(() => {
 		if (ws && ws.readyState === wrapper_default.OPEN) return;
 		connectWs().catch(() => {});
-	}, CONNECT_RETRY_MS).unref?.();
+	}, EAGER_CONNECT_RETRY_MS).unref?.();
 }
 startEagerConnect();
-async function callTool(name, args) {
+async function callTool(name, args, progressToken) {
 	const socket = await getWs();
 	const id = nextCallId++;
 	return new Promise((resolve, reject) => {
 		const timer = setTimeout(() => {
 			const p = pending.get(id);
 			pending.delete(id);
+			bridgeToProgressToken.delete(id);
 			if (p?.mcpId !== void 0) mcpToBridge.delete(p.mcpId);
 			try {
 				socket.send(JSON.stringify({
@@ -4922,18 +5576,28 @@ async function callTool(name, args) {
 			mcpId: args?.__mcpId
 		});
 		if (args?.__mcpId !== void 0) mcpToBridge.set(args.__mcpId, id);
+		if (progressToken !== void 0) bridgeToProgressToken.set(id, progressToken);
 		const cleanArgs = { ...args ?? {} };
 		delete cleanArgs.__mcpId;
-		socket.send(JSON.stringify({
+		const request = {
 			id,
 			tool: name,
 			args: cleanArgs
-		}));
+		};
+		if (progressToken !== void 0) request.progressToken = progressToken;
+		socket.send(JSON.stringify(request));
 	});
 }
 function send(msg) {
 	log("stdio response", msg.id, msg.error ? "error" : "result");
 	node_process.default.stdout.write(JSON.stringify(msg) + "\n");
+}
+function notify(method, params) {
+	node_process.default.stdout.write(JSON.stringify({
+		jsonrpc: "2.0",
+		method,
+		params
+	}) + "\n");
 }
 function rpcResult(id, result) {
 	send({
@@ -4991,6 +5655,7 @@ rl.on("line", (line) => {
 			if (p) {
 				clearTimeout(p.timer);
 				pending.delete(bridgeId);
+				bridgeToProgressToken.delete(bridgeId);
 				p.reject(/* @__PURE__ */ new Error("MCP 请求已取消。"));
 			}
 			if (bridgeId > 0) try {
@@ -5038,6 +5703,8 @@ rl.on("line", (line) => {
 		case "tools/call": {
 			const name = params?.name;
 			const args = params?.arguments ?? {};
+			const rawProgressToken = params?._meta?.progressToken;
+			const progressToken = typeof rawProgressToken === "string" || typeof rawProgressToken === "number" ? rawProgressToken : void 0;
 			if (!TOOL_DEFS.find((t) => t.name === name)) {
 				rpcError(id, -32602, `未知工具: ${name}`);
 				break;
@@ -5046,7 +5713,7 @@ rl.on("line", (line) => {
 			callTool(name, {
 				...args,
 				__mcpId: id
-			}).then((result) => {
+			}, progressToken).then((result) => {
 				if (mcpToBridge.has(id)) {
 					mcpToBridge.delete(id);
 					rpcResult(id, toolResultForMcp(result));

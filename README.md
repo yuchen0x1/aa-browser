@@ -32,9 +32,9 @@
 
 <!-- github-release:start -->
 
-**[v0.3.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.3.0)** · 2026-11-19
+**[v0.6.4](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.6.4)** · 2026-11-20
 
-本版改善日常使用的观感与安全边界：设置面板从窄单列改成 960px 宽的分区布局，控件、排版和窗口自适应一并调整；应用图标重做为透明满幅，桌面快捷方式、任务栏和 favicon 不再出现白边；Agent 注入脚本的数据字面量统一加固，特殊字符不会再截断脚本。功能面与 MCP 工具集（34 个）保持不变。
+本版改善日常使用的观感与安全边界：设置面板从窄单列改成 960px 宽的分区布局，控件、排版和窗口自适应一并调整；应用图标重做为透明满幅，桌面快捷方式、任务栏和 favicon 不再出现白边；Agent 注入脚本的数据字面量统一加固，特殊字符不会再截断脚本。功能面与 MCP 工具集（41 个）保持不变。
 
 [全部发行记录](https://github.com/yuchen0x1/aa-browser/releases)
 
@@ -91,7 +91,9 @@
 - 🌐 **中英双语界面**：跟随系统 / 浏览器语言，也可在设置里固定简体中文或 English
 - 🧭 **地址栏历史补全**：本地记录最近 1000 条访问，按域名 / URL 前缀 / 标题补全并加权排序；隔离标签不写入
 - 🗂️ **标签与会话恢复**：`Ctrl+Shift+T` 恢复本次运行中最近关闭的标签（最多 20 个）；重启后按上次顺序恢复普通网页标签与活动标签，隔离标签、内部页和非 HTTP(S) 地址不恢复，地址中的账号密码会被剥离
-- 🛡️ **Agent 可观测、可中断**：工具栏实时显示连接状态，活动日志保留最近 30 条 Agent 操作；敏感输入由用户亲自填写，高危操作走浏览器内审批，可随时中断后续操作并恢复
+- 🛡️ **Agent 可观测、可中断**：工具栏实时显示连接状态，Agent 操作浏览器时窗口四周显示闪烁光圈、右下角显示当前工具；活动日志保留最近 30 条操作；敏感输入由用户亲自填写，高危操作走浏览器内审批。点击「中断」会立即取消所有调用并暂停 30 秒，随后自动恢复接管能力，也可随时手动恢复。长操作（导航 / 等待 / 整页截图 / 多视口矩阵 / 视觉对比）会按 MCP 规范回传 `notifications/progress`；多客户端并发时 HUD 列出每个调用及其进度，并可「停止」单个调用而不影响其他客户端
+- 🧩 **长页面与证据治理**：超长页面可用 `browser_snapshot {maxNodes, cursor}` 分页且跨页 ref 仍有效；closed shadow DOM 内的元素也能被快照与点击；截图 / HAR / PDF / 视觉基线自动登记 sha256、大小与 TTL，按配额清理临时证据而保留用户数据
+- 🖱️ **下载与权限可控**：下载可取消 / 重试（重试重新校验站点白名单）；摄像头 / 麦克风 / 定位 / 通知请求进入人工审批，允许后仅在该会话内生效；原生右键菜单跟随语言设置，并带图片另存与打印
 - 🔒 **本地安全**：WebSocket 仅监听 `127.0.0.1`，每次启动随机 token，拒绝非本机来源；另有站点白名单、隔离会话与网络数据脱敏
 - 🔌 **一段接入**：把新标签页或 [PROMPT.md](./PROMPT.md) 里的通用提示词发给任意具备本机执行能力的 AI，自动完成下载、安装、MCP 配置和 `browser_tabs` 验证；配置指向稳定桥路径，随应用升级
 - 📦 **可验证发行**：Windows NSIS 与 Linux AppImage 同版本发布，附 `SHA256SUMS.txt`、GitHub 不可变发行证明和 CycloneDX `sbom.cdx.json`
@@ -173,7 +175,7 @@ title: Aa Browser - 搜索
 └─────────────────────────────────────────────────────┘
 ```
 
-端口与 token 由应用在启动时生成并写入 `~/.aabrowser/connection.json`（正常退出时删除）；MCP 桥通过它发现浏览器，所以升级应用一般不需要重写客户端配置。页面视图不挂 preload，快照与动作脚本由主进程注入。发布版使用 `out/bridge/mcp.cjs`——由 `cli/mcp.mjs` 构建出的单文件零依赖产物，安装后无需 `node_modules`。
+端口与 token 由应用在启动时生成并写入 `~/.aabrowser/connection.json`（正常退出时删除）；MCP 桥通过它发现浏览器。若浏览器尚未运行，桥在第一次 `tools/call` 时会从受信安装路径自动启动 Aa Browser，并等待 WebSocket 就绪；可用 `AA_BROWSER_APP_PATH` 指定绝对可执行文件路径，用 `AA_BROWSER_AUTO_LAUNCH=0` 禁用自动启动。升级应用一般不需要重写客户端配置。页面视图不挂 preload，快照与动作脚本由主进程注入。发布版使用 `out/bridge/mcp.cjs`——由 `cli/mcp.mjs` 构建出的单文件零依赖产物，安装后无需 `node_modules`。
 
 ## 快速开始
 
@@ -189,6 +191,7 @@ title: Aa Browser - 搜索
 
 - **还没安装 Aa Browser**：AI 会下载官方安装器，自动选择平台、校验 SHA-256、安装并启动，再写入 MCP 配置。
 - **已经下载并打开了 Aa Browser**：点新标签页的「复制接入提示词」，AI 会跳过安装，只写配置并实际调用 `browser_tabs` 列表验证。
+- **已经下载 Aa Browser 但尚未打开**：AI 写入配置后，第一次调用 `browser_tabs` 时 MCP 桥会自动启动浏览器并等待连接；也可以先手动打开再验证。
 - **网页版 ChatGPT 等没有本机执行能力的环境**：提示词要求 AI 明确说明无法自动安装并给出手动步骤，不会假装成功。
 
 安装器写入前会备份客户端配置，只修改 `aa-browser` 一个条目；配置指向稳定桥路径，应用升级后一般无需重写。完整平台 / 客户端矩阵、参数和排查见[通用安装与接入](./docs/CONNECT.md)。
@@ -216,7 +219,7 @@ node install.mjs --print-config                                 # 输出通用 M
 | `--sha256 <hex>` | 显式校验安装包哈希 |
 | `--print-config` | 只输出通用 MCP 配置片段 |
 
-安装器从不交互提问；`--yes` 只是兼容提示词的无人值守开关。自动写入配置的客户端：ZCode、Claude Code、Cursor、Windsurf、Cline、VS Code、Gemini CLI、Qwen Code、Codex、WorkBuddy。其他客户端可用 `--print-config` 获取通用配置。DeepSeek Harness 可直接安装插件市场的 Aa Browser 插件（见[插件市场接入](./docs/MARKETPLACE.md)）。
+安装器从不交互提问；`--yes` 只是兼容提示词的无人值守开关。自动写入配置的客户端：ZCode、Claude Code、Cursor、Windsurf、Cline、VS Code、Gemini CLI、Qwen Code、OpenCode、Codex、WorkBuddy。DeepSeek Harness 通过插件市场手动接入（安装器不会修改 `.dsh`）；其他客户端可用 `--print-config` 获取通用配置。DeepSeek Harness 可直接安装插件市场的 Aa Browser 插件（见[插件市场接入](./docs/MARKETPLACE.md)）。
 
 WorkBuddy 会写入用户级 `~/.workbuddy/mcp.json` 并生成本地 Connector；配置写入、Connector 导入 / 启用、bridge 鉴权、工具调用成功是不同状态，必须由 WorkBuddy 实际调用 `browser_tabs` 后才能报告已连接。不要改写 WorkBuddy 数据库、缓存或内部运行时文件。
 
@@ -276,7 +279,7 @@ Windows NSIS 安装版与 Linux AppImage 从 GitHub Releases 检查更新。打�
 
 ### 前提
 
-- Aa Browser 正在运行（它会在 `~/.aabrowser/connection.json` 写入本地端口与 token，MCP 桥通过它发现浏览器）。
+- Aa Browser 已安装；它会在 `~/.aabrowser/connection.json` 写入本地端口与 token，浏览器未运行时 MCP 桥会在第一次工具调用时自动拉起它。
 - 客户端支持 stdio MCP；浏览器与客户端在同一台机器、同一个用户账户下。
 
 ### 方式 A · 一键接入（推荐）
@@ -315,9 +318,10 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 | VS Code（原生 MCP） | 是 | `%APPDATA%\Code\User\mcp.json`（`servers`，需要 `type`） |
 | Gemini CLI | 是 | `~/.gemini/settings.json`（`mcpServers`） |
 | Qwen Code | 是 | `~/.qwen/settings.json`（`mcpServers`） |
+| OpenCode（开源项目：[anomalyco/opencode](https://github.com/anomalyco/opencode)） | 是 | Windows `%APPDATA%\opencode\opencode.json`；macOS `~/Library/Application Support/opencode/opencode.json`；Linux `$XDG_CONFIG_HOME/opencode/opencode.json`（`mcp`，`type: local`） |
 | Codex（桌面端 / CLI / IDE） | 是 | `~/.codex/config.toml`（`mcp_servers`，TOML） |
 | WorkBuddy | 是 | `~/.workbuddy/mcp.json` + 本地 Connector |
-| DeepSeek Harness | 插件市场 | 安装 `aa-browser-dsh` 插件，工具以 `mcp__aa-browser__*` 出现 |
+| DeepSeek Harness | 插件市场手动接入 | 安装/启用 Aa Browser 插件；工具以 `mcp__aa-browser__*` 出现；不会改写 `.dsh` 配置、数据库或缓存 |
 | 其他 MCP 客户端 | 手动 | `node install.mjs --print-config` 后按客户端文档粘贴 |
 
 写入前自动备份原配置为 `<文件>.aa-backup-<时间戳>`，只改 `aa-browser` 一个键，幂等可重复执行；配置文件存在但无法解析时会跳过自动写入并提示手动配置，不会硬写坏原文件。Linux 上 VS Code 配置位于 `~/.config/Code/User/`。
@@ -351,7 +355,8 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 | 工具 | 说明 |
 | --- | --- |
 | `browser_navigate` | 导航到 URL（非 URL 文本自动转搜索词；结果内嵌完整快照，`snapshot: false` 可跳过） |
-| `browser_snapshot` | 结构化页面快照（默认增量省 token；`full: true` 强制完整树） |
+| `browser_reload` | 刷新当前或指定标签页；`hard: true` 绕过缓存，默认返回刷新后快照 |
+| `browser_snapshot` | 结构化页面快照（默认增量省 token；`full: true` 强制完整树）。长页面可用 `maxNodes` 分页，响应给出 `nextCursor`，跨页 ref 仍有效 |
 | `browser_navigate_back` / `browser_navigate_forward` | 历史后退 / 前进（返回增量快照） |
 
 **交互**
@@ -365,7 +370,7 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 | `browser_drag` | 按 ref 拖拽（拖到目标元素 `toRef` 或相对偏移 `dx, dy`，支持滑块与看板） |
 | `browser_hover` | 按 ref 悬停（真实 mouseMove，触发悬停菜单 / 提示） |
 | `browser_scroll` | 滚动页面（先主文档，后最大滚动区域；默认 700px，上限 3000px） |
-| `browser_press_key` | 按键：Enter / Escape / Tab / 方向键 / PageUp / PageDown / F1-F12 / 单字符 |
+| `browser_press_key` | 按键：Enter / Escape / Tab / 方向键 / PageUp / PageDown / F1-F12 / 单字符；支持 `modifiers: [ctrl, alt, shift, meta]` 及 `Ctrl+C` / `Ctrl+Shift+R` 等组合 |
 | `browser_upload_file` | 向 `<input type=file>` 上传本机文件（触发 change 事件） |
 
 **读取与状态**
@@ -374,9 +379,16 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 | --- | --- |
 | `browser_extract` | 提取整页或指定元素的纯文本 |
 | `browser_evaluate` | 在页面执行 JS 表达式并返回 JSON（可按 ref 绑定 `element`） |
-| `browser_dialogs` | 读取页面弹过的 `alert` / `confirm` / `prompt`（已被拦截，不会卡死） |
-| `browser_wait` | 等待文本出现 / 消失 / 固定时长（`text` / `textGone` / `time`，250ms 轮询，上限 30s） |
-| `browser_screenshot` | PNG 截图（支持 `ref` 元素级截图：滚动到位并按包围盒裁剪），存 `~/.aabrowser/screenshots/` |
+| `browser_dialogs` | 读取页面弹过的 `alert` / `confirm` / `prompt`（已被拦截，不会卡死），并显示守卫实际返回的值 |
+| `browser_dialog_respond` | 预设 `confirm` / `prompt` 的返回值（可 `once:false` 常驻、`reset:true` 清除），用于测试需要确认或输入的流程 |
+| `browser_assert` | 断言校验：`url` / `title` / `text` / `selector` / `count` / `value` / `checked` / `attribute` / `console` / `network`，失败时返回 `isError` 并给出期望 vs 实际 |
+| `browser_frame` | 在任意 frame（含跨域 iframe：支付、OAuth、第三方编辑器）内工作：`list` / `text` / `elements` / `evaluate` / `click` / `type` / `select` |
+| `browser_wait` | 等待文本出现 / 消失（`text` / `textGone`）、选择器出现 / 消失（`selector` / `selectorGone`）、URL 包含（`urlContains`）或固定时长（`time`），250ms 轮询，上限 30s |
+| `browser_screenshot` | PNG 截图（支持 `ref` 元素级截图：滚动到位并按包围盒裁剪；`fullPage:true` 抓完整长页面），存 `~/.aabrowser/screenshots/` |
+| `browser_visual_diff` | **视觉基线对比**：`save` 存基线 / `compare` 逐像素对比（变化像素数、百分比、包围盒、差异图）/ `list` / `delete`，差异超阈值返回 `isError`，可作视觉断言；基线存 `~/.aabrowser/baselines/` |
+| `browser_contrast_audit` | **对比度审计**：扫描可见文本的计算前景/背景色，按 WCAG AA / AAA 算出对比度并列出不达标元素（选择器 + 文本 + 比值），违规时返回 `isError` |
+| `browser_viewport_matrix` | **多视口矩阵**：一次在 320/480/768/桌面 + 2x 高 DPI 等视口截图并报告横向溢出；走 CDP 设备指标模拟，不受窗口 960×640 最小尺寸限制 |
+| `browser_evidence` | **证据文件管理**：查看自动生成的截图 / HAR / PDF / 基线登记（含 sha256、大小、TTL），可 `sweep` 按 TTL/配额清理、`hash` 校验、`forget` 移除登记 |
 | `browser_find` | 页面内查找文本（原生 Ctrl+F：高亮全部匹配并定位第一处） |
 | `browser_get_selector` | 导出元素的 CSS 选择器（DOM 回验，可复用于脚本 / 测试） |
 | `browser_cookies` | Cookie 读 / 写 / 清（登录态测试关键能力） |
@@ -404,11 +416,15 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 | `browser_resize` | 调整视口尺寸 200–5000px（响应式测试） |
 | `browser_tabs` | 列表 / 新建 / 切换 / 关闭标签页；`isolated: true` 新建隔离标签 |
 
-完整的参数说明、返回示例与风险标注见[34 工具手册](./site/tools.html)（本地打开 `site/tools.html` 即可，无需部署）。
+视觉评审建议流程：先用 `browser_viewport_matrix` 跑一遍响应式矩阵（发现横向溢出），再用 `browser_contrast_audit` 找不可读文本，最后对关键页面用 `browser_visual_diff action=save` 存基线、改动后 `action=compare` 做回归对比。基线目录可用 `AA_BROWSER_BASELINE_DIR` 覆盖。
+
+> 开发者注意：工具的名称、说明、参数 schema 与 MCP annotations 只维护在 [`src/shared/tool-defs.mjs`](./src/shared/tool-defs.mjs)。主进程只写 `name` + `handler`，桥直接导入同一份定义。`npm run check` 会断言唯一来源、主进程、桥与文档四方一致，并阻止任何一方重新手写 schema。
+
+完整的参数说明、返回示例与风险标注见[工具手册](./site/tools.html)（本地打开 `site/tools.html` 即可，无需部署）。
 
 ## 界面与快捷键
 
-工具栏左侧依次是后退 / 前进 / 刷新和 AI 连接状态；右侧是恢复关闭的标签页、页面查找、Agent 活动日志、下载、设置和「中断 Agent」。地址栏支持输入网址、搜索词与历史补全（↑ / ↓ 选择，Enter 打开，Esc 取消）。Agent 每次点击时页面会闪出激光波纹，方便人观察它在点哪里。
+工具栏左侧依次是后退 / 前进 / 刷新和 AI 连接状态；右侧是恢复关闭的标签页、页面查找、Agent 活动日志、下载、设置和「中断 Agent」。AI 调用浏览器工具时窗口四周会显示闪烁光圈，右下角 HUD 会显示当前工具与中断/恢复按钮；并发调用会逐条列出（含进度），每条可单独停止；地址栏支持输入网址、搜索词与历史补全（↑ / ↓ 选择，Enter 打开，Esc 取消）。Agent 每次点击时页面会闪出激光波纹，方便人观察它在点哪里。
 
 | 快捷键 | 作用 |
 | --- | --- |
@@ -427,6 +443,7 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 | 设置项 | 说明 |
 | --- | --- |
 | 界面语言 | 自动跟随系统，或固定简体中文 / English |
+| 主题 | 新用户默认为浅色；可切换深色或跟随系统。旧设置文件缺少主题字段时运行时采用浅色，不强制改写原文件；已有显式深色选择保持不变 |
 | 默认搜索引擎 | 必应 / Google / 百度 / DuckDuckGo / GitHub，也可自定义基址 |
 | 快照默认全量 | 打开后每次返回完整树（更费 token），默认关闭以使用增量快照 |
 | 高危操作人工确认 | 提交表单 / 输入后回车、查看或导出未脱敏网络数据前，在浏览器内弹确认 |
@@ -442,7 +459,7 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 
 - **连接面很小**：Agent 服务只监听 `127.0.0.1`，每次启动随机生成 token，并拒绝非本机来源的连接；端口与 token 写入用户目录 `~/.aabrowser/connection.json`（正常退出时删除）。
 - **页面视图不挂 preload**：快照与动作脚本由主进程注入；导航只允许 `http:` / `https:`（内部新标签页除外），`file:`、`data:`、`devtools:` 等协议会被拒绝。
-- **审批与中断**：敏感输入框一律要求用户亲自填写——Agent 提供的文本不会被写入、读取或回传；开启「高危操作人工确认」后，提交表单 / 输入后回车、查看或导出未脱敏网络数据也会等待批准，120 秒未确认按拒绝处理。工具栏可随时中断 Agent 的后续浏览器操作，恢复后再继续。
+- **审批与中断**：敏感输入框一律要求用户亲自填写——Agent 提供的文本不会被写入、读取或回传；开启「高危操作人工确认」后，提交表单 / 输入后回车、查看或导出未脱敏网络数据也会等待批准，120 秒未确认按拒绝处理。工具栏或右下角 HUD 可随时中断 Agent：所有在途调用会立即取消，30 秒后自动恢复接管能力，也可以提前点击「恢复」。多客户端并发时 HUD 会逐个显示调用与进度，每个调用旁的「停止」只取消该调用（其他调用与其他客户端不受影响）。长操作通过 MCP `notifications/progress` 把进度回传给客户端，进度通知不会提前结束工具调用。
 - **网络数据脱敏**：网络详情与 HAR 默认脱敏认证头和凭据类参数；开启「高危操作人工确认」后，`includeSensitive: true` 查看或导出未脱敏数据需要先批准。
 - **站点白名单**：只作用于导航，留空表示关闭；即使白名单为空，`file:`、`data:`、`devtools:` 等非网页协议也不会被放行。
 - **会话隔离**：隔离标签使用独立 session 分区，不共享 Cookie 与登录态，关闭后清理数据；隔离标签不进入全局历史、最近关闭列表与会话恢复记录。
@@ -521,7 +538,7 @@ aa-browser/
 │   ├── main/          # 主进程：窗口 / 标签 / 动作 / 抓包 / Agent 服务 / MCP 工具 / 客户端接入
 │   ├── preload/       # 仅外壳 UI 的 IPC 桥（页面视图不挂 preload）
 │   ├── renderer/      # 浏览器外壳 UI（设置面板、新标签页、活动日志、审批面板）
-│   ├── shared/        # 三方共享的协议类型与界面语言
+│   ├── shared/        # 三方共享的协议类型、界面语言与 MCP 工具定义单一来源（tool-defs.mjs）
 │   └── snapshot/      # 注入引擎（DOM → 快照）与动作脚本
 ├── cli/
 │   ├── mcp.mjs        # stdio MCP 桥源码（构建为 out/bridge/mcp.cjs）
@@ -529,7 +546,7 @@ aa-browser/
 │   └── workbuddy.mjs  # WorkBuddy Connector 生成
 ├── installer/         # 通用安装 / 接入提示词源文件（生成 PROMPT.md 与新标签页）
 ├── packages/dsh/      # DeepSeek Harness 插件（插件市场接入）
-├── site/              # 静态宣传站 + 34 工具手册（零依赖）
+├── site/              # 静态宣传站 + MCP 工具手册（零依赖）
 ├── docs/              # 接入、平台、自动更新、发行与维护文档
 │   └── media/         # README 演示录屏与动图预览
 ├── scripts/           # 冒烟 / 回归 / 安装器与接入校验 / 图标与 SBOM 生成
@@ -553,6 +570,7 @@ npm run test:stores    # 设置 / 历史 / 会话恢复记录的持久化回归
 npm run test:security  # 安全相关回归
 npm run test:installer # 安装器纯函数：平台资产选择、稳定路径、digest/文件头校验
 npm run test:bridge    # MCP 桥离线行为与错误返回
+npm run test:bridge-autolaunch # 浏览器未运行时桥自动启动并完成 browser_tabs
 npm run test:connect   # 对打包产物执行 --connect-only --verify --json（需先 dist）
 npm run test:updater   # 更新器状态机（模拟 provider）
 npm run test:release   # 发布标签 / 草稿 / 资产回归（模拟 GitHub API）

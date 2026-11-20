@@ -1,4 +1,4 @@
-import { app, BaseWindow, WebContentsView, ipcMain, Menu, MenuItem, shell, clipboard, powerMonitor } from 'electron'
+import { app, BaseWindow, WebContentsView, ipcMain, Menu, MenuItem, shell, clipboard, powerMonitor, nativeTheme } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -11,6 +11,7 @@ import { buildTools } from './tools'
 import { normalizeUrl } from './tabs'
 import { detectClients, setupClients, syncAppImageBridge } from './clients'
 import { getDownloadTracker } from './downloads'
+import { getEvidenceManager } from './evidence'
 import { getHistoryStore } from './history'
 import { getSettingsStore } from './settings'
 import { getSessionStore } from './session-store'
@@ -18,6 +19,7 @@ import { ApprovalManager } from './approvals'
 import { applyPermissionPolicy, clearIsolatedPartition, sweepStalePartitions } from './sessions'
 import { session } from 'electron'
 import type { UiState } from '@shared/types'
+import { contextMenuLabels } from '@shared/menu-labels'
 import { UpdateManager } from './updater'
 import { PageFinder } from './page-finder'
 
@@ -48,6 +50,7 @@ let agentCount = 0
 let agentVerifiedCount = 0
 let bridgeState: UiState['bridgeState'] = 'waiting'
 let connectionMessage = '等待 MCP 桥启动并连接'
+let agentActivity: NonNullable<UiState['agentActivity']> = { active: false, paused: false }
 let settingsOpen = false
 let overlayHeight = 0
 let finder: PageFinder | null = null
@@ -94,8 +97,11 @@ function layout(): void {
   if (!win || !chromeView) return
   const { width, height } = win.getContentBounds()
   const panelHeight = (approvals.list().length ? 180 : 0) + (finder?.getState().open ? 48 : 0) + (updater?.getState().noticeVisible ? 44 : 0)
-  const chromeHeight = Math.min(height, Math.max(CHROME_HEIGHT + panelHeight, overlayHeight))
-  chromeView.setBounds({ x: 0, y: 0, width, height: settingsOpen ? height : chromeHeight })
+  const showActivityOverlay = agentActivity.active || agentActivity.paused
+  const chromeHeight = settingsOpen || showActivityOverlay
+    ? height
+    : Math.min(height, Math.max(CHROME_HEIGHT + panelHeight, overlayHeight))
+  chromeView.setBounds({ x: 0, y: 0, width, height: chromeHeight })
   const active = tabManager?.active()
   if (active) {
     active.view.setBounds({ x: 0, y: CHROME_HEIGHT + panelHeight, width, height: Math.max(0, height - CHROME_HEIGHT - panelHeight) })
@@ -125,6 +131,7 @@ function pushState(): void {
     connectionMessage,
     pendingApprovals: approvals.list(),
     agentInterrupted: approvals.isInterrupted(),
+    agentActivity,
     recentActions: [...recentActions],
     downloads: getDownloadTracker().list(20),
     update: updater?.getState(),
@@ -205,34 +212,48 @@ function handleBeforeInput(wc: Electron.WebContents): void {
 function installPageContextMenu(wc: Electron.WebContents): void {
   wc.on('context-menu', (_e, params) => {
     const menu = new Menu()
+    const settingLocale = getSettingsStore().get().locale
+    const locale = settingLocale === 'en-US' ? 'en'
+      : settingLocale === 'auto' ? (app.getLocale().toLowerCase().startsWith('zh') ? 'zh' : 'en')
+        : 'zh'
+    const L = contextMenuLabels(locale)
     const hasLink = /^https?:|^file:/i.test(params.linkURL)
     const linkAllowed = !!tabManager?.isUrlAllowed(params.linkURL)
     const hasSelection = !!params.selectionText
     const editable = !!params.isEditable
+    const hasImage = params.mediaType === 'image' && /^https?:|^data:|^file:/i.test(params.srcURL)
+    const imageAllowed = hasImage && /^https?:/i.test(params.srcURL) && !!tabManager?.isUrlAllowed(params.srcURL)
 
     const push = (opts: MenuItemConstructorOptions): void => { menu.append(new MenuItem(opts)) }
 
     if (editable) {
-      push({ label: '撤销', role: 'undo' })
-      push({ label: '重做', role: 'redo' })
+      push({ label: L.undo, role: 'undo' })
+      push({ label: L.redo, role: 'redo' })
       push({ type: 'separator' })
-      push({ label: '剪切', role: 'cut' })
-      push({ label: '复制', role: 'copy' })
-      push({ label: '粘贴', role: 'paste' })
-      push({ label: '全选', role: 'selectAll' })
+      push({ label: L.cut, role: 'cut' })
+      push({ label: L.copy, role: 'copy' })
+      push({ label: L.paste, role: 'paste' })
+      push({ label: L.selectAll, role: 'selectAll' })
     } else if (hasSelection) {
-      push({ label: '复制', role: 'copy' })
+      push({ label: L.copy, role: 'copy' })
     }
 
     if (menu.items.length) push({ type: 'separator' })
 
     if (hasLink) {
-      push({ label: '打开链接', enabled: linkAllowed, click: () => { if (linkAllowed) void wc.loadURL(params.linkURL) } })
-      push({ label: '在新标签页打开链接', enabled: linkAllowed, click: () => {
+      push({ label: L.openLink, enabled: linkAllowed, click: () => { if (linkAllowed) void wc.loadURL(params.linkURL) } })
+      push({ label: L.openLinkNewTab, enabled: linkAllowed, click: () => {
         const source = tabManager?.tabs.find((t) => t.view.webContents === wc)
         if (linkAllowed) tabManager?.createTab(params.linkURL, true, source?.isolated)
       } })
-      push({ label: '复制链接地址', click: () => { clipboard.writeText(params.linkURL) } })
+      push({ label: L.copyLink, click: () => { clipboard.writeText(params.linkURL) } })
+      push({ type: 'separator' })
+    }
+    if (hasImage) {
+      push({ label: L.copyImage, click: () => { clipboard.writeText(params.srcURL) } })
+      push({ label: L.saveImage, enabled: imageAllowed, click: () => {
+        if (imageAllowed) void wc.downloadURL(params.srcURL)
+      } })
       push({ type: 'separator' })
     }
 
@@ -240,29 +261,49 @@ function installPageContextMenu(wc: Electron.WebContents): void {
     const isActiveTab = active?.view.webContents === wc
     const canBack = tabManager && active ? tabManager.canBack(active) : false
     const canForward = tabManager && active ? tabManager.canForward(active) : false
-    push({ label: '后退', enabled: isActiveTab && canBack, click: () => { const t = tabManager?.active(); if (t) tabManager?.goBack(t) } })
-    push({ label: '前进', enabled: isActiveTab && canForward, click: () => { const t = tabManager?.active(); if (t) tabManager?.goForward(t) } })
-    push({ label: '刷新', click: () => wc.reload() })
+    push({ label: L.back, enabled: isActiveTab && canBack, click: () => { const t = tabManager?.active(); if (t) tabManager?.goBack(t) } })
+    push({ label: L.forward, enabled: isActiveTab && canForward, click: () => { const t = tabManager?.active(); if (t) tabManager?.goForward(t) } })
+    push({ label: L.reload, click: () => wc.reload() })
     push({ type: 'separator' })
-    push({ label: '查看源代码', enabled: !getSettingsStore().get().allowedSites.length, click: () => {
+    push({ label: L.viewSource, enabled: !getSettingsStore().get().allowedSites.length, click: () => {
       if (!getSettingsStore().get().allowedSites.length) void wc.loadURL(`view-source:${wc.getURL()}`)
     } })
-    push({ label: '开发者工具', click: () => {
+    push({ label: L.devtools, click: () => {
       const t = tabManager?.tabs.find((x) => x.view.webContents === wc)
       t?.net.releaseDebugger() // DevTools 与 debugger/对话框守卫互斥
       wc.openDevTools({ mode: 'detach' })
     } })
-    push({ label: '截图保存', click: () => {
+    push({ label: L.print, click: () => wc.print() })
+    push({ label: L.saveScreenshot, click: () => {
       void wc.capturePage().then((img) => {
         const dir = app.getPath('pictures') || os.homedir()
         const p = path.join(dir, `aabrowser-${Date.now()}.png`)
         fs.writeFileSync(p, img.toPNG())
+        getEvidenceManager().record(p, 'context-shot')
         shell.showItemInFolder(p)
       }).catch(() => {})
     } })
 
     menu.popup({ window: win ?? undefined })
   })
+}
+
+/** 原生标题栏覆盖层不受页面 CSS 控制，必须单独跟随主题设置。 */
+function titleBarColors(): { color: string; symbolColor: string } {
+  const setting = getSettingsStore().get().theme
+  const dark = setting === 'dark' || (setting === 'system' && nativeTheme.shouldUseDarkColors)
+  return dark
+    ? { color: '#1b1c21', symbolColor: '#d7d8db' }
+    : { color: '#ebf1f4', symbolColor: '#1d2a2f' }
+}
+
+function applyTitleBarOverlay(): void {
+  if (!win || win.isDestroyed()) return
+  try {
+    win.setTitleBarOverlay({ ...titleBarColors(), height: 38 })
+  } catch {
+    /* macOS 等平台不支持覆盖层 */
+  }
 }
 
 function createWindow(): void {
@@ -272,15 +313,16 @@ function createWindow(): void {
     minWidth: 960,
     minHeight: 640,
     show: false,
-    backgroundColor: '#16171b',
+    backgroundColor: titleBarColors().color,
     titleBarStyle: 'hidden',
     titleBarOverlay: {
-      color: '#1b1c21',
-      symbolColor: '#d7d8db',
+      ...titleBarColors(),
       height: 38
     },
     title: 'Aa Browser'
   })
+  nativeTheme.on('updated', applyTitleBarOverlay)
+  applyTitleBarOverlay()
 
   // chrome UI 加载完成后再显示窗口，避免白闪（见下方 chromeView 创建处）
   win.on('resize', layout)
@@ -349,6 +391,7 @@ function registerIpc(): void {
       connectionMessage,
       pendingApprovals: approvals.list(),
       agentInterrupted: approvals.isInterrupted(),
+    agentActivity,
       downloads: getDownloadTracker().list(20),
       recentActions: [...recentActions],
       update: updater?.getState(),
@@ -448,14 +491,29 @@ function registerIpc(): void {
   ipcMain.handle('aa:agent-interrupt', (event) => {
     if (!isTrustedSender(event)) return false
     approvals.interrupt()
+    agentServer?.pause(approvals.getResumeAt())
     return true
   })
   ipcMain.handle('aa:agent-resume', (event) => {
     if (!isTrustedSender(event)) return false
     approvals.resume()
+    agentServer?.resume()
     return true
   })
-  approvals.onChange = pushState
+  /** HUD 上“停止此调用”：只取消指定调用，不影响其他客户端/其他并发调用。 */
+  ipcMain.handle('aa:agent-cancel-call', (event, callId: number) => {
+    if (!isTrustedSender(event)) return false
+    return agentServer?.cancelCall(Number(callId)) ?? false
+  })
+  approvals.onChange = () => {
+    if (approvals.isInterrupted()) {
+      agentActivity = { active: false, paused: true, resumeAt: approvals.getResumeAt() }
+    } else if (!agentActivity.active) {
+      agentActivity = { active: false, paused: false }
+      agentServer?.resume()
+    }
+    pushState()
+  }
   ipcMain.handle('aa:clients-detect', (event) => {
     return guard(event, [], () => detectClients())
   })
@@ -474,6 +532,12 @@ function registerIpc(): void {
   ipcMain.handle('aa:download-dir', (event) => {
     return guard(event, '', () => getDownloadTracker().dir)
   })
+  ipcMain.handle('aa:download-cancel', (event, id: string) => {
+    return guard(event, false, () => getDownloadTracker().cancel(String(id)))
+  })
+  ipcMain.handle('aa:download-retry', (event, id: string) => {
+    return guard(event, { ok: false }, () => getDownloadTracker().retry(String(id)))
+  })
   ipcMain.handle('aa:history-suggest', (event, query: string, limit?: number) => {
     return guard(event, [], () => getHistoryStore().suggest(String(query ?? ''), Number(limit) || 8))
   })
@@ -490,6 +554,7 @@ function registerIpc(): void {
       // 关闭恢复时立刻删除旧记录；重新开启时立即记录当前标签，避免下次启动恢复过期页面。
       if (!result.restoreSession) getSessionStore().clear()
       else if ((patch as Record<string, unknown> | null)?.['restoreSession'] === true) flushSessionRecord?.()
+      if ((patch as Record<string, unknown> | null)?.['theme'] !== undefined) applyTitleBarOverlay()
       pushState()
       return result
     })
@@ -568,6 +633,14 @@ app.whenReady().then(() => {
   } catch {
     /* 清理失败不应阻塞启动 */
   }
+  try {
+    const evidence = getEvidenceManager().sweep()
+    if (evidence.removed.length) {
+      console.log(`[aa-browser] 已清理 ${evidence.removed.length} 个过期证据文件（${Math.round(evidence.bytesFreed / 1024)}KB）`)
+    }
+  } catch {
+    /* 证据清理失败不应阻塞启动 */
+  }
 
   tabManager = new TabManager(newtabUrl(), searchUrlBase())
   finder = new PageFinder(tabManager, pushState)
@@ -580,12 +653,14 @@ app.whenReady().then(() => {
   tabManager.getAllowedSites = () => getSettingsStore().get().allowedSites
   tabManager.getDefaultIsolated = () => getSettingsStore().get().isolatedSessions
   tabManager.onSession = (ses) => {
-    applyPermissionPolicy(ses)
+    applyPermissionPolicy(ses, { requestApproval: (meta) => approvals.request(meta) })
     getDownloadTracker().attach(ses)
   }
   tabManager.onIsolatedClosed = (partition) => void clearIsolatedPartition(partition)
   tabManager.onViewDetach = (view) => detachTabView(view)
   getDownloadTracker().setDirectoryProvider(() => getSettingsStore().get().downloadDir)
+  // 重试是新的网络请求，必须重新过站点白名单，不能沿用创建下载时的授权
+  getDownloadTracker().setUrlGuard((url) => tabManager?.isUrlAllowed(url) ?? false)
 
   // 跨会话标签恢复：先把上次的普通标签建回来，再开启自动保存。
   // 恢复过程中的 onChange 也会排队保存，但 during-restore 标志保证不会用半恢复状态覆盖记录。
@@ -678,7 +753,11 @@ app.whenReady().then(() => {
       pushState()
     },
     VERSION,
-    approvals
+    approvals,
+    (activity) => {
+      agentActivity = activity
+      pushState()
+    }
   )
   void agentServer.start().then(() => {
     if (agentCount === 0) {

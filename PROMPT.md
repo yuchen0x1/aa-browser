@@ -49,8 +49,11 @@ Linux / macOS 终端（仅 Linux）：
 
 安装器会按顺序完成：选择当前平台的官方 Release 资产 → 校验 SHA-256 与文件头 → 安装（Windows NSIS / Linux AppImage）→ 启动 → 检测并备份后写入本机 AI 客户端的 MCP 配置 → 调用 browser_tabs 验证。
 
+- 安装完成后即使用户关闭 Aa Browser，MCP 桥在 AI 第一次调用浏览器工具时也会从受信安装路径自动启动它并等待连接；可用 `AA_BROWSER_APP_PATH` 指定绝对路径，或用 `AA_BROWSER_AUTO_LAUNCH=0` 禁用。找不到受信路径时会明确报错，不执行任意命令。
+
 - --json 会在标准输出给出机器可读结果（ok、version、installDir、bridge、clients、verified）。请读取它并据此判断，不要只看退出码。
-- 默认会自动检测并写入本机已安装的 AI 客户端。只想配置当前客户端时，加 --clients 参数（可用 id：zcode, claude, cursor, windsurf, cline, vscode, gemini, qwen, codex, workbuddy）。不确定时用默认自动检测。
+- 默认会自动检测并写入本机已安装的 AI 客户端。只想配置当前客户端时，加 --clients 参数（可用 id：zcode, claude, cursor, windsurf, cline, vscode, gemini, qwen, opencode, codex, workbuddy；DeepSeek Harness 使用 deepseek-harness 仅输出插件市场手动接入指引）。不确定时用默认自动检测。
+- DeepSeek Harness 是插件式手动接入：在插件市场安装/启用 Aa Browser 插件，再让 Agent 实际调用 `mcp__aa-browser__browser_tabs`；安装器不会修改 `.dsh` 配置、数据库或缓存。
 - 如果当前客户端不在自动检测列表：先运行 node install.mjs --print-config，得到 aa-browser 的 MCP 启动配置；再按当前客户端官方文档的 MCP 配置格式写入。不要猜测配置文件路径或格式；找不到时向用户索要，并报告「需要手动添加」。
 
 ## 3. 让当前 AI 客户端加载新配置
@@ -91,7 +94,7 @@ Linux / macOS 终端（仅 Linux）：
 Aa Browser 新标签页里也显示这段提示词，点「复制接入提示词」即可。把整段发给 AI。
 
 ```text
-你是运行在这台电脑上的 AI Agent。Aa Browser 已经安装并正在运行（你现在看到的安装/接入提示词就来自它）。你的任务：把 Aa Browser 接入你当前所在的 AI 客户端，并实际验证 MCP 浏览器工具可用。
+你是运行在这台电脑上的 AI Agent。Aa Browser 已经安装（你现在看到的安装/接入提示词就来自它）。你的任务：把 Aa Browser 接入你当前所在的 AI 客户端，并实际验证 MCP 浏览器工具可用。
 
 不要重复安装浏览器本体，不要跳过验证，也不要把「配置已写入」当成「已连接」。
 
@@ -104,7 +107,7 @@ Aa Browser 新标签页里也显示这段提示词，点「复制接入提示词
 ## 1. 检查运行状态
 
 - 系统需为 Windows x64 或 Linux x86_64，Node.js 22.12 或更高（node -v）。
-- 确认本机存在 Aa Browser 的本地服务发现文件：Windows 为 %USERPROFILE%\.aabrowser\connection.json，Linux 为 ~/.aabrowser/connection.json。文件存在且其中 pid 对应的进程仍在运行，说明浏览器已就绪。
+- 确认本机存在 Aa Browser 的本地服务发现文件：Windows 为 %USERPROFILE%\.aabrowser\connection.json，Linux 为 ~/.aabrowser/connection.json。文件存在且其中 pid 对应的进程仍在运行，说明浏览器已就绪；如果文件暂时不存在，MCP 桥在第一次 tools/call 时会按受信安装路径自动启动 Aa Browser 并等待连接。
 - 如果 Node.js 缺失：请用户确认后安装，不要静默安装系统依赖。
 
 ## 2. 获取官方安装器（只用于写入配置，不重复安装）
@@ -127,7 +130,8 @@ Linux 终端：
 
 --connect-only 会跳过下载和安装，只做三件事：确认 Aa Browser 已就绪、备份并写入本机 AI 客户端的 MCP 配置、实际调用 browser_tabs 验证。--json 输出机器可读结果（ok、version、installDir、bridge、clients、verified）。
 
-- 只想配置当前客户端时加 --clients（可用 id：zcode, claude, cursor, windsurf, cline, vscode, gemini, qwen, codex, workbuddy）。
+- 只想配置当前客户端时加 --clients（可用 id：zcode, claude, cursor, windsurf, cline, vscode, gemini, qwen, opencode, codex, workbuddy；DeepSeek Harness 使用 deepseek-harness 仅输出插件市场手动接入指引）。
+- DeepSeek Harness 只能通过插件市场安装/启用 Aa Browser 插件；安装器不会修改 `.dsh` 配置、数据库或缓存。启用后让 Agent 实际调用 `mcp__aa-browser__browser_tabs` 验证。
 - 当前客户端不在自动检测列表时：运行 node install.mjs --print-config，把输出按该客户端官方 MCP 配置格式写入；找不到路径就向用户索要，不要猜。
 
 ## 3. 重载客户端并验证
@@ -157,9 +161,9 @@ Linux 终端：
 
 - 官方安装包：Windows x64（NSIS 安装器）、Linux x86_64（AppImage）。
 - macOS、Windows ARM64 和其他架构目前没有官方安装包；安装器会明确拒绝，不会假装安装。
-- 自动写入配置的客户端：ZCode、Claude Code、Cursor、Windsurf、Cline、VS Code、Gemini CLI、Qwen Code、Codex（桌面端 / CLI / IDE）、WorkBuddy。
+- 自动写入配置的客户端：ZCode、Claude Code、Cursor、Windsurf、Cline、VS Code、Gemini CLI、Qwen Code、OpenCode、Codex（桌面端 / CLI / IDE）、WorkBuddy。
+- DeepSeek Harness：通过插件市场安装/启用 Aa Browser 插件手动接入；安装器不会修改 `.dsh` 配置、数据库或缓存，启用后实际调用 `mcp__aa-browser__browser_tabs` 验证。
 - 其他支持 MCP 的客户端：运行 `node install.mjs --print-config` 获取启动配置，按该客户端官方 MCP 文档添加。
-- DeepSeek Harness 用户可以在插件市场安装 Aa Browser 插件（详见 [docs/MARKETPLACE.md](./docs/MARKETPLACE.md)），或使用上面的通用提示词。
 
 ## 四、自动更新
 

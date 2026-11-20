@@ -45,6 +45,18 @@ test('invalid stored settings are normalized without leaking unsafe types', () =
   assert.equal(value.fullSnapshot, false)
   assert.deepEqual(value.allowedSites, ['https://example.com'])
 })
+test('new users default to light theme and legacy settings migrate without rewriting', () => {
+  fixture('theme-defaults')
+  const fresh = new SettingsStore()
+  assert.equal(fresh.get().theme, 'light')
+  const legacyFile = path.join(path.dirname(process.env.AA_BROWSER_SETTINGS_FILE), 'legacy.json')
+  fs.writeFileSync(legacyFile, JSON.stringify({ locale: 'zh-CN', searchEngine: 'https://www.bing.com/search?q=' }))
+  process.env.AA_BROWSER_SETTINGS_FILE = legacyFile
+  const legacy = new SettingsStore()
+  assert.equal(legacy.get().theme, 'light')
+  assert.equal(legacy.set({ theme: 'dark' }).theme, 'dark')
+  assert.equal(legacy.set({ theme: 'system' }).theme, 'system')
+})
 test('failed settings write throws and keeps previous in-memory settings', () => {
   fixture('failed-settings')
   fs.mkdirSync(process.env.AA_BROWSER_SETTINGS_FILE)

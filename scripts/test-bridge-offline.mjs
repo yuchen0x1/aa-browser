@@ -26,6 +26,7 @@ function startBridge() {
     env: {
       ...process.env,
       AA_BROWSER_CONNECTION_FILE: CONNECTION_FILE,
+      AA_BROWSER_AUTO_LAUNCH: '0',
       AA_BROWSER_CONNECT_RETRY_MS: '2000'
     },
     stdio: ['pipe', 'pipe', 'pipe']
@@ -68,7 +69,7 @@ await test('tools/call while Aa Browser is offline receives an isError response'
     assert.equal(call.error, undefined, 'offline tool call must be a tool result, not a protocol error')
     assert.equal(call.result?.isError, true, 'offline tool call must report isError')
     const text = (call.result?.content ?? []).map((item) => item.text ?? '').join('\n')
-    assert.match(text, /未找到 Aa Browser|无法连接|请先启动/, `unexpected offline error text: ${text}`)
+    assert.match(text, /未找到 Aa Browser|无法连接|请先启动|禁用自动启动/, `unexpected offline error text: ${text}`)
   } finally {
     try { child.stdin.end() } catch { /* ignore */ }
     try { child.kill() } catch { /* ignore */ }

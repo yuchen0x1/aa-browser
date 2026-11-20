@@ -17,6 +17,23 @@ interface ClientSetupResult {
   message: string
 }
 
+interface AgentActivityState {
+  active: boolean
+  paused: boolean
+  tool?: string
+  startedAt?: number
+  resumeAt?: number
+  calls?: {
+    id: number
+    tool: string
+    startedAt: number
+    client: number
+    progress?: number
+    total?: number
+    message?: string
+  }[]
+}
+
 declare global {
   interface Window {
     aa: {
@@ -37,9 +54,12 @@ declare global {
       decideApproval: (id: string, allowed: boolean) => Promise<boolean>
       interruptAgent: () => Promise<boolean>
       resumeAgent: () => Promise<boolean>
+      cancelAgentCall: (id: number) => Promise<boolean>
       downloadsList: () => Promise<DownloadInfo[]>
       downloadOpen: (id: string) => Promise<void>
       downloadShow: (id: string) => Promise<void>
+      downloadCancel: (id: string) => Promise<boolean>
+      downloadRetry: (id: string) => Promise<{ ok: boolean; reason?: string }>
       downloadDir: () => Promise<string>
       historySuggest: (query: string, limit?: number) => Promise<HistoryEntry[]>
       settingsGet: () => Promise<SettingsView | null>
@@ -61,7 +81,7 @@ declare global {
   }
 }
 
-let state: UiState = { tabs: [], activeId: null, agentCount: 0, agentVerifiedCount: 0, bridgeState: 'waiting', connectionMessage: '等待 AI 客户端连接 MCP 桥', pendingApprovals: [], agentInterrupted: false }
+let state: UiState = { tabs: [], activeId: null, agentCount: 0, agentVerifiedCount: 0, bridgeState: 'waiting', connectionMessage: '等待 AI 客户端连接 MCP 桥', pendingApprovals: [], agentInterrupted: false, agentActivity: { active: false, paused: false } }
 
 const tabsEl = document.getElementById('tabs') as HTMLDivElement
 const omnibox = document.getElementById('omnibox') as HTMLInputElement
@@ -70,6 +90,12 @@ const btnBack = document.getElementById('btn-back') as HTMLButtonElement
 const btnForward = document.getElementById('btn-forward') as HTMLButtonElement
 const btnReload = document.getElementById('btn-reload') as HTMLButtonElement
 const agentStop = document.getElementById('agent-stop') as HTMLButtonElement
+const agentActivityOverlay = document.getElementById('agent-activity-overlay') as HTMLDivElement | null
+const agentActivityTitle = document.getElementById('agent-activity-title') as HTMLElement | null
+const agentActivityTool = document.getElementById('agent-activity-tool') as HTMLElement | null
+const agentActivityDetail = document.getElementById('agent-activity-detail') as HTMLElement | null
+const agentActivityAction = document.getElementById('agent-activity-action') as HTMLButtonElement | null
+const agentActivityCalls = document.getElementById('agent-activity-calls') as HTMLElement | null
 const approvalPanel = document.getElementById('approval-panel') as HTMLDivElement
 const btnFeed = document.getElementById('btn-feed') as HTMLButtonElement | null
 const feedDrawer = document.getElementById('action-feed-drawer') as HTMLDivElement | null
@@ -84,6 +110,7 @@ const btnSettings = document.getElementById('btn-settings') as HTMLButtonElement
 const settingsModal = document.getElementById('settings-modal') as HTMLDivElement | null
 const setEngine = document.getElementById('set-engine') as HTMLSelectElement | null
 const setLocale = document.getElementById('set-locale') as HTMLSelectElement | null
+const setTheme = document.getElementById('set-theme') as HTMLSelectElement | null
 const setEngineUrl = document.getElementById('set-engine-url') as HTMLInputElement | null
 const setFullSnapshot = document.getElementById('set-full-snapshot') as HTMLInputElement | null
 const setOpApproval = document.getElementById('set-op-approval') as HTMLInputElement | null
@@ -120,6 +147,26 @@ function resolveUiLocale(setting: AppSettings['locale'] = 'auto'): Locale {
 let savedLocale = resolveUiLocale()
 let activeLocale = savedLocale
 const t = (key: LocaleKey): string => translate(activeLocale, key)
+
+type ThemeSetting = AppSettings['theme']
+let activeThemeSetting: ThemeSetting = 'light'
+let savedThemeSetting: ThemeSetting = 'light'
+const systemThemeMedia = window.matchMedia?.('(prefers-color-scheme: dark)')
+function resolveUiTheme(setting: ThemeSetting = 'light'): 'light' | 'dark' {
+  if (setting === 'dark') return 'dark'
+  if (setting === 'system') return systemThemeMedia?.matches ? 'dark' : 'light'
+  return 'light'
+}
+function applyTheme(setting: ThemeSetting = 'light'): void {
+  activeThemeSetting = setting
+  const resolved = resolveUiTheme(setting)
+  document.documentElement.dataset.theme = resolved
+  document.documentElement.style.colorScheme = resolved
+}
+applyTheme('light')
+systemThemeMedia?.addEventListener('change', () => {
+  if (activeThemeSetting === 'system') applyTheme('system')
+})
 
 function setText(id: string, key: LocaleKey): void {
   const element = document.getElementById(id)
@@ -164,6 +211,10 @@ function applyLocale(locale: Locale): void {
   setText('settings-desc-data', 'settingsDescData')
   setText('settings-desc-ai', 'settingsDescAi')
   setText('settings-desc-update', 'settingsDescUpdate')
+  setText('settings-theme-label', 'theme')
+  setText('settings-theme-light', 'themeLight')
+  setText('settings-theme-dark', 'themeDark')
+  setText('settings-theme-system', 'themeSystem')
   setText('settings-update-channel-label', 'updateChannel')
   setText('settings-engine-hint', 'engineHint')
   setAttr('btn-close-settings', 'aria-label', 'close')
@@ -393,7 +444,97 @@ function renderTabs(): void {
   }
 }
 
-/** 渲染工具栏状态 */
+let agentActivityTimer: ReturnType<typeof setInterval> | undefined
+
+/** 并发调用列表：每个调用独立显示进度，并可单独停止（不影响其他客户端）。 */
+function renderAgentCallList(activity: AgentActivityState, paused: boolean): void {
+  if (!agentActivityCalls) return
+  const calls = paused ? [] : (activity.calls ?? [])
+  agentActivityCalls.hidden = calls.length === 0
+  agentActivityCalls.replaceChildren()
+  for (const call of calls.slice(0, 6)) {
+    const row = document.createElement('div')
+    row.className = 'agent-call-row'
+    row.dataset['callId'] = String(call.id)
+
+    const label = document.createElement('span')
+    label.className = 'agent-call-label'
+    label.textContent = `#${call.id} · 客户端 ${call.client} · ${call.tool}`
+    row.appendChild(label)
+
+    const detail = document.createElement('span')
+    detail.className = 'agent-call-detail'
+    if (call.message) detail.textContent = call.message
+    else if (typeof call.progress === 'number' && typeof call.total === 'number' && call.total > 0) {
+      detail.textContent = `${Math.round((call.progress / call.total) * 100)}%`
+    }
+    if (detail.textContent) row.appendChild(detail)
+
+    const stop = document.createElement('button')
+    stop.type = 'button'
+    stop.className = 'agent-call-stop'
+    stop.textContent = '停止'
+    stop.title = `只停止调用 #${call.id}`
+    stop.addEventListener('click', () => void window.aa.cancelAgentCall(call.id))
+    row.appendChild(stop)
+    agentActivityCalls.appendChild(row)
+  }
+  if (calls.length > 6) {
+    const more = document.createElement('div')
+    more.className = 'agent-call-more'
+    more.textContent = `还有 ${calls.length - 6} 个调用…`
+    agentActivityCalls.appendChild(more)
+  }
+}
+
+function renderAgentActivity(): void {
+  if (!agentActivityOverlay) return
+  const activity: AgentActivityState = state.agentActivity ?? {
+    active: false,
+    paused: state.agentInterrupted
+  }
+  const paused = activity.paused || state.agentInterrupted
+  const visible = activity.active || paused
+  agentActivityOverlay.hidden = !visible
+  agentActivityOverlay.setAttribute('aria-hidden', String(!visible))
+  agentActivityOverlay.classList.toggle('paused', paused)
+  if (!visible) {
+    if (agentActivityCalls) agentActivityCalls.hidden = true
+    if (agentActivityTimer) clearInterval(agentActivityTimer)
+    agentActivityTimer = undefined
+    return
+  }
+
+  if (agentActivityTitle) agentActivityTitle.textContent = paused ? 'AI 操作已暂停' : 'AI 工具正在操作中'
+  const callCount = activity.calls?.length ?? 0
+  if (agentActivityTool) {
+    agentActivityTool.textContent = activity.tool
+      ? `工具：${activity.tool}${callCount > 1 ? `（共 ${callCount} 个并发调用）` : ''}`
+      : (paused ? '等待 AI 恢复…' : '正在准备浏览器操作…')
+  }
+  renderAgentCallList(activity, paused)
+  if (agentActivityAction) {
+    agentActivityAction.textContent = paused ? '恢复' : '中断'
+    agentActivityAction.title = paused ? '立即恢复 AI 的浏览器操作' : '立即中断 AI 的后续浏览器操作'
+  }
+
+  const updateCountdown = (): void => {
+    const resumeAt = activity.resumeAt
+    const remaining = resumeAt ? Math.max(0, Math.ceil((resumeAt - Date.now()) / 1000)) : 0
+    if (agentActivityDetail) {
+      agentActivityDetail.textContent = paused
+        ? remaining > 0 ? `已中断，${remaining} 秒后自动继续` : '已中断，等待自动继续…'
+        : '浏览器由 AI 控制'
+    }
+    if (remaining <= 0 && agentActivityTimer) {
+      clearInterval(agentActivityTimer)
+      agentActivityTimer = undefined
+    }
+  }
+  if (agentActivityTimer) clearInterval(agentActivityTimer)
+  agentActivityTimer = paused && activity.resumeAt ? setInterval(updateCountdown, 1000) : undefined
+  updateCountdown()
+}
 function renderToolbar(): void {
   const active = activeTab()
   if (active) {
@@ -419,8 +560,12 @@ function renderToolbar(): void {
   agentPill.title = `${state.connectionMessage}。点击打开“连接 AI 客户端”设置。`
   agentPill.setAttribute('aria-label', `${statusText}。点击打开连接设置`)
   agentStop.textContent = state.agentInterrupted ? t('resume') : t('interrupt')
-  agentStop.classList.toggle('active', state.agentInterrupted)
-  agentStop.title = state.agentInterrupted ? (activeLocale === 'en-US' ? 'Resume Agent browser actions' : '恢复 Agent 浏览器操作') : (activeLocale === 'en-US' ? 'Interrupt further Agent browser actions' : '中断 Agent 的后续浏览器操作')
+  agentStop.disabled = !connected && !state.agentInterrupted && !state.agentActivity?.active
+   agentStop.classList.toggle('active', state.agentInterrupted)
+  agentStop.title = agentStop.disabled
+     ? (activeLocale === 'en-US' ? 'Waiting for an AI connection' : '等待 AI 连接')
+     : state.agentInterrupted ? (activeLocale === 'en-US' ? 'Resume Agent browser actions' : '恢复 Agent 浏览器操作') : (activeLocale === 'en-US' ? 'Interrupt further Agent browser actions' : '中断 Agent 的后续浏览器操作')
+  renderAgentActivity()
   renderApprovals()
 }
 
@@ -430,17 +575,20 @@ function renderApprovals(): void {
   approvalPanel.textContent = ''
   for (const item of pending) {
     const isOp = item.kind === 'operation'
+    const isPermission = item.kind === 'permission'
     const title = document.createElement('div')
     title.className = 'approval-title'
-    title.textContent = isOp ? 'Agent 请求执行高危操作' : '需要你亲自填写敏感信息'
+    title.textContent = isPermission ? '网站请求设备权限' : isOp ? 'Agent 请求执行高危操作' : '需要你亲自填写敏感信息'
     const meta = document.createElement('div')
     meta.className = 'approval-meta'
     meta.textContent = `网站：${item.site} · 标签：${item.tabTitle} · 操作：${item.fieldLabel}`
     const help = document.createElement('div')
     help.className = 'approval-help'
-    help.textContent = isOp
-      ? (item.detail || 'Agent 即将执行此操作。请确认后点“允许”，拒绝则中止该步骤。')
-      : '请直接在网页输入框中填写内容；敏感内容不会由 Agent 写入或回传。填写完成后再点“允许继续”。'
+    help.textContent = isPermission
+      ? (item.detail || '允许后该站点仅在本次浏览器会话内可使用此权限；拒绝则保持阻断。')
+      : isOp
+        ? (item.detail || 'Agent 即将执行此操作。请确认后点“允许”，拒绝则中止该步骤。')
+        : '请直接在网页输入框中填写内容；敏感内容不会由 Agent 写入或回传。填写完成后再点“允许继续”。'
     const actions = document.createElement('div')
     actions.className = 'approval-actions'
     const deny = document.createElement('button')
@@ -449,7 +597,7 @@ function renderApprovals(): void {
     deny.addEventListener('click', () => void window.aa.decideApproval(item.id, false))
     const allow = document.createElement('button')
     allow.className = 'approval-allow'
-    allow.textContent = isOp ? '允许' : '允许继续'
+    allow.textContent = isOp || isPermission ? '允许' : '允许继续'
     allow.addEventListener('click', () => void window.aa.decideApproval(item.id, true))
     actions.append(deny, allow)
     approvalPanel.append(title, meta, help, actions)
@@ -567,6 +715,19 @@ function renderDownloads(): void {
     show.textContent = '在文件夹中显示'
     show.addEventListener('click', () => void window.aa.downloadShow(d.id))
     actions.append(open, show)
+    if (d.state === 'progressing') {
+      const cancel = document.createElement('button')
+      cancel.className = 'dl-act dl-act-danger'
+      cancel.textContent = '取消'
+      cancel.addEventListener('click', () => void window.aa.downloadCancel(d.id))
+      actions.appendChild(cancel)
+    } else {
+      const retry = document.createElement('button')
+      retry.className = 'dl-act'
+      retry.textContent = '重试'
+      retry.addEventListener('click', () => void window.aa.downloadRetry(d.id))
+      actions.appendChild(retry)
+    }
     el.appendChild(actions)
 
     dlList.appendChild(el)
@@ -652,6 +813,10 @@ agentPill.addEventListener('click', () => {
   }
 })
 agentStop.addEventListener('click', () => void (state.agentInterrupted ? window.aa.resumeAgent() : window.aa.interruptAgent()))
+agentActivityAction?.addEventListener('click', () => {
+  const paused = state.agentInterrupted || !!state.agentActivity?.paused
+  void (paused ? window.aa.resumeAgent() : window.aa.interruptAgent())
+})
 document.getElementById('btn-newtab')?.addEventListener('click', () => void window.aa.tabNew())
 
 tabsEl.addEventListener('keydown', (event: KeyboardEvent) => {
@@ -815,6 +980,8 @@ async function openSettings(): Promise<void> {
   const agent = await window.aa.agentInfo().catch(() => null)
   if (view && setEngine) {
     savedLocale = resolveUiLocale(view.settings.locale)
+    savedThemeSetting = view.settings.theme
+    applyTheme(view.settings.theme)
     setEngine.innerHTML = ''
     for (const p of view.presets) {
       const opt = document.createElement('option')
@@ -830,6 +997,7 @@ async function openSettings(): Promise<void> {
     setEngine.value = view.presets.some((preset) => preset.url === view.settings.searchEngine) ? view.settings.searchEngine : ''
     if (setEngineUrl) setEngineUrl.value = view.settings.searchEngine
     if (setLocale) setLocale.value = view.settings.locale || 'auto'
+    if (setTheme) setTheme.value = view.settings.theme || 'light'
     if (setFullSnapshot) setFullSnapshot.checked = view.settings.fullSnapshot
     if (setOpApproval) setOpApproval.checked = !!view.settings.requireOperationApproval
     if (setIsolatedSessions) setIsolatedSessions.checked = !!view.settings.isolatedSessions
@@ -854,6 +1022,7 @@ function closeSettings(): void {
   if (!settingsModal) return
   settingsModal.hidden = true
   if (activeLocale !== savedLocale) applyLocale(savedLocale)
+  if (activeThemeSetting !== savedThemeSetting) applyTheme(savedThemeSetting)
   void window.aa.settingsOpen(false)
 }
 btnSettings?.addEventListener('click', () => {
@@ -918,6 +1087,10 @@ setLocale?.addEventListener('change', () => {
   const setting = setLocale.value === 'zh-CN' || setLocale.value === 'en-US' ? setLocale.value : 'auto'
   applyLocale(resolveUiLocale(setting))
 })
+setTheme?.addEventListener('change', () => {
+  const value = setTheme.value
+  applyTheme(value === 'dark' || value === 'system' ? value : 'light')
+})
 document.getElementById('btn-save-settings')?.addEventListener('click', async () => {
   const button = document.getElementById('btn-save-settings') as HTMLButtonElement
   if (button.disabled) return
@@ -929,6 +1102,7 @@ document.getElementById('btn-save-settings')?.addEventListener('click', async ()
   if (setEngineUrl) patch.searchEngine = setEngineUrl.value.trim() || patch.searchEngine
   if (setLocale) patch.locale = setLocale.value === 'zh-CN' || setLocale.value === 'en-US' ? setLocale.value : 'auto'
   if (setFullSnapshot) patch.fullSnapshot = setFullSnapshot.checked
+  if (setTheme) patch.theme = setTheme.value === 'dark' || setTheme.value === 'system' ? setTheme.value : 'light'
   if (setOpApproval) patch.requireOperationApproval = setOpApproval.checked
   if (setIsolatedSessions) patch.isolatedSessions = setIsolatedSessions.checked
   if (setRestoreSession) patch.restoreSession = setRestoreSession.checked
@@ -940,6 +1114,8 @@ document.getElementById('btn-save-settings')?.addEventListener('click', async ()
     const saved = await window.aa.settingsSet(patch)
     if (!saved) throw new Error('设置未保存，请重试。')
     savedLocale = resolveUiLocale(saved.locale)
+    savedThemeSetting = saved.theme
+    applyTheme(saved.theme)
     applyLocale(savedLocale)
     if (settingsStatus) {
       settingsStatus.textContent = t('saved')
@@ -1032,6 +1208,8 @@ window.addEventListener('keydown', (e) => {
 /* 初始化拉取一次状态 */
 void window.aa.settingsGet().then((view) => {
   savedLocale = resolveUiLocale(view?.settings.locale)
+  savedThemeSetting = view?.settings.theme || 'light'
+  applyTheme(view?.settings.theme || 'light')
   applyLocale(savedLocale)
-}).catch(() => applyLocale(activeLocale))
+}).catch(() => { applyTheme('light'); applyLocale(activeLocale) })
 void window.aa.getState().then(applyState)

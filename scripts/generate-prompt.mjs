@@ -72,9 +72,9 @@ ${connectPrompt}
 
 - 官方安装包：Windows x64（NSIS 安装器）、Linux x86_64（AppImage）。
 - macOS、Windows ARM64 和其他架构目前没有官方安装包；安装器会明确拒绝，不会假装安装。
-- 自动写入配置的客户端：ZCode、Claude Code、Cursor、Windsurf、Cline、VS Code、Gemini CLI、Qwen Code、Codex（桌面端 / CLI / IDE）、WorkBuddy。
+- 自动写入配置的客户端：ZCode、Claude Code、Cursor、Windsurf、Cline、VS Code、Gemini CLI、Qwen Code、OpenCode、Codex（桌面端 / CLI / IDE）、WorkBuddy。
+- DeepSeek Harness：通过插件市场安装/启用 Aa Browser 插件手动接入；安装器不会修改 \`.dsh\` 配置、数据库或缓存，启用后实际调用 \`mcp__aa-browser__browser_tabs\` 验证。
 - 其他支持 MCP 的客户端：运行 \`node install.mjs --print-config\` 获取启动配置，按该客户端官方 MCP 文档添加。
-- DeepSeek Harness 用户可以在插件市场安装 Aa Browser 插件（详见 [docs/MARKETPLACE.md](./docs/MARKETPLACE.md)），或使用上面的通用提示词。
 
 ## 四、自动更新
 

@@ -26,7 +26,7 @@ The plugin creates no listener and opens no remote connection of its own. Page c
 
 - Host platforms are Windows x64 and Linux x64 only; there is no macOS or Android support yet.
 - Tool names carry the server prefix: they appear as `mcp__aa-browser__*`, not as bare `browser_*` names.
-- The MCP entry starts and lists its tools even when Aa Browser is closed, because the bridge is a separate stdio process. Browser tool calls cannot reach it until it is running; the bridge retries its connection every 5 seconds, so launching the browser is enough and no DSH reload is needed. A call made before the bridge reaches the browser may stay pending until the 180-second tool-call timeout, so start Aa Browser before calling browser tools.
+- The MCP entry starts and lists its tools even when Aa Browser is closed, because the bridge is a separate stdio process. On the first browser tool call the bridge starts Aa Browser from a trusted installed path and waits up to 30 seconds; no DSH reload is needed. Set `AA_BROWSER_APP_PATH` to an absolute `Aa Browser.exe`/`aa-browser` path when auto-detection is unavailable, or set `AA_BROWSER_AUTO_LAUNCH=0` to disable auto-start.
 - Some page actions can wait for a decision in Aa Browser's approval UI. The MCP client's call timeout is raised to 180 seconds to cover the browser's 120-second approval window.
 - Screenshots come back as MCP image content. Whether the model can see them depends on the selected model's image support.
 - The agent sees page content and captured network traffic, including cookies, storage, request headers, and response bodies. Treat a connected browser as readable by the agent.

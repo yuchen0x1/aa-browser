@@ -28,6 +28,32 @@ const appData = process.env['APPDATA'] || (isWindows ? path.join(home, 'AppData'
 const j = (...p) => path.join(home, ...p)
 const jA = (...p) => path.join(appData, ...p)
 
+function openCodeConfigCandidates() {
+  const xdg = process.env['XDG_CONFIG_HOME'] || j('.config')
+  const candidates = process.platform === 'win32'
+    ? [
+        path.join(appData, 'opencode', 'opencode.json'),
+        path.join(xdg, 'opencode', 'opencode.json')
+      ]
+    : process.platform === 'darwin'
+      ? [
+          path.join(home, 'Library', 'Application Support', 'opencode', 'opencode.json'),
+          path.join(xdg, 'opencode', 'opencode.json')
+        ]
+      : [path.join(xdg, 'opencode', 'opencode.json')]
+  return [...new Set(candidates)]
+}
+
+function openCodeDetectPath() {
+  const candidates = openCodeConfigCandidates().map((file) => path.dirname(file))
+  return candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0]
+}
+
+function configFileFor(def) {
+  const candidates = def.fileCandidates ? def.fileCandidates() : [def.file]
+  return candidates.find((candidate) => fs.existsSync(candidate)) || candidates[0]
+}
+
 const CLIENTS = [
   { id: 'zcode', name: 'ZCode', detect: j('.zcode'), file: j('.zcode', 'cli', 'config.json'), container: 'mcp.servers' },
   { id: 'claude', name: 'Claude Code', detect: j('.claude.json'), file: j('.claude.json'), container: 'mcpServers' },
@@ -44,6 +70,15 @@ const CLIENTS = [
   { id: 'vscode', name: 'VS Code (原生 MCP)', detect: jA('Code', 'User'), file: jA('Code', 'User', 'mcp.json'), container: 'servers', vscodeStyle: true, jsonc: true },
   { id: 'gemini', name: 'Gemini CLI', detect: j('.gemini'), file: j('.gemini', 'settings.json'), container: 'mcpServers' },
   { id: 'qwen', name: 'Qwen Code', detect: j('.qwen'), file: j('.qwen', 'settings.json'), container: 'mcpServers' },
+  { id: 'opencode', name: 'OpenCode (开源)', detect: openCodeDetectPath(), file: openCodeConfigCandidates()[0], fileCandidates: openCodeConfigCandidates, container: 'mcp', opencodeStyle: true },
+  {
+    id: 'deepseek-harness',
+    name: 'DeepSeek Harness (插件市场手动接入)',
+    detect: j('.aabrowser'),
+    file: '插件市场：Aa Browser / DeepSeek Harness',
+    container: 'mcpServers',
+    manual: true
+  },
   { id: 'codex', name: 'Codex (Desktop / CLI / IDE)', detect: j('.codex'), file: j('.codex', 'config.toml'), container: 'mcp_servers', toml: true },
   {
     id: 'workbuddy',
@@ -91,6 +126,17 @@ function getContainer(obj, container) {
 }
 
 function entryFor(def) {
+  if (def.manual) return {}
+  if (def.opencodeStyle) {
+    const e = bridgeEntry()
+    return {
+      type: 'local',
+      command: [e.command, ...e.args],
+      enabled: true,
+      timeout: 180000,
+      ...(e.env && Object.keys(e.env).length ? { environment: e.env } : {})
+    }
+  }
   if (def.id === 'workbuddy') {
     const installDir = path.resolve(HERE, '..', '..', '..')
     return {
@@ -167,19 +213,22 @@ function replaceCodexEntry(text, entry) {
 }
 
 function detectCodex(def) {
-  const text = fs.existsSync(def.file) ? fs.readFileSync(def.file, 'utf-8') : ''
+  const file = configFileFor(def)
+  const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : ''
   const blocks = codexEntryBlocks(text)
   const configured = blocks.some((block) => block === codexEntryToml())
-  return { def, installed: fs.existsSync(def.detect), configured, outdated: blocks.length > 0 && !configured }
+  return { def, file, installed: fs.existsSync(def.detect), configured, outdated: blocks.length > 0 && !configured }
 }
 
 function detectOne(def) {
+  const file = configFileFor(def)
   if (def.toml) return detectCodex(def)
+  if (def.manual) return { def, file, installed: false, configured: false, outdated: false }
   const installed = fs.existsSync(def.detect)
   let configured = false
   let outdated = false
-  if ((installed || def.id === 'workbuddy') && fs.existsSync(def.file)) {
-    const parsed = parseLoose(fs.readFileSync(def.file, 'utf-8'))
+  if ((installed || def.id === 'workbuddy') && fs.existsSync(file)) {
+    const parsed = parseLoose(fs.readFileSync(file, 'utf-8'))
     if (parsed) {
       const existing = getContainer(parsed, def.container)['aa-browser']
       if (existing) {
@@ -188,32 +237,38 @@ function detectOne(def) {
       }
     }
   }
-  return { def, installed: installed || def.id === 'workbuddy', configured, outdated }
+  return { def, file, installed: installed || def.id === 'workbuddy', configured, outdated }
 }
 
 function setupOne(def, ts) {
-  if (def.toml) {
-    const entry = codexEntryToml()
-    const existingText = fs.existsSync(def.file) ? fs.readFileSync(def.file, 'utf-8') : ''
-    const exists = codexEntryBlocks(existingText).length > 0
-    if (exists && codexEntryBlocks(existingText).some((block) => block === entry)) {
-      log(`  ℹ️  ${def.name}: 已配置，无需变更（${def.file}）`)
-      return
-    }
-    if (fs.existsSync(def.file)) fs.copyFileSync(def.file, `${def.file}.aa-backup-${ts}`)
-    fs.mkdirSync(path.dirname(def.file), { recursive: true })
-    fs.writeFileSync(def.file, replaceCodexEntry(existingText, entry), 'utf-8')
-    log(`  ✅ ${def.name} ${exists ? '已更新' : '已写入'}（${def.file}）`)
+  if (def.manual) {
+    log(`  ⚠️  ${def.name}: 请在 DeepSeek Harness 插件市场安装并启用 Aa Browser 插件；本脚本不会修改 .dsh 配置或内部状态。启用后让 Agent 实际调用 mcp__aa-browser__browser_tabs 验证。`)
     return
   }
+  if (def.toml) {
+    const file = configFileFor(def)
+    const entry = codexEntryToml()
+    const existingText = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : ''
+    const exists = codexEntryBlocks(existingText).length > 0
+    if (exists && codexEntryBlocks(existingText).some((block) => block === entry)) {
+      log(`  ℹ️  ${def.name}: 已配置，无需变更（${file}）`)
+      return
+    }
+    if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.aa-backup-${ts}`)
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, replaceCodexEntry(existingText, entry), 'utf-8')
+    log(`  ✅ ${def.name} ${exists ? '已更新' : '已写入'}（${file}）`)
+    return
+  }
+  const file = configFileFor(def)
   const installed = fs.existsSync(def.detect)
   let parsed = {}
-  if (fs.existsSync(def.file)) {
-    const backup = `${def.file}.aa-backup-${ts}`
-    fs.copyFileSync(def.file, backup)
-    const p = parseLoose(fs.readFileSync(def.file, 'utf-8'))
+  if (fs.existsSync(file)) {
+    const backup = `${file}.aa-backup-${ts}`
+    fs.copyFileSync(file, backup)
+    const p = parseLoose(fs.readFileSync(file, 'utf-8'))
     if (!p) {
-      log(`  ⚠️  ${def.name}: 配置文件无法解析（${def.file}），请手动添加`)
+      log(`  ⚠️  ${def.name}: 配置文件无法解析（${file}），请手动添加`)
       return
     }
     parsed = p
@@ -223,15 +278,15 @@ function setupOne(def, ts) {
   let verb = '已写入'
   if (container['aa-browser']) {
     if (JSON.stringify(container['aa-browser']) === JSON.stringify(entry)) {
-      log(`  ℹ️  ${def.name}: 已配置，无需变更（${def.file}）`)
+      log(`  ℹ️  ${def.name}: 已配置，无需变更（${file}）`)
       return
     }
     verb = '已更新'
   }
   container['aa-browser'] = entry
-  fs.mkdirSync(path.dirname(def.file), { recursive: true })
-  fs.writeFileSync(def.file, JSON.stringify(parsed, null, 2) + '\n', 'utf-8')
-  log(`  ✅ ${def.name} ${verb}（${def.file}${installed ? '' : '，客户端目录未检测到，已创建新配置'}）`)
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, JSON.stringify(parsed, null, 2) + '\n', 'utf-8')
+  log(`  ✅ ${def.name} ${verb}（${file}${installed ? '' : '，客户端目录未检测到，已创建新配置'}）`)
 }
 
 function ask(question) {
@@ -263,8 +318,8 @@ async function main() {
     for (const d of detected) {
       log(
         `  ${d.installed ? '✓' : '·'} ${d.def.name.padEnd(18)} ` +
-          (d.configured ? '已配置' : d.outdated ? '已配置(待更新)' : d.installed ? '未配置' : '未安装') +
-          `  ${d.def.file}`
+          (d.def.manual ? '需手动接入' : d.configured ? '已配置' : d.outdated ? '已配置(待更新)' : d.installed ? '未配置' : '未安装') +
+          `  ${d.file}`
       )
     }
     process.exit(0)
@@ -274,13 +329,16 @@ async function main() {
   log(`运行时: ${process.versions.electron ? 'Aa Browser 内置 Node (ELECTRON_RUN_AS_NODE)' : '系统 Node ' + process.version}`)
   log('')
 
-  if (!installed.length) {
+  const requestedManual = wanted?.some((id) => CLIENTS.some((client) => client.id === id && client.manual))
+  if (!installed.length && !requestedManual) {
     log('未检测到已安装的 AI 客户端。支持：' + CLIENTS.map((c) => c.name).join(' / '))
     log('（客户端安装后重新运行本命令即可）')
     process.exit(0)
   }
 
-  let targets = installed.filter((d) => !wanted || wanted.includes(d.def.id))
+  let targets = detected.filter((d) => wanted
+    ? wanted.includes(d.def.id) && (d.installed || d.def.manual)
+    : d.installed)
   if (wanted) {
     const unknown = wanted.filter((w) => !CLIENTS.some((c) => c.id === w))
     if (unknown.length) log(`⚠️ 忽略未知客户端 id: ${unknown.join(', ')}`)
@@ -292,9 +350,9 @@ async function main() {
     process.exit(0)
   }
 
-  log('将写入以下客户端的 MCP 配置：')
-  for (const d of targets) log(`  - ${d.def.name}（${d.def.file}）`)
-  log('（写入前会自动备份原配置文件）')
+  log('将处理以下客户端的 MCP 接入：')
+  for (const d of targets) log(`  - ${d.def.name}（${d.file}）`)
+  log('（写入前会自动备份原配置文件；手动接入项不会写入任何文件）')
 
   if (!yes) {
     const answer = await ask('\n确认写入？[y/N] ')
@@ -325,7 +383,7 @@ async function main() {
     log('  ✅ WorkBuddy MCP 配置与本地 Connector 包已准备')
   }
   log('')
-  log('完成配置写入。请确认目标客户端实际加载了 MCP 工具；配置文件存在不等于连接成功。')
+  log('完成接入处理。请确认目标客户端实际加载了 MCP 工具；配置文件存在不等于连接成功。')
 }
 
 main().catch((err) => {

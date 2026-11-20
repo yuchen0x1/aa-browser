@@ -4,12 +4,19 @@ import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { WebSocketServer, WebSocket } from 'ws'
-import type { ConnectionInfo, WsRequest } from '@shared/types'
+import type { ConnectionInfo, WsRequest, WsProgressEvent, AgentActivityState, AgentCallInfo } from '@shared/types'
 import type { McpToolDef } from './tools'
 import type { ApprovalManager } from './approvals'
+import { runWithProgress } from './progress'
 
 const CONNECT_DIR = path.join(os.homedir(), '.aabrowser')
 const DEFAULT_CONNECT_FILE = path.join(CONNECT_DIR, 'connection.json')
+
+type ActiveTool = AgentCallInfo
+
+function cloneActivity(state: AgentActivityState): AgentActivityState {
+  return { ...state, calls: state.calls?.map((call) => ({ ...call })) }
+}
 
 function connectionFile(): string {
   return process.env['AA_BROWSER_CONNECTION_FILE'] || DEFAULT_CONNECT_FILE
@@ -25,13 +32,19 @@ export class AgentServer {
   private token = ''
   private instanceId = crypto.randomUUID()
   private ownConnectionFile = ''
+  private activityState: AgentActivityState = { active: false, paused: false }
+  private activeTools = new Map<WebSocket, Map<number, ActiveTool>>()
   private active = new Map<WebSocket, Map<number, AbortController>>()
+  private clientIds = new Map<WebSocket, number>()
+  private clientSeq = 0
+  private lastActivityPushAt = 0
 
   constructor(
     private tools: McpToolDef[],
     private onStatusChange: (count: number, verifiedCount: number) => void,
     private version: string,
-    private approvals?: ApprovalManager
+    private approvals?: ApprovalManager,
+    private onActivityChange: (state: AgentActivityState) => void = () => {}
   ) {
     this.wss = new WebSocketServer({ server: this.server })
     this.wss.on('connection', (ws, req) => this.onConnection(ws, req))
@@ -72,6 +85,94 @@ export class AgentServer {
     }
   }
 
+  /** 当前活动快照，返回副本避免调用方修改内部状态。 */
+  activity(): AgentActivityState {
+    return cloneActivity(this.activityState)
+  }
+
+  /** 中断当前调用并进入暂停状态；重复调用不会重复广播或产生额外副作用。 */
+  pause(resumeAt?: number): void {
+    for (const calls of this.active.values()) {
+      for (const controller of calls.values()) controller.abort()
+    }
+    // 调用 finally 仍会清理原 Map 引用；从当前活动集合移除，防止恢复后残留旧调用。
+    this.activeTools.clear()
+    const next: AgentActivityState = {
+      active: false,
+      paused: true,
+      calls: [],
+      ...(resumeAt !== undefined ? { resumeAt } : {})
+    }
+    const changed = this.activityState.active !== next.active ||
+      this.activityState.paused !== next.paused ||
+      this.activityState.resumeAt !== next.resumeAt ||
+      this.activityState.tool !== next.tool ||
+      this.activityState.startedAt !== next.startedAt
+    this.activityState = next
+    if (changed) this.onActivityChange(cloneActivity(this.activityState))
+  }
+
+  /** 清除暂停标记；新的调用会在 handleMessage 中重新成为 active。 */
+  resume(): void {
+    if (!this.activityState.paused && this.activityState.resumeAt === undefined) return
+    this.activityState = { active: false, paused: false }
+    this.onActivityChange(cloneActivity(this.activityState))
+  }
+
+  private refreshActivity(force = true): void {
+    if (this.activityState.paused) return
+    const entries: ActiveTool[] = []
+    for (const calls of this.activeTools.values()) entries.push(...calls.values())
+    entries.sort((a, b) => b.startedAt - a.startedAt)
+    const current = entries[0]
+    const calls: AgentCallInfo[] = entries.map((entry) => ({ ...entry }))
+    const next: AgentActivityState = current
+      ? { active: true, paused: false, tool: current.tool, startedAt: current.startedAt, calls }
+      : { active: false, paused: false, calls: [] }
+    const prev = this.activityState
+    const structuralChanged = prev.active !== next.active ||
+      prev.tool !== next.tool ||
+      prev.startedAt !== next.startedAt ||
+      prev.paused !== next.paused ||
+      (prev.calls?.length ?? 0) !== calls.length ||
+      (prev.calls ?? []).some((call, i) => call.id !== calls[i]?.id || call.tool !== calls[i]?.tool)
+    const throttled = !force && !structuralChanged && Date.now() - this.lastActivityPushAt < 150
+    this.activityState = next
+    if (throttled) return
+    this.lastActivityPushAt = Date.now()
+    this.onActivityChange(cloneActivity(this.activityState))
+  }
+
+  /** 把工具上报的进度写回活动状态（限流推送）并发给对应客户端的桥。 */
+  private sendProgress(ws: WebSocket, id: number, progress: number, total?: number, message?: string): void {
+    const call = this.activeTools.get(ws)?.get(id)
+    if (!call || this.activityState.paused) return
+    if (Number.isFinite(progress)) call.progress = progress
+    if (total !== undefined && Number.isFinite(total)) call.total = total
+    if (message !== undefined) call.message = String(message).slice(0, 200)
+    const event: WsProgressEvent = {
+      id,
+      event: 'progress',
+      progress: Number.isFinite(progress) ? progress : 0,
+      ...(total !== undefined ? { total } : {}),
+      ...(message !== undefined ? { message } : {})
+    }
+    this.reply(ws, event)
+    // 进度可能非常密集（等待轮询每 100ms 一次），限流到 ~6fps，完成/取消时再强制推送。
+    this.refreshActivity(Date.now() - this.lastActivityPushAt >= 150)
+  }
+
+  /** 只中断一个调用，不影响同客户端或其他客户端的并发调用。 */
+  cancelCall(id: number): boolean {
+    for (const calls of this.active.values()) {
+      const controller = calls.get(id)
+      if (!controller) continue
+      controller.abort()
+      return true
+    }
+    return false
+  }
+
   private onConnection(ws: WebSocket, req: http.IncomingMessage): void {
     // 仅允许本机 + token 校验
     const remote = req.socket.remoteAddress ?? ''
@@ -85,27 +186,25 @@ export class AgentServer {
       return
     }
     this.clients.add(ws)
+    this.clientIds.set(ws, ++this.clientSeq)
     this.onStatusChange(this.clients.size, this.verifiedClients.size)
 
     ws.on('message', (raw) => {
       void this.handleMessage(ws, raw.toString())
     })
-    ws.on('close', () => {
+    const dropClient = (): void => {
       const calls = this.active.get(ws)
       for (const controller of calls?.values() ?? []) controller.abort()
       this.active.delete(ws)
+      this.activeTools.delete(ws)
       this.clients.delete(ws)
+      this.clientIds.delete(ws)
       this.verifiedClients.delete(ws)
+      this.refreshActivity()
       this.onStatusChange(this.clients.size, this.verifiedClients.size)
-    })
-    ws.on('error', () => {
-      const calls = this.active.get(ws)
-      for (const controller of calls?.values() ?? []) controller.abort()
-      this.active.delete(ws)
-      this.clients.delete(ws)
-      this.verifiedClients.delete(ws)
-      this.onStatusChange(this.clients.size, this.verifiedClients.size)
-    })
+    }
+    ws.on('close', dropClient)
+    ws.on('error', dropClient)
   }
 
   private async handleMessage(ws: WebSocket, raw: string): Promise<void> {
@@ -132,12 +231,32 @@ export class AgentServer {
       return
     }
     const controller = new AbortController()
+    // 中断可能与上面的 admission check 并发发生；在登记调用前再检查一次，
+    // 防止暂停后仍把新工具标成 active。
+    if (this.activityState.paused || this.approvals?.isInterrupted()) {
+      this.reply(ws, { id: req.id, ok: false, error: 'Agent 已被用户中断；请在浏览器工具栏点击“恢复”后重试。' })
+      return
+    }
     let calls = this.active.get(ws)
     if (!calls) { calls = new Map(); this.active.set(ws, calls) }
     calls.set(req.id, controller)
+    let activityCalls = this.activeTools.get(ws)
+    if (!activityCalls) { activityCalls = new Map(); this.activeTools.set(ws, activityCalls) }
+    activityCalls.set(req.id, {
+      id: req.id,
+      tool: req.tool,
+      startedAt: Date.now(),
+      client: this.clientIds.get(ws) ?? 0
+    })
+    this.refreshActivity()
     console.log(`[aa-browser] tool request: ${req.tool} (${req.id})`)
     try {
-      const result = await tool.handler({ ...(req.args ?? {}), __aaSignal: controller.signal })
+      const result = await runWithProgress(
+        {
+          report: (progress, total, message) => this.sendProgress(ws, req.id, progress, total, message)
+        },
+        () => tool.handler({ ...(req.args ?? {}), __aaSignal: controller.signal })
+      )
       if (controller.signal.aborted || this.approvals?.isInterrupted()) {
         throw new Error('工具调用已被用户中断或取消。')
       }
@@ -155,6 +274,9 @@ export class AgentServer {
     } finally {
       calls.delete(req.id)
       if (!calls.size) this.active.delete(ws)
+      activityCalls.delete(req.id)
+      if (!activityCalls.size) this.activeTools.delete(ws)
+      this.refreshActivity()
     }
   }
 

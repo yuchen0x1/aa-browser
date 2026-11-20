@@ -6,6 +6,7 @@
 
 | 版本 | 完整 Release 正文 |
 | --- | --- |
+| v0.6.4 | [bodies/v0.6.4.md](./bodies/v0.6.4.md) |
 | v0.3.0 | [bodies/v0.3.0.md](./bodies/v0.3.0.md) |
 | v0.2.0 | [bodies/v0.2.0.md](./bodies/v0.2.0.md) |
 | v0.1.0 | [bodies/v0.1.0.md](./bodies/v0.1.0.md) |
@@ -17,6 +18,15 @@
 | v0.0.3 | [bodies/v0.0.3.md](./bodies/v0.0.3.md) |
 | v0.0.2 | [bodies/v0.0.2.md](./bodies/v0.0.2.md) |
 | v0.0.1 | [bodies/v0.0.1.md](./bodies/v0.0.1.md) |
+
+## v0.6.4 — 2026-11-20
+
+- 新增视觉评审闭环：`browser_visual_diff`（基线 / 像素 diff / 差异图 / 视觉断言）、`browser_contrast_audit`（WCAG AA/AAA 对比度审计）、`browser_viewport_matrix`（320/480/768/桌面 + 2x 高 DPI，走 CDP 绕过窗口最小尺寸）。
+- 长操作按 MCP 规范回传 `notifications/progress`；多客户端并发时 HUD 列出每个调用与进度，可单独停止某个调用。
+- 工具定义收敛到 `src/shared/tool-defs.mjs` 单一来源，主进程只写 `name + handler`，桥直接导入；`npm run check` 做四方一致性守卫。
+- 补齐长期限制：快照分页（`maxNodes/cursor`，跨页 ref 有效）、下载取消/重试（重试重验白名单）、站点权限审批、证据文件生命周期（sha256/TTL/配额，`browser_evidence`）、closed shadow DOM 快照与点击、原生右键菜单中文化与图片项。
+- 修复浅色主题下原生标题栏覆盖层仍为深色的问题；中断现在真正取消导航/等待等长操作，跨域 iframe 可用 `browser_frame` 操作，`browser_screenshot` 支持整页。
+- MCP 工具集 34 → 42；新增 `npm run test:evidence` 并并入 `npm run check`。本地 check / build / test:tools / test:bridge / smoke / test:desktop（34 项）全部通过。
 
 ## v0.3.0 — 2026-11-19
 

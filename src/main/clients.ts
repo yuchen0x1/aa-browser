@@ -24,6 +24,12 @@ export interface ClientDef {
   jsonc?: boolean
   /** MCP 配置使用 TOML 格式 */
   toml?: boolean
+  /** 客户端支持 OpenCode 的 mcp 配置格式（type=local, command 为数组） */
+  opencodeStyle?: boolean
+  /** 仅展示手动接入卡片；绝不读写客户端配置文件 */
+  manual?: boolean
+  /** 多个候选配置路径；优先使用已经存在的路径，避免覆盖另一平台的配置。 */
+  fileCandidates?: () => string[]
 }
 
 export interface ClientDetectResult {
@@ -50,6 +56,33 @@ const appData = (): string => app.getPath('appData')
 const isAppImage = (): boolean => app.isPackaged && process.platform === 'linux' && !!process.env['APPIMAGE']
 
 const joinHome = (...p: string[]): string => path.join(home(), ...p)
+
+/** OpenCode 官方全局配置路径；保留候选路径以兼容旧版/手动迁移的 XDG 配置。 */
+function openCodeConfigCandidates(): string[] {
+  const xdg = process.env['XDG_CONFIG_HOME'] || joinHome('.config')
+  const candidates = process.platform === 'win32'
+    ? [
+        path.join(process.env['APPDATA'] || joinHome('AppData', 'Roaming'), 'opencode', 'opencode.json'),
+        path.join(xdg, 'opencode', 'opencode.json')
+      ]
+    : process.platform === 'darwin'
+      ? [
+          path.join(home(), 'Library', 'Application Support', 'opencode', 'opencode.json'),
+          path.join(xdg, 'opencode', 'opencode.json')
+        ]
+      : [path.join(xdg, 'opencode', 'opencode.json')]
+  return [...new Set(candidates)]
+}
+
+function openCodeDetectPath(): string {
+  const candidates = openCodeConfigCandidates().map((file) => path.dirname(file))
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0]
+}
+
+function configFileFor(def: ClientDef): string {
+  const candidates = def.fileCandidates?.() ?? [def.file()]
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0]
+}
 
 /** Find a system Node executable without invoking a shell or spawning a probe process. */
 function findSystemNode(): string | undefined {
@@ -138,6 +171,24 @@ export const CLIENT_DEFS: ClientDef[] = [
     container: 'mcpServers'
   },
   {
+    id: 'opencode',
+    name: 'OpenCode（开源）',
+    detectPath: openCodeDetectPath,
+    file: () => openCodeConfigCandidates()[0],
+    fileCandidates: openCodeConfigCandidates,
+    container: 'mcp',
+    opencodeStyle: true
+  },
+  {
+    id: 'deepseek-harness',
+    name: 'DeepSeek Harness（插件市场手动接入）',
+    // 这是一个插件式手动接入卡片，不把任何路径当作已安装证据，也不触碰 .dsh。
+    detectPath: () => joinHome('.aabrowser'),
+    file: () => '插件市场：Aa Browser / DeepSeek Harness',
+    container: 'mcpServers',
+    manual: true
+  },
+  {
     id: 'codex',
     name: 'Codex（桌面端 / CLI / IDE）',
     detectPath: () => joinHome('.codex'),
@@ -219,6 +270,17 @@ function getContainer(obj: Record<string, unknown>, container: string): Record<s
 
 /** 组装将要写入的 MCP 条目 */
 export function entryFor(def: ClientDef): Record<string, unknown> {
+  if (def.manual) return {}
+  if (def.opencodeStyle) {
+    const e = bridgeEntry()
+    return {
+      type: 'local',
+      command: [e.command, ...e.args],
+      enabled: true,
+      timeout: 180000,
+      ...(e.env && Object.keys(e.env).length ? { environment: e.env } : {})
+    }
+  }
   if (def.id === 'workbuddy' && !isAppImage()) {
     return {
       type: 'stdio',
@@ -297,7 +359,7 @@ function replaceCodexEntry(text: string, entry: string): string {
 }
 
 function configureCodex(def: ClientDef, ts: string): ClientSetupResult {
-  const file = def.file()
+  const file = configFileFor(def)
   const entry = codexEntryToml()
   const existingText = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : ''
   const exists = codexEntryBlocks(existingText).length > 0
@@ -321,8 +383,11 @@ function sameEntry(a: unknown, b: unknown): boolean {
 
 export function detectClients(): ClientDetectResult[] {
   return CLIENT_DEFS.map((def) => {
-    const file = def.file()
-    const installed = fs.existsSync(def.detectPath())
+    const file = configFileFor(def)
+    const installed = def.manual ? true : fs.existsSync(def.detectPath())
+    if (def.manual) {
+      return { id: def.id, name: def.name, file, installed, configured: false, outdated: false }
+    }
     if (def.toml) {
       const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : ''
       const blocks = codexEntryBlocks(text)
@@ -346,7 +411,11 @@ export function detectClients(): ClientDetectResult[] {
     const entry = fs.existsSync(file) ? parseLoose(fs.readFileSync(file, 'utf-8')) : null
     const current = entry ? (entry as Record<string, any>) : null
     const existingEntry = current ? getContainer(current, def.container)['aa-browser'] as Record<string, any> | undefined : undefined
-    const bridgeArgs = existingEntry?.args
+    const bridgeArgs = Array.isArray(existingEntry?.args)
+      ? existingEntry.args
+      : Array.isArray(existingEntry?.command)
+        ? existingEntry.command.slice(1)
+        : undefined
     const bridgeMissing = Array.isArray(bridgeArgs) && typeof bridgeArgs[0] === 'string' && !fs.existsSync(bridgeArgs[0])
     return { id: def.id, name: def.name, file, installed, configured, outdated: outdated || bridgeMissing }
   })
@@ -361,7 +430,7 @@ export function setupClients(ids: string[]): ClientSetupResult[] {
   const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
   try {
     if (isAppImage() && !findSystemNode()) throw new Error('请先安装 Node.js 22 并重新打开 Aa Browser。')
-    if (CLIENT_DEFS.some((def) => ids.includes(def.id))) syncAppImageBridge()
+    if (CLIENT_DEFS.some((def) => ids.includes(def.id) && !def.manual)) syncAppImageBridge()
   } catch (error) {
     return CLIENT_DEFS.filter((def) => ids.includes(def.id)).map((def) => ({
       id: def.id, name: def.name, status: 'error', message: String(error)
@@ -369,6 +438,15 @@ export function setupClients(ids: string[]): ClientSetupResult[] {
   }
   for (const def of CLIENT_DEFS) {
     if (!ids.includes(def.id)) continue
+    if (def.manual) {
+      results.push({
+        id: def.id,
+        name: def.name,
+        status: 'manual',
+        message: '请在 DeepSeek Harness 插件市场安装并启用 Aa Browser 插件；本应用不会修改 .dsh 配置或内部状态。启用后让 Agent 实际调用 mcp__aa-browser__browser_tabs 验证。'
+      })
+      continue
+    }
     if (def.toml) {
       try {
         results.push(configureCodex(def, ts))
@@ -377,7 +455,7 @@ export function setupClients(ids: string[]): ClientSetupResult[] {
       }
       continue
     }
-    const file = def.file()
+    const file = configFileFor(def)
     try {
       // 客户端本体未安装：仍可创建配置（对 CLI 型客户端安全），但提示
       const installed = fs.existsSync(def.detectPath())

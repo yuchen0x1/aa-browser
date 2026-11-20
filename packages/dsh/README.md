@@ -36,7 +36,7 @@ Without HMR, restart DSH (or the profile) after installing so the new rows mount
 ## Verify
 
 1. After activation, `~/.aabrowser/dsh-bridge.cjs` exists and the DSH log shows `aa-browser-dsh: staged Aa Browser MCP bridge v… at …`.
-2. Start Aa Browser, then ask the agent to call one of the `mcp__aa-browser__*` tools, for example `mcp__aa-browser__browser_tabs`. Only a successful call proves the connection; seeing the tool listed proves the bridge is running, not that the browser is reachable.
+2. Aa Browser 不必预先打开；首次调用 `mcp__aa-browser__*` 工具时，桥会按受信安装路径自动启动并等待连接。也可以先手动打开 Aa Browser，再让 Agent 调用 `mcp__aa-browser__browser_tabs`。只有成功返回标签列表才证明连接正常；只看到工具列表不代表浏览器已连接。
 3. If the tools are missing, check that **Aa Browser connection** is enabled in **Plugins** and look for an `aa-browser-dsh: could not stage …` warning. Reinstalling the plugin restores the bundled `bridge.cjs`.
 
 ## Configuration
@@ -59,8 +59,7 @@ The bundle inserts two rows into the profile:
 
 - Windows x64 and Linux x64 only; no macOS or Android support yet.
 - Tool names are prefixed: `mcp__aa-browser__*`, not bare `browser_*`.
-- The MCP entry starts and lists tools even when Aa Browser is closed. Browser tool calls cannot reach it until it runs; the bridge retries every 5 seconds, so no DSH reload is needed. Start Aa Browser before calling browser tools: a call made before the bridge reaches the browser may stay pending until the 180-second tool-call timeout.
-- Calls can wait for Aa Browser's approval UI; the MCP call timeout is 180 seconds to cover the browser's 120-second approval window.
+- The MCP entry starts and lists tools even when Aa Browser is closed. On the first browser tool call, the bridge starts Aa Browser from a trusted installed path and waits up to 30 seconds for the connection; no DSH reload is needed. Set `AA_BROWSER_APP_PATH` to an absolute `Aa Browser.exe`/`aa-browser` path when auto-detection is unavailable, or set `AA_BROWSER_AUTO_LAUNCH=0` to disable auto-start. Calls can still wait for Aa Browser's approval UI; the MCP call timeout is 180 seconds to cover the browser's 120-second approval window.
 - Screenshots are returned as MCP image content; the model sees them only when it supports image input.
 - The agent can read page content and captured traffic, including cookies, storage, headers, and response bodies.
 

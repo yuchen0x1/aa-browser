@@ -27,6 +27,8 @@ const SMOKE_DIR = path.join(ROOT, '.local-verification', `smoke-${process.pid}-$
 const SMOKE_CONNECT_FILE = path.join(SMOKE_DIR, 'connection.json')
 const SMOKE_DOWNLOAD_DIR = path.join(SMOKE_DIR, 'downloads')
 const SMOKE_SCREENSHOT_DIR = path.join(SMOKE_DIR, 'screenshots')
+const SMOKE_BASELINE_DIR = path.join(SMOKE_DIR, 'baselines')
+const SMOKE_EVIDENCE_FILE = path.join(SMOKE_DIR, 'evidence-registry.json')
 const SMOKE_SESSION_FILE = path.join(SMOKE_DIR, 'session.json')
 const PROFILE = path.join(SMOKE_DIR, 'profile')
 const bridgePath = !packagedApp ? path.join(ROOT, 'cli', 'mcp.mjs') : process.platform === 'linux'
@@ -104,6 +106,8 @@ async function ensureAppRunning() {
         AA_BROWSER_USER_DATA_DIR: PROFILE,
         AA_BROWSER_DOWNLOAD_DIR: SMOKE_DOWNLOAD_DIR,
         AA_BROWSER_SCREENSHOT_DIR: SMOKE_SCREENSHOT_DIR,
+        AA_BROWSER_BASELINE_DIR: SMOKE_BASELINE_DIR,
+        AA_BROWSER_EVIDENCE_FILE: SMOKE_EVIDENCE_FILE,
         AA_BROWSER_HISTORY_DIR: path.join(SMOKE_DIR, 'history'),
         AA_BROWSER_SETTINGS_FILE: path.join(SMOKE_DIR, 'settings.json'),
         AA_BROWSER_SESSION_FILE: SMOKE_SESSION_FILE
@@ -143,6 +147,7 @@ class McpClient {
     this.nextId = 1
     this.buffer = ''
     this.pending = new Map()
+    this.progress = []
     const rl = readline.createInterface({ input: this.child.stdout })
     rl.on('line', (line) => {
       const s = line.trim()
@@ -151,6 +156,10 @@ class McpClient {
       try {
         msg = JSON.parse(s)
       } catch {
+        return
+      }
+      if (msg.method === 'notifications/progress') {
+        this.progress.push(msg.params ?? {})
         return
       }
       if (typeof msg.id === 'number' && this.pending.has(msg.id)) {
@@ -185,6 +194,12 @@ class McpClient {
 
   async call(name, args) {
     const res = await this.request('tools/call', { name, arguments: args ?? {} })
+    if (res.error) throw new Error(`工具 ${name} 协议错误: ${res.error.message}`)
+    return res.result
+  }
+
+  async callWithProgress(name, args, token) {
+    const res = await this.request('tools/call', { name, arguments: args ?? {}, _meta: { progressToken: token } })
     if (res.error) throw new Error(`工具 ${name} 协议错误: ${res.error.message}`)
     return res.result
   }
@@ -229,8 +244,18 @@ async function main() {
     const list = await mcp.request('tools/list', {})
     const toolNames = (list?.result?.tools ?? []).map((t) => t.name)
     check('tools/list ≥ 12 个工具', toolNames.length >= 12, `实际 ${toolNames.length}`)
-    // 工具定义漂移回归：v0.6.0 曾出现桥少 3 个 mock 工具、客户端完全调不到
-    check('tools/list 与主进程一致（34 个）', toolNames.length === 34, `实际 ${toolNames.length}: ${toolNames.join(',')}`)
+    // 工具定义漂移回归：v0.6.0 曾出现桥少 3 个 mock 工具、客户端完全调不到。
+    // 主进程工具数会随版本增长，改为从源码抽取真实名字做双向比对，避免硬编码过期。
+    const mainToolNames = [...new Set(
+      [...fs.readFileSync(path.join(ROOT, 'src/main/tools.ts'), 'utf8').matchAll(/name:\s*'(browser_[a-z0-9_]+)'/g)].map((m) => m[1])
+    )]
+    const missingTools = mainToolNames.filter((n) => !toolNames.includes(n))
+    const extraTools = toolNames.filter((n) => !mainToolNames.includes(n))
+    check(
+      `tools/list 与主进程一致（${mainToolNames.length} 个）`,
+      missingTools.length === 0 && extraTools.length === 0,
+      `缺: ${missingTools.join(',') || '无'} 多: ${extraTools.join(',') || '无'}`
+    )
     const missingHints = (list?.result?.tools ?? [])
       .filter((tool) => ['readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint'].some((key) => typeof tool?.annotations?.[key] !== 'boolean'))
       .map((tool) => tool.name)
@@ -262,7 +287,7 @@ async function main() {
         startupInfo.includes(`复制${promptLabel}`) && platformPrompt,
       startupInfo.slice(0, 500)
     )
-    check('启动页背景与窗口宽度正常', startupBackground.includes('rgb(17, 22, 25)') && startupWidthOk.includes('true'), `${startupBackground}; 横向无溢出=${startupWidthOk}`)
+    check('启动页浅色背景与窗口宽度正常', startupBackground.includes('rgb(247, 249, 251)') && startupWidthOk.includes('true'), `${startupBackground}; 横向无溢出=${startupWidthOk}`)
     const promptSnapshot = mcp.text(await mcp.call('browser_snapshot', { full: true }))
     const copyPromptRef = findRef(promptSnapshot, new RegExp(`- button "复制${promptLabel}"`))
     check('安装提示词提供可操作的复制按钮', !!copyPromptRef, promptSnapshot.slice(0, 400))
@@ -363,6 +388,42 @@ async function main() {
     const shot = await mcp.call('browser_screenshot', {})
     const hasImage = (shot?.content ?? []).some((c) => c.type === 'image')
     check('截图返回图像', hasImage, mcp.text(shot))
+    // 整页截图：同一页面上应比视口截图更大（证明抓的是完整文档，而不是重复视口）
+    // 先把页面撑高，否则整页截图与视口截图尺寸接近，断言没有区分力。
+    await mcp.call('browser_evaluate', {
+      expression: '(() => { const d = document.createElement("div"); d.id = "smoke-tall"; d.style.height = "2600px"; d.style.background = "linear-gradient(#fff,#ccc)"; document.body.appendChild(d); return d.offsetHeight })()'
+    })
+    const viewShot = await mcp.call('browser_screenshot', {})
+    const fullShot = await mcp.call('browser_screenshot', { fullPage: true })
+    // PNG IHDR：偏移 16 是宽、20 是高（像素）；用它比较“整页”是否真的更高
+    const pngSize = (call) => {
+      const b64 = (call?.content ?? []).find((c) => c.type === 'image')?.data
+      if (!b64) return null
+      const buf = Buffer.from(b64, 'base64')
+      if (buf.length < 24) return null
+      return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) }
+    }
+    const viewSize = pngSize(viewShot)
+    const fullSize = pngSize(fullShot)
+    check(
+      '整页截图返回图像且高度覆盖完整文档',
+      !!fullSize && !!viewSize && fullSize.height > viewSize.height * 1.5,
+      `viewport=${viewSize?.width}x${viewSize?.height} full=${fullSize?.width}x${fullSize?.height}`
+    )
+
+    const evidenceList = mcp.text(await mcp.call('browser_evidence', { action: 'list', limit: 200 }))
+    check(
+      '截图自动登记到证据清单并带 sha256',
+      evidenceList.includes('[screenshot]') && /[0-9a-f]{16}…/.test(evidenceList),
+      evidenceList.slice(0, 400)
+    )
+    // 路径本身可能含空格，按行取（不能按 \S+ 匹配）
+    const evidenceLines = evidenceList.split(/\r?\n/)
+    const evidenceFile = evidenceLines[evidenceLines.findIndex((l) => l.startsWith('[screenshot]')) + 1]?.trim()
+    if (evidenceFile) {
+      const hashOut = mcp.text(await mcp.call('browser_evidence', { action: 'hash', file: evidenceFile }))
+      check('证据文件可按路径计算 sha256', /sha256: [0-9a-f]{64}/.test(hashOut), hashOut.slice(0, 160))
+    }
 
     console.log('\n[10] 标签管理')
     const tabs = await mcp.call('browser_tabs', { action: 'list' })
@@ -385,6 +446,17 @@ async function main() {
     check('full:true 返回完整树', fullText.includes('页面快照（完整）'), fullText.slice(0, 160))
     check('完整树与增量内容一致', fullText.includes('已搜索: 你好 Aa'))
 
+    console.log('\n[11a] 长页面快照分页')
+    await mcp.call('browser_evaluate', {
+      expression: `(() => { const box = document.createElement('div'); box.id = 'pager-box'; for (let i = 0; i < 60; i++) { const p = document.createElement('p'); p.textContent = '分页测试行' + i; box.appendChild(p); } document.body.appendChild(box); return box.children.length })()`
+    })
+    const page1 = mcp.text(await mcp.call('browser_snapshot', { maxNodes: 10 }))
+    check('分页快照返回页码与总行数', page1.includes('页面快照（分页') && /\/\s*\d+/.test(page1), page1.slice(0, 240))
+    const nextMatch = /下一页 cursor=(\d+)/.exec(page1)
+    check('分页快照给出下一页 cursor', !!nextMatch, page1.slice(0, 240))
+    const page2 = mcp.text(await mcp.call('browser_snapshot', { maxNodes: 10, cursor: Number(nextMatch?.[1] ?? 0) }))
+    check('下一页返回不同片段', page2 !== page1 && page2.includes('页面快照（分页'), page2.slice(0, 240))
+
     console.log('\n[11b] 页面性能摘要')
     const perf = await mcp.call('browser_performance', { slowest: 3 })
     const perfText = mcp.text(perf)
@@ -406,12 +478,18 @@ async function main() {
         res.setHeader('Content-Type', 'application/octet-stream')
         res.setHeader('Content-Disposition', 'attachment; filename="aa-smoke-download.txt"')
         res.end('Aa Browser download smoke test payload')
+      } else if (req.url && req.url.startsWith('/slow-download')) {
+        res.setHeader('Content-Type', 'application/octet-stream')
+        res.setHeader('Content-Disposition', 'attachment; filename="aa-smoke-slow.txt"')
+        res.write('chunk-1\n')
+        setTimeout(() => { res.end('chunk-2\n') }, 3000)
       } else {
         res.setHeader('Content-Type', 'text/html; charset=utf-8')
         res.end(
           '<html><body><h1>抓包测试页</h1><div id="out"></div><div id="mockout">（未请求）</div>' +
             '<div id="leakout"></div>' +
             '<a id="dl" href="/download">下载测试文件</a>' +
+            '<a id="slowdl" href="/slow-download">慢速下载测试文件</a>' +
             '<input id="up" type="file" /><div id="upout">（未上传）</div>' +
             '<script>' +
             'document.getElementById("leakout").textContent="AA_TYPE="+typeof window.aa+" NEWTAB_TYPE="+typeof window.aaNewtab;' +
@@ -523,6 +601,9 @@ async function main() {
         '<label><input id="c" type="checkbox" /> 同意</label>' +
         '<div id="out">待填写</div>' +
         '<button id="dlg" onclick="alert(\'SMOKE_ALERT\'); confirm(\'SMOKE_CONFIRM\')">弹窗</button>' +
+        '<button id="pmt" onclick="var v=prompt(\'SMOKE_PROMPT\',\'默认\'); document.getElementById(\'out\').textContent=\'prompt=\'+v">提示输入</button>' +
+        '<button id="acc" aria-expanded="true">菜单</button>' +
+        '<input id="rng" type="range" min="0" max="100" value="42" aria-label="音量" />' +
         '<script>function upd(){document.getElementById("out").textContent="t="+document.getElementById("t").value+" s="+document.getElementById("s").value+" c="+document.getElementById("c").checked}</script>' +
         '</body></html>'
       const formServer = http.createServer((q, s) => {
@@ -579,15 +660,241 @@ async function main() {
         const afterClear = mcp.text(await mcp.call('browser_dialogs', {}))
         check('清空后再次读取为空态', afterClear.includes('未弹出'), afterClear.slice(0, 200))
 
+        // 对话框应答策略：让 confirm 返回 true，页面逻辑才会继续走“已确认”分支
+        await mcp.call('browser_dialog_respond', { confirm: true })
+        const dlgRef2 = findRef(mcp.text(await mcp.call('browser_snapshot', { full: true })), /- button "弹窗"/)
+        await mcp.call('browser_click', { ref: dlgRef2, snapshot: false })
+        const acceptedText = mcp.text(await mcp.call('browser_dialogs', {}))
+        check('browser_dialog_respond 让 confirm 返回 true', acceptedText.includes('返回 true'), acceptedText.slice(0, 300))
+        await mcp.call('browser_dialogs', { clear: true })
+        await mcp.call('browser_dialog_respond', { prompt: 'SMOKE_ANSWER' })
+        const pmtRef = findRef(mcp.text(await mcp.call('browser_snapshot', { full: true })), /- button "提示输入"/)
+        await mcp.call('browser_click', { ref: pmtRef, snapshot: false })
+        await sleep(300)
+        const promptOut = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.getElementById("out").textContent' }))
+        check('browser_dialog_respond 让 prompt 返回指定文本', promptOut.includes('prompt=SMOKE_ANSWER'), promptOut.slice(0, 200))
+        const promptDlg = mcp.text(await mcp.call('browser_dialogs', {}))
+        check('prompt 记录包含页面实际拿到的答案', promptDlg.includes('SMOKE_PROMPT') && promptDlg.includes('SMOKE_ANSWER'), promptDlg.slice(0, 300))
+        await mcp.call('browser_dialog_respond', { reset: true })
+        await mcp.call('browser_dialogs', { clear: true })
+
+        // 断言工具：通过时正常返回，失败时返回 isError 并带期望/实际
+        const assertOk = await mcp.call('browser_assert', {
+          checks: [
+            { kind: 'url', expected: '127.0.0.1' },
+            { kind: 'selector', target: '#t', message: '姓名输入框存在' },
+            { kind: 'count', target: 'button', match: 'gte', expected: 1 },
+            { kind: 'value', target: '#t', expected: '张三' },
+            { kind: 'checked', target: '#c', expected: true },
+            { kind: 'text', match: 'contains', expected: '表单工具测试' }
+          ]
+        })
+        const assertOkText = mcp.text(assertOk)
+        check('browser_assert 全部通过时返回 6/6 且非错误', !assertOk.isError && assertOkText.includes('6/6'), assertOkText.slice(0, 400))
+        const assertFail = await mcp.call('browser_assert', {
+          checks: [{ kind: 'text', match: 'contains', expected: '不存在的文案_XYZ', message: '错误文案不应出现' }]
+        })
+        const assertFailText = mcp.text(assertFail)
+        check(
+          'browser_assert 失败时返回 isError 且带期望/实际',
+          assertFail.isError === true && assertFailText.includes('期望') && assertFailText.includes('实际'),
+          assertFailText.slice(0, 300)
+        )
+
         // wait 新语义
         const waited = mcp.text(await mcp.call('browser_wait', { time: 300 }))
         check('browser_wait time 固定等待', waited.includes('已等待 300ms'), waited)
         const gone = mcp.text(await mcp.call('browser_wait', { textGone: '不存在的文案_XYZ', timeoutMs: 2000 }))
         check('browser_wait textGone 立即满足', gone.includes('已消失'), gone.slice(0, 200))
+
+        // 选择器 / URL 等待：SPA 里比文本等待稳定
+        const waitSel = mcp.text(await mcp.call('browser_wait', { selector: '#t', timeoutMs: 3000 }))
+        check('browser_wait selector 等待元素出现', waitSel.includes('#t 已出现'), waitSel.slice(0, 200))
+        const waitGoneSel = await mcp.call('browser_wait', { selectorGone: '#never-existed-xyz', timeoutMs: 2000 })
+        check('browser_wait selectorGone 立即满足', !waitGoneSel.isError, mcp.text(waitGoneSel).slice(0, 200))
+        const waitUrl = mcp.text(await mcp.call('browser_wait', { urlContains: '127.0.0.1', timeoutMs: 2000 }))
+        check('browser_wait urlContains 立即满足', waitUrl.includes('URL 已包含'), waitUrl.slice(0, 200))
+        const waitTimeout = await mcp.call('browser_wait', { selector: '#definitely-absent-xyz', timeoutMs: 1200 })
+        check('browser_wait 选择器超时返回 isError', waitTimeout.isError === true, mcp.text(waitTimeout).slice(0, 200))
+
+        // 快照 ARIA 状态：expanded 与滑块数值范围要能被 AI 看到
+        const ariaSnap = mcp.text(await mcp.call('browser_snapshot', { full: true }))
+        check('快照输出 aria-expanded 状态', ariaSnap.includes('[expanded]'), ariaSnap.slice(0, 600))
+        check('快照输出滑块当前值与范围', /\[value=42[^\]]*max=100\]/.test(ariaSnap), ariaSnap.slice(0, 800))
       } finally {
         formServer.close()
         // 回到主测试页：[15] 的文件输入与下载链接、[16] 的 preload 泄漏标记都在那个页面上。
         // 不回来会让后续断言全部跑在表单页上而假失败。
+        await mcp.call('browser_navigate', { url: `http://127.0.0.1:${port}/`, snapshot: false })
+        await mcp.call('browser_wait', { text: '接口返回', timeoutMs: 8000 })
+      }
+
+      console.log('\n[14c] 跨域 iframe（browser_frame）')
+      // 两个端口 = 两个 origin，iframe 内容对顶层快照不可见，只能靠 browser_frame 操作
+      const innerHtml =
+        '<html><body><h2>iframe 内容</h2>' +
+        '<input id="fin" />' +
+        '<select id="fsel"><option value="a">选项A</option><option value="b">选项B</option></select>' +
+        '<button id="fbtn" onclick="document.getElementById(\'fout\').textContent=\'clicked\'">按钮</button>' +
+        '<div id="fout">未点击</div></body></html>'
+      const frameServer = http.createServer((q, s) => {
+        s.setHeader('Content-Type', 'text/html; charset=utf-8')
+        s.end(innerHtml)
+      })
+      await new Promise((r) => frameServer.listen(0, '127.0.0.1', r))
+      const framePort = frameServer.address().port
+      const hostHtml = `<html><body><h1>宿主页</h1><div id="host">宿主内容</div><iframe id="cf" src="http://127.0.0.1:${framePort}/frame" width="500" height="300"></iframe></body></html>`
+      const hostServer = http.createServer((q, s) => {
+        s.setHeader('Content-Type', 'text/html; charset=utf-8')
+        s.end(hostHtml)
+      })
+      await new Promise((r) => hostServer.listen(0, '127.0.0.1', r))
+      const hostPort = hostServer.address().port
+      try {
+        await mcp.call('browser_navigate', { url: `http://127.0.0.1:${hostPort}/`, snapshot: false })
+        await sleep(800)
+        const hostSnap = mcp.text(await mcp.call('browser_snapshot', { full: true }))
+        check('顶层快照看不到跨域 iframe 内部文本', !hostSnap.includes('iframe 内容'), hostSnap.slice(0, 300))
+
+        const frameList = mcp.text(await mcp.call('browser_frame', { action: 'list' }))
+        const frameId = /\[(f\d+)\][^\n]*跨域/.exec(frameList)?.[1]
+        check('browser_frame list 列出跨域 iframe', !!frameId && frameList.includes('跨域'), frameList.slice(0, 400))
+
+        const frameTextOut = mcp.text(await mcp.call('browser_frame', { action: 'text', frameId }))
+        check('browser_frame text 读到 iframe 内部文本', frameTextOut.includes('iframe 内容'), frameTextOut.slice(0, 300))
+
+        const frameEls = mcp.text(await mcp.call('browser_frame', { action: 'elements', frameId }))
+        check('browser_frame elements 给出可用选择器', frameEls.includes('#fin') && frameEls.includes('#fbtn'), frameEls.slice(0, 500))
+
+        await mcp.call('browser_frame', { action: 'type', frameId, selector: '#fin', text: '跨域输入' })
+        const typedBack = mcp.text(await mcp.call('browser_frame', { action: 'evaluate', frameId, expression: 'document.querySelector("#fin").value' }))
+        check('browser_frame type 在 iframe 内真实写入', typedBack.includes('跨域输入'), typedBack.slice(0, 200))
+
+        await mcp.call('browser_frame', { action: 'select', frameId, selector: '#fsel', value: 'b' })
+        const selectBack = mcp.text(await mcp.call('browser_frame', { action: 'evaluate', frameId, expression: 'document.querySelector("#fsel").value' }))
+        check('browser_frame select 在 iframe 内生效', selectBack.includes('"b"'), selectBack.slice(0, 200))
+
+        await mcp.call('browser_frame', { action: 'click', frameId, selector: '#fbtn' })
+        await sleep(200)
+        const clickBack = mcp.text(await mcp.call('browser_frame', { action: 'evaluate', frameId, expression: 'document.getElementById("fout").textContent' }))
+        check('browser_frame click 触发 iframe 内页面逻辑', clickBack.includes('clicked'), clickBack.slice(0, 200))
+      } finally {
+        frameServer.close()
+        hostServer.close()
+        await mcp.call('browser_navigate', { url: `http://127.0.0.1:${port}/`, snapshot: false })
+        await mcp.call('browser_wait', { text: '接口返回', timeoutMs: 8000 })
+      }
+
+      console.log('\n[14d] 视觉评审闭环（对比度 / 视觉基线 / 多视口）')
+      // 独立的最小页面：避免主测试页自身样式干扰对比度与像素对比断言
+      const visualHtml = `<!doctype html><html><head><meta charset="utf-8"><style>
+        html,body{margin:0;background:#fff;color:#000;font-family:sans-serif}
+        #good{color:#000;background:#fff;font-size:16px;padding:8px}
+        #bad{color:#ccc;background:#fff;font-size:16px;padding:8px}
+        #panel{width:100%;height:220px;background:#3b82f6;color:#fff;font-size:24px;padding:8px}
+        #wide{width:1400px;height:20px;background:#eee}
+      </style></head><body>
+        <h1 id="title">视觉评审测试页</h1>
+        <p id="good">高对比度文本</p>
+        <p id="bad">低对比度文本</p>
+        <div id="panel">大号白字</div>
+        <div id="wide">横向溢出元素</div>
+      </body></html>`
+      const visualServer = http.createServer((q, s) => {
+        s.setHeader('Content-Type', 'text/html; charset=utf-8')
+        s.end(visualHtml)
+      })
+      await new Promise((r) => visualServer.listen(0, '127.0.0.1', r))
+      const visualPort = visualServer.address().port
+      try {
+        await mcp.call('browser_navigate', { url: `http://127.0.0.1:${visualPort}/`, snapshot: false })
+        await sleep(400)
+
+        const widthBefore = Number((await mcp.call('browser_evaluate', { expression: 'window.innerWidth' })).content?.[0]?.text ?? '0')
+        const matrix = await mcp.call('browser_viewport_matrix', {
+          viewports: [
+            { name: 'narrow', width: 320, height: 480, deviceScaleFactor: 2 },
+            { name: 'tablet', width: 768, height: 600 },
+            { name: 'hidpi', width: 400, height: 300, deviceScaleFactor: 2 }
+          ]
+        })
+        const matrixText = mcp.text(matrix)
+        check('多视口矩阵返回全部视口', !matrix.isError && ['narrow', 'tablet', 'hidpi'].every((n) => matrixText.includes(n)), matrixText.slice(0, 500))
+        check('矩阵按 DPI 输出真实像素尺寸', /640×960/.test(matrixText) && /800×600/.test(matrixText), matrixText.slice(0, 700))
+        check('矩阵报告小屏横向溢出', matrixText.includes('横向溢出'), matrixText.slice(0, 700))
+        const widthAfter = Number((await mcp.call('browser_evaluate', { expression: 'window.innerWidth' })).content?.[0]?.text ?? '0')
+        check('矩阵结束后设备指标覆盖已清除', widthAfter === widthBefore, `before=${widthBefore} after=${widthAfter}`)
+
+        const progressBefore = mcp.progress.length
+        const progressCall = await mcp.callWithProgress('browser_viewport_matrix', {
+          viewports: [{ name: 'p1', width: 320, height: 240 }, { name: 'p2', width: 480, height: 320 }]
+        }, 'smoke-progress')
+        const progressNotes = mcp.progress.slice(progressBefore)
+        check(
+          'MCP progress 通知按 progressToken 回传',
+          !progressCall.isError && progressNotes.length >= 2 &&
+            progressNotes.every((n) => n.progressToken === 'smoke-progress') &&
+            progressNotes.some((n) => n.progress === 2),
+          JSON.stringify(progressNotes).slice(0, 400)
+        )
+
+        const auditSoft = await mcp.call('browser_contrast_audit', { failOnViolation: false })
+        const auditText = mcp.text(auditSoft)
+        check('对比度审计列出低对比度元素', !auditSoft.isError && auditText.includes('#bad') && /1\.6\d?/.test(auditText), auditText.slice(0, 600))
+        check('对比度审计不误报合规元素', !auditText.includes('#good'), auditText.slice(0, 400))
+        const auditStrict = await mcp.call('browser_contrast_audit', {})
+        check('对比度审计默认违规返回 isError', auditStrict.isError === true, mcp.text(auditStrict).slice(0, 300))
+
+        const saved = await mcp.call('browser_visual_diff', { action: 'save', name: 'smoke-base' })
+        check('视觉基线保存成功', !saved.isError && mcp.text(saved).includes('已保存视觉基线'), mcp.text(saved).slice(0, 300))
+        const same = await mcp.call('browser_visual_diff', { action: 'compare', name: 'smoke-base' })
+        check('未改动时视觉对比通过', !same.isError && mcp.text(same).includes('通过'), mcp.text(same).slice(0, 400))
+        // browser_evaluate 只接受单个表达式/IIFE，不能用分号串多条语句
+        const mutated = await mcp.call('browser_evaluate', {
+          expression: `(() => { document.getElementById('panel').style.background = '#ff0000'; return getComputedStyle(document.getElementById('panel')).backgroundColor })()`
+        })
+        check('对比前页面样式已被真实修改', !mutated.isError && mcp.text(mutated).includes('255, 0, 0'), mcp.text(mutated).slice(0, 200))
+        await sleep(250)
+        const changed = await mcp.call('browser_visual_diff', { action: 'compare', name: 'smoke-base', maxDiffPercent: 0.1 })
+        const changedText = mcp.text(changed)
+        check('页面改变后视觉对比报差异并 isError', changed.isError === true && changedText.includes('未通过') && /%/.test(changedText), changedText.slice(0, 500))
+        const listed = mcp.text(await mcp.call('browser_visual_diff', { action: 'list' }))
+        check('视觉基线列表包含已存基线', listed.includes('smoke-base'), listed.slice(0, 300))
+        const deleted = await mcp.call('browser_visual_diff', { action: 'delete', name: 'smoke-base' })
+        check('视觉基线可删除', !deleted.isError && mcp.text(deleted).includes('已删除'), mcp.text(deleted).slice(0, 200))
+      } finally {
+        visualServer.close()
+        await mcp.call('browser_navigate', { url: `http://127.0.0.1:${port}/`, snapshot: false })
+        await mcp.call('browser_wait', { text: '接口返回', timeoutMs: 8000 })
+      }
+
+      console.log('\n[14e] closed shadow DOM')
+      const closedHtml = `<!doctype html><html><body><h1>Closed shadow 测试页</h1><div id="host"></div>
+        <script>
+          var host = document.getElementById('host');
+          var root = host.attachShadow({ mode: 'closed' });
+          root.innerHTML = '<button id="cbtn" onclick="document.title=\\'shadow-clicked\\'">Closed Shadow Button</button>';
+        </script></body></html>`
+      const closedServer = http.createServer((q, s) => {
+        s.setHeader('Content-Type', 'text/html; charset=utf-8')
+        s.end(closedHtml)
+      })
+      await new Promise((r) => closedServer.listen(0, '127.0.0.1', r))
+      const closedPort = closedServer.address().port
+      try {
+        await mcp.call('browser_navigate', { url: `http://127.0.0.1:${closedPort}/`, snapshot: false })
+        await sleep(400)
+        const closedSnap = mcp.text(await mcp.call('browser_snapshot', { full: true }))
+        check('快照能看到 closed shadow 内部元素', closedSnap.includes('Closed Shadow Button'), closedSnap.slice(0, 400))
+        const closedRef = findRef(closedSnap, /button "Closed Shadow Button"/)
+        check('closed shadow 内部元素获得可用 ref', !!closedRef, closedSnap.slice(0, 400))
+        if (closedRef) {
+          const clicked = await mcp.call('browser_click', { ref: closedRef, snapshot: false })
+          const clickedTitle = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.title' }))
+          check('按 ref 可点击 closed shadow 内部按钮', !clicked.isError && clickedTitle.includes('shadow-clicked'), clickedTitle.slice(0, 120))
+        }
+      } finally {
+        closedServer.close()
         await mcp.call('browser_navigate', { url: `http://127.0.0.1:${port}/`, snapshot: false })
         await mcp.call('browser_wait', { text: '接口返回', timeoutMs: 8000 })
       }
@@ -627,6 +934,37 @@ async function main() {
         downloads = mcp.text(await mcp.call('browser_downloads', {}))
       } while (!downloads.includes('completed') && Date.now() < downloadDeadline)
       check('下载被捕获并静默保存', downloads.includes('aa-smoke-download.txt') && downloads.includes('completed'), downloads.slice(0, 400))
+
+      // 慢速下载：验证取消；完成后不能留下可用文件
+      await mcp.call('browser_evaluate', { expression: `(() => { document.querySelector('#slowdl').click(); return 'clicked' })()` })
+      let slowId = null
+      let listText = ''
+      const slowDeadline = Date.now() + 6000
+      while (!slowId && Date.now() < slowDeadline) {
+        await sleep(150)
+        listText = mcp.text(await mcp.call('browser_downloads', {}))
+        slowId = /\[(d\w+)\] aa-smoke-slow\.txt — progressing/.exec(listText)?.[1] ?? null
+      }
+      check('慢速下载进入 progressing', !!slowId, listText.slice(0, 400))
+      if (slowId) {
+        const canceled = await mcp.call('browser_downloads', { action: 'cancel', id: slowId })
+        check('取消进行中的下载', !canceled.isError && mcp.text(canceled).includes('已取消下载'), mcp.text(canceled).slice(0, 200))
+        const afterCancel = mcp.text(await mcp.call('browser_downloads', {}))
+        check('取消后状态变为 cancelled', afterCancel.includes('aa-smoke-slow.txt — cancelled'), afterCancel.slice(0, 500))
+      }
+      // 重试：重新发起一个下载，生成带“重试自”标记的新记录
+      const completedId = /\[(d\w+)\] aa-smoke-download\.txt — completed/.exec(downloads)?.[1]
+      if (completedId) {
+        const retried = await mcp.call('browser_downloads', { action: 'retry', id: completedId })
+        check('重试已完成的下载', !retried.isError, mcp.text(retried).slice(0, 200))
+        let retryList = ''
+        const retryDeadline = Date.now() + 10000
+        do {
+          await sleep(250)
+          retryList = mcp.text(await mcp.call('browser_downloads', {}))
+        } while (!retryList.includes(`重试自 ${completedId}`) && Date.now() < retryDeadline)
+        check('重试生成新记录且不覆盖原文件', retryList.includes(`重试自 ${completedId}`), retryList.slice(0, 600))
+      }
 
       const pdf = await mcp.call('browser_pdf', {})
       const pdfPath = /PDF 已保存: (.+)$/m.exec(mcp.text(pdf))?.[1]

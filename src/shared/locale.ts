@@ -29,6 +29,7 @@ export type LocaleKey =
   | 'settingsNavGeneral' | 'settingsNavBrowsing' | 'settingsNavData' | 'settingsNavAi'
   | 'settingsDescGeneral' | 'settingsDescBrowsing' | 'settingsDescData' | 'settingsDescAi'
   | 'settingsDescUpdate' | 'updateChannel' | 'engineHint'
+  | 'theme' | 'themeLight' | 'themeDark' | 'themeSystem'
 
 const catalogs: Record<Locale, Record<LocaleKey, string>> = {
   'zh-CN': {
@@ -59,7 +60,8 @@ const catalogs: Record<Locale, Record<LocaleKey, string>> = {
     settingsDescGeneral: '界面语言与默认搜索引擎', settingsDescBrowsing: '快照输出、人工确认与标签页行为',
     settingsDescData: '下载落盘位置与可访问站点范围', settingsDescAi: '连接本机 AI 客户端与 Agent 本地服务',
     settingsDescUpdate: '更新通道、下载与安装', updateChannel: '更新通道',
-    engineHint: '浏览器与 Agent 共用；也可直接填写自定义搜索基址。'
+    engineHint: '浏览器与 Agent 共用；也可直接填写自定义搜索基址。',
+    theme: '主题', themeLight: '浅色（默认）', themeDark: '深色', themeSystem: '跟随系统'
   },
   'en-US': {
     appTitle: 'aa-browser', tabs: 'Browser tabs', newTab: 'New tab (Ctrl+T)', back: 'Back (Alt+←)',
@@ -89,7 +91,8 @@ const catalogs: Record<Locale, Record<LocaleKey, string>> = {
     settingsDescGeneral: 'Interface language and the default search provider', settingsDescBrowsing: 'Snapshot output, confirmations and tab behavior',
     settingsDescData: 'Where downloads go and which sites are reachable', settingsDescAi: 'Connect local AI clients and the Agent service',
     settingsDescUpdate: 'Update channel, download and install', updateChannel: 'Update channel',
-    engineHint: 'Shared by you and the Agent. You can also type a custom search base directly.'
+    engineHint: 'Shared by you and the Agent. You can also type a custom search base directly.',
+    theme: 'Theme', themeLight: 'Light (default)', themeDark: 'Dark', themeSystem: 'System'
   }
 }
 

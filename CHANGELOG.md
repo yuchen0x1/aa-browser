@@ -2,6 +2,16 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
+## v0.6.4 — 2026-11-20
+
+- 新增视觉评审闭环：`browser_visual_diff`（基线 / 逐像素 diff / 差异图 / 视觉断言）、`browser_contrast_audit`（WCAG AA/AAA 对比度审计）、`browser_viewport_matrix`（320/480/768/桌面 + 2x 高 DPI，CDP 设备指标模拟）。
+- 长操作按 MCP 规范回传 `notifications/progress`；多客户端并发时 HUD 逐条展示调用与进度，支持只停止其中一个；全局「中断」保留。
+- 工具 schema 单源化：新增 `src/shared/tool-defs.mjs`，主进程只保留 `name + handler`，桥直接导入；检查脚本升级为唯一来源 + 主进程 + 桥 + README 四方一致。
+- 补齐长期限制：快照分页（`maxNodes/cursor`）、下载取消/重试（重试重新校验站点白名单）、摄像头/定位/通知走人工审批、证据文件生命周期（sha256/TTL/配额 + `browser_evidence`）、closed shadow DOM 可见可点击、原生右键菜单跟随语言并增加图片项与打印。
+- 修复浅色主题下原生标题栏覆盖层仍为深色的问题；中断不再让长操作跑完；新增 `browser_frame` 跨域 iframe 操作与 `browser_screenshot fullPage` 整页截图。
+- MCP 工具 34 → 42（新增 assert、dialog_respond、frame、visual_diff、contrast_audit、viewport_matrix、evidence 等）；新增 `npm run test:evidence` 并并入 `npm run check`。
+- 本地回归：check、build、test:tools、test:bridge、test:bridge-autolaunch、smoke、test:desktop（34 项）全部通过。
+
 ## v0.3.0 — 2026-11-19
 
 - 设置面板改版：960px 宽卡片 + 左侧分区导航（通用 / 浏览与快照 / 数据与下载 / AI 集成 / 软件更新），导航随滚动高亮并可点击跳转；设置项改为「左说明、右控件」两栏，原生复选框换成开关，保存栏吸底；窗口不足 1000px 时自动收起导航；中英文新增 13 条文案。

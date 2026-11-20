@@ -1,4 +1,4 @@
-你是运行在这台电脑上的 AI Agent。Aa Browser 已经安装并正在运行（你现在看到的安装/接入提示词就来自它）。你的任务：把 Aa Browser 接入你当前所在的 AI 客户端，并实际验证 MCP 浏览器工具可用。
+你是运行在这台电脑上的 AI Agent。Aa Browser 已经安装（你现在看到的安装/接入提示词就来自它）。你的任务：把 Aa Browser 接入你当前所在的 AI 客户端，并实际验证 MCP 浏览器工具可用。
 
 不要重复安装浏览器本体，不要跳过验证，也不要把「配置已写入」当成「已连接」。
 
@@ -11,7 +11,7 @@
 ## 1. 检查运行状态
 
 - 系统需为 Windows x64 或 Linux x86_64，Node.js 22.12 或更高（node -v）。
-- 确认本机存在 Aa Browser 的本地服务发现文件：Windows 为 %USERPROFILE%\.aabrowser\connection.json，Linux 为 ~/.aabrowser/connection.json。文件存在且其中 pid 对应的进程仍在运行，说明浏览器已就绪。
+- 确认本机存在 Aa Browser 的本地服务发现文件：Windows 为 %USERPROFILE%\.aabrowser\connection.json，Linux 为 ~/.aabrowser/connection.json。文件存在且其中 pid 对应的进程仍在运行，说明浏览器已就绪；如果文件暂时不存在，MCP 桥在第一次 tools/call 时会按受信安装路径自动启动 Aa Browser 并等待连接。
 - 如果 Node.js 缺失：请用户确认后安装，不要静默安装系统依赖。
 
 ## 2. 获取官方安装器（只用于写入配置，不重复安装）
@@ -34,7 +34,8 @@ Linux 终端：
 
 --connect-only 会跳过下载和安装，只做三件事：确认 Aa Browser 已就绪、备份并写入本机 AI 客户端的 MCP 配置、实际调用 browser_tabs 验证。--json 输出机器可读结果（ok、version、installDir、bridge、clients、verified）。
 
-- 只想配置当前客户端时加 --clients（可用 id：zcode, claude, cursor, windsurf, cline, vscode, gemini, qwen, codex, workbuddy）。
+- 只想配置当前客户端时加 --clients（可用 id：zcode, claude, cursor, windsurf, cline, vscode, gemini, qwen, opencode, codex, workbuddy；DeepSeek Harness 使用 deepseek-harness 仅输出插件市场手动接入指引）。
+- DeepSeek Harness 只能通过插件市场安装/启用 Aa Browser 插件；安装器不会修改 `.dsh` 配置、数据库或缓存。启用后让 Agent 实际调用 `mcp__aa-browser__browser_tabs` 验证。
 - 当前客户端不在自动检测列表时：运行 node install.mjs --print-config，把输出按该客户端官方 MCP 配置格式写入；找不到路径就向用户索要，不要猜。
 
 ## 3. 重载客户端并验证

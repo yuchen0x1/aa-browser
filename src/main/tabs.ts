@@ -3,6 +3,7 @@ import type { Session } from 'electron'
 import type { TabInfo } from '@shared/types'
 import { NetworkCapture } from './network'
 import { installDialogGuard } from './dialogs'
+import { installClosedShadowCapture } from './closed-shadow'
 
 export interface Tab {
   id: string
@@ -241,6 +242,12 @@ export class TabManager {
       await withTimeout(installDialogGuard(wc), 2500, '页面对话框守卫初始化')
     } catch (error) {
       console.warn(`[aa-browser] 标签 ${id} 对话框守卫未就绪: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    if (wc.isDestroyed()) return
+    try {
+      await withTimeout(installClosedShadowCapture(wc), 2500, 'closed shadow 捕获初始化')
+    } catch (error) {
+      console.warn(`[aa-browser] 标签 ${id} closed shadow 捕获未就绪: ${error instanceof Error ? error.message : String(error)}`)
     }
     if (wc.isDestroyed()) return
     // 抓包和对话框守卫共用 CDP，按顺序启用后再开始首个页面导航。

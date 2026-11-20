@@ -17,9 +17,11 @@ Aa Browser 把「安装浏览器」和「接入 AI 客户端」合并成一段�
 
 自动写入 MCP 配置的客户端：
 
-ZCode、Claude Code、Cursor、Windsurf、Cline、VS Code（原生 MCP）、Gemini CLI、Qwen Code、Codex（桌面端 / CLI / IDE，即 ChatGPT 的本地 Codex）、WorkBuddy。
+ZCode、Claude Code、Cursor、Windsurf、Cline、VS Code（原生 MCP）、Gemini CLI、Qwen Code、OpenCode（[anomalyco/opencode](https://github.com/anomalyco/opencode)）、Codex（桌面端 / CLI / IDE，即 ChatGPT 的本地 Codex）、WorkBuddy。
 
-其他支持 MCP 的客户端（包括 DeepSeek Harness）：
+DeepSeek Harness 使用插件市场手动接入：安装并启用 Aa Browser 插件，然后让 Agent 实际调用 `mcp__aa-browser__browser_tabs`；安装器与桌面端不会修改 `.dsh` 配置、数据库或缓存。命令行如需看到该手动指引，可使用 `node cli/setup.mjs --yes --client deepseek-harness`。
+
+其他支持 MCP 的客户端（不在上述自动写入列表）：
 
 - DeepSeek Harness：见 [插件市场接入](MARKETPLACE.md)。
 - 其他客户端：先运行安装器获取通用配置片段，再按该客户端官方 MCP 文档添加。
@@ -101,7 +103,7 @@ node install.mjs --verify-only
 | Windows SmartScreen 提示 | 当前安装包未配置 Authenticode 签名；确认来源为官方 Release 后选择「更多信息 → 仍要运行」 |
 | Linux 缺少 FUSE | 用 `APPIMAGE_EXTRACT_AND_RUN=1` 启动 AppImage；MCP 桥仍会写到用户数据目录 |
 | 客户端看不到工具 | 重启/重载客户端；确认配置写入路径和备份；运行 `node install.mjs --verify-only` 验证浏览器侧是否正常 |
-| 浏览器未运行 | 先启动 Aa Browser；`--connect-only` 会尝试自动拉起，失败会明确报错 |
+| 浏览器未运行 | MCP 桥会在第一次 `tools/call` 时从受信安装路径自动拉起 Aa Browser，并等待最多 30 秒；找不到路径时设置 `AA_BROWSER_APP_PATH`，不需要自动启动时设置 `AA_BROWSER_AUTO_LAUNCH=0`；`--connect-only` 验证失败会明确报错 |
 | 工具名带前缀 | 例如 `mcp__aa-browser__browser_tabs`，以客户端实际展示为准 |
 
 ## 安全边界

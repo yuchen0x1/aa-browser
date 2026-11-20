@@ -16,12 +16,8 @@ import { ISOLATED_PARTITION_PREFIX, SHARED_PARTITION } from './tabs'
  * 而网页一旦拿到这些权限就可能静默采集环境信息；当前策略直接拒绝这些权限。
  */
 const DENIED_PERMISSIONS = new Set([
-  'media',
-  'geolocation',
-  'geolocation-approximate',
   'clipboard-read',
   'deprecated-sync-clipboard-read',
-  'notifications',
   'midi',
   'midiSysex',
   'hid',
@@ -35,21 +31,110 @@ const DENIED_PERMISSIONS = new Set([
   'openExternal'
 ])
 
+/** 需要用户明确点头的权限；其余敏感能力仍一律拒绝。 */
+const PROMPT_PERMISSIONS = new Set(['media', 'geolocation', 'geolocation-approximate', 'notifications'])
+
+const PERMISSION_LABELS: Record<string, string> = {
+  media: '摄像头 / 麦克风',
+  geolocation: '精确位置',
+  'geolocation-approximate': '大致位置',
+  notifications: '桌面通知'
+}
+
+export interface PermissionApprovalMeta {
+  site: string
+  tabTitle: string
+  fieldLabel: string
+  detail?: string
+  kind: 'permission'
+  permission: string
+}
+
+export interface PermissionPolicyDeps {
+  /** 注入人工审批；未注入时一律拒绝（无人值守的 Agent 不会挂起等待） */
+  requestApproval?: (meta: PermissionApprovalMeta) => Promise<boolean>
+}
+
 const configuredSessions = new WeakSet<Electron.Session>()
+/** 每个 Session 的已授权记录：origin -> permissions。隔离分区只在内存里，进程结束即失效。 */
+const grants = new WeakMap<Electron.Session, Map<string, Set<string>>>()
+/** 同一站点同一权限的并发请求去重，避免弹多个相同审批。 */
+const pendingPrompts = new Map<string, Promise<boolean>>()
+
+function originOf(url: string): string {
+  try {
+    return new URL(url).origin
+  } catch {
+    return url || '(未知站点)'
+  }
+}
 
 /**
- * 拒绝敏感设备能力和网页脚本读取剪贴板；保留正常复制和用户主动粘贴。
+ * 默认拒绝敏感设备能力和网页脚本读取剪贴板；摄像头/定位/通知走人工审批。
  * 幂等：同一 Session 只安装一次。
  */
-export function applyPermissionPolicy(ses: Electron.Session): void {
+export function applyPermissionPolicy(ses: Electron.Session, deps?: PermissionPolicyDeps): void {
   if (configuredSessions.has(ses)) return
   configuredSessions.add(ses)
-  ses.setPermissionRequestHandler((_wc, permission, callback) => {
-    callback(!DENIED_PERMISSIONS.has(permission))
+  const sessionGrants = new Map<string, Set<string>>()
+  grants.set(ses, sessionGrants)
+
+  ses.setPermissionRequestHandler((wc, permission, callback, details) => {
+    if (!PROMPT_PERMISSIONS.has(permission)) {
+      callback(!DENIED_PERMISSIONS.has(permission))
+      return
+    }
+    const site = originOf(String(details?.requestingUrl || wc.getURL() || ''))
+    if (sessionGrants.get(site)?.has(permission)) {
+      callback(true)
+      return
+    }
+    if (!deps?.requestApproval) {
+      callback(false)
+      return
+    }
+    const key = `${site}|${permission}`
+    const existing = pendingPrompts.get(key)
+    if (existing) {
+      void existing.then(callback)
+      return
+    }
+    const mediaType = String((details as { mediaType?: string } | undefined)?.mediaType ?? '')
+    const label = PERMISSION_LABELS[permission] ?? permission
+    const prompt = deps
+      .requestApproval({
+        site,
+        tabTitle: wc.getTitle() || site,
+        fieldLabel: `允许使用${label}`,
+        detail: mediaType ? `权限类型: ${permission} · ${mediaType}` : `权限类型: ${permission}`,
+        kind: 'permission',
+        permission
+      })
+      .then((allowed) => {
+        pendingPrompts.delete(key)
+        // 只有明确允许才记入本次会话；拒绝/超时都不授权。
+        if (allowed) {
+          const set = sessionGrants.get(site) ?? new Set<string>()
+          set.add(permission)
+          sessionGrants.set(site, set)
+        }
+        return allowed
+      })
+      .catch(() => {
+        pendingPrompts.delete(key)
+        return false
+      })
+    pendingPrompts.set(key, prompt)
+    void prompt.then(callback)
   })
+
   // 同步检查路径（如 navigator.permissions.query）必须给出一致答案，
   // 否则页面会看到"能查询到权限但请求失败"的矛盾状态。
-  ses.setPermissionCheckHandler((_wc, permission) => !DENIED_PERMISSIONS.has(permission))
+  ses.setPermissionCheckHandler((wc, permission, requestingOrigin) => {
+    if (!PROMPT_PERMISSIONS.has(permission)) return !DENIED_PERMISSIONS.has(permission)
+    const site = originOf(String(requestingOrigin || wc?.getURL() || ''))
+    return sessionGrants.get(site)?.has(permission) ?? false
+  })
 }
 
 /**

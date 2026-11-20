@@ -6,6 +6,8 @@ import { writeJsonAtomic } from './atomic-json'
 export interface AppSettings {
   /** UI language: auto follows system/browser locale; manual values pin the catalog. */
   locale: 'auto' | 'zh-CN' | 'en-US'
+  /** UI theme; system follows the operating-system preference. */
+  theme: 'light' | 'dark' | 'system'
   /** 默认搜索引擎基址（以 = 结尾，查询词直接拼接） */
   searchEngine: string
   /** 快照默认是否全量（false = 增量省 token） */
@@ -28,6 +30,7 @@ export interface AppSettings {
 
 const DEFAULTS: AppSettings = {
   locale: 'auto',
+  theme: 'light',
   searchEngine: 'https://www.bing.com/search?q=',
   fullSnapshot: false,
   downloadDir: '',
@@ -57,8 +60,10 @@ function validSearchEngine(value: unknown): value is string {
 
 function normalizeSettings(value: unknown): AppSettings {
   const raw = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+  const theme = raw.theme === 'light' || raw.theme === 'dark' || raw.theme === 'system' ? raw.theme : DEFAULTS.theme
   return {
     locale: raw.locale === 'zh-CN' || raw.locale === 'en-US' ? raw.locale : 'auto',
+    theme,
     searchEngine: validSearchEngine(raw.searchEngine) ? raw.searchEngine.trim() : DEFAULTS.searchEngine,
     fullSnapshot: typeof raw.fullSnapshot === 'boolean' ? raw.fullSnapshot : DEFAULTS.fullSnapshot,
     downloadDir: typeof raw.downloadDir === 'string' ? raw.downloadDir.trim() : DEFAULTS.downloadDir,
@@ -93,6 +98,7 @@ export class SettingsStore {
     }
     if (typeof patch.fullSnapshot === 'boolean') next.fullSnapshot = patch.fullSnapshot
     if (patch.locale === 'auto' || patch.locale === 'zh-CN' || patch.locale === 'en-US') next.locale = patch.locale
+    if (patch.theme === 'light' || patch.theme === 'dark' || patch.theme === 'system') next.theme = patch.theme
     if (typeof patch.downloadDir === 'string') next.downloadDir = patch.downloadDir.trim()
     if (typeof patch.requireOperationApproval === 'boolean') next.requireOperationApproval = patch.requireOperationApproval
     if (typeof patch.isolatedSessions === 'boolean') next.isolatedSessions = patch.isolatedSessions

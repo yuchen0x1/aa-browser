@@ -1,4 +1,6 @@
 import type { ToolContent } from '@shared/types'
+import { TOOL_DEFS, TOOL_ANNOTATIONS } from '@shared/tool-defs.mjs'
+export { TOOL_ANNOTATIONS }
 import { checkedStateScript, fingerprintScript, refLiteral, tagNameScript } from '@snapshot/scripts'
 import { TabManager, normalizeUrl } from './tabs'
 import { clipBody, safeNetworkHeaders, safeNetworkUrl } from './network'
@@ -17,12 +19,19 @@ import {
   inspectTypeTarget
 } from './actions'
 import type { ApprovalManager } from './approvals'
-import { readDialogs, clearDialogs } from './dialogs'
+import { readDialogs, clearDialogs, setDialogPolicy, clearDialogPolicy, dialogGuardReady } from './dialogs'
+import { runAssertions, formatAssertions, type AssertCheck } from './assertions'
+import { listFrames, frameText, frameElements, frameEvaluate, frameClick, frameType, frameSelect } from './frames'
+import { visualSave, visualCompare, visualList, visualDelete, formatDiff } from './visual'
+import { getEvidenceManager } from './evidence'
+import { auditContrast, formatContrast } from './contrast'
+import { captureViewportMatrix, VIEWPORT_PRESETS, formatViewportMatrix, type ViewportSpec } from './viewport'
 import {
   ActionError,
   captureSnapshot,
   snapshotText,
   doNavigate,
+  doReload,
   doClick,
   doDrag,
   doType,
@@ -31,9 +40,11 @@ import {
   doExtract,
   doWaitForText,
   doWaitForCondition,
+  doWaitForDom,
   doPressKey,
   doScreenshot,
   doConsoleLogs,
+  raceAbort,
   resolveWebContents
 } from './actions'
 
@@ -59,47 +70,6 @@ export interface McpToolAnnotations {
 
 export interface McpToolDef extends McpToolDefBase {
   annotations: McpToolAnnotations
-}
-
-/**
- * Keep these values explicit for every tool. Dynamic tools (cookies, storage,
- * tabs, dialogs, and evaluate) use the safest value for any supported action.
- */
-export const TOOL_ANNOTATIONS: Record<string, McpToolAnnotations> = {
-  browser_navigate: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  browser_snapshot: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  browser_click: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-  browser_drag: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-  browser_type: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-  browser_select_option: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  browser_scroll: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  browser_extract: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  browser_wait: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  browser_press_key: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-  browser_screenshot: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  browser_hover: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  browser_navigate_back: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  browser_navigate_forward: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  browser_resize: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  browser_get_selector: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  browser_find: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  browser_cookies: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-  browser_storage: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-  browser_downloads: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  browser_pdf: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  browser_upload_file: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-  browser_console: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  browser_performance: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  browser_network_requests: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  browser_network_detail: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
-  browser_har: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  browser_mock_requests: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
-  browser_list_mocks: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-  browser_clear_mocks: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false },
-  browser_tabs: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-  browser_fill_form: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-  browser_dialogs: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
-  browser_evaluate: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true }
 }
 
 /** 工具结果：文本内容 */
@@ -200,6 +170,19 @@ export function buildTools(
   getSettings?: () => { requireOperationApproval: boolean; fullSnapshot?: boolean; searchEngine?: string }
 ): McpToolDef[] {
   const tools: McpToolDefBase[] = []
+  /** title / description / inputSchema 来自单一来源，主进程只保留 name 与 handler。 */
+  const schemaByName = new Map(TOOL_DEFS.map((def) => [def.name, def]))
+  function pushTool(tool: { name: string; handler: McpToolDefBase['handler'] }): void {
+    const def = schemaByName.get(tool.name)
+    if (!def) throw new Error(`工具 ${tool.name} 缺少共享 schema（src/shared/tool-defs.mjs）`)
+    tools.push({
+      name: tool.name,
+      title: def.title,
+      description: def.description,
+      inputSchema: def.inputSchema,
+      handler: tool.handler
+    })
+  }
 
   /** 若开启"高危操作人工确认"，请求一次人工批准；未开启直接放行。 */
   async function opGate(desc: { site: string; tabTitle: string; action: string; detail?: string }, signal?: unknown): Promise<void> {
@@ -213,30 +196,29 @@ export function buildTools(
     if (!allowed) throw new ActionError(`高危操作已取消：${desc.action}`)
   }
 
-  tools.push({
+  /** 当前标签的站点标签（审批面板显示用；URL 异常时退回原始串） */
+  function siteOf(tab: { view: { webContents: { getURL(): string } } }): string {
+    const raw = tab.view.webContents.getURL()
+    try {
+      const url = new URL(raw)
+      return url.host || url.protocol
+    } catch {
+      return raw
+    }
+  }
+
+  pushTool({
     name: 'browser_navigate',
-    title: '导航',
-    description:
-      'Navigate the browser to a URL in the active tab (or a new tab). ' +
-      'Plain text that is not a URL is treated as a search query. ' +
-      'Returns a full page snapshot after loading, so you can act immediately ' +
-      '(pass snapshot:false to skip it if you only need browser_extract / browser_wait).',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        url: { type: 'string', description: 'URL or search query' },
-        newTab: { type: 'boolean', description: 'Open in a new tab instead of the active one (default false)' },
-        snapshot: { type: 'boolean', description: 'Include a full snapshot in the result (default true)' },
-        tabId: { type: 'string', description: 'Operate on a specific tab id (from browser_tabs list)' }
-      },
-      required: ['url']
-    },
     handler: async (args) => {
       approvals?.assertRunning()
       const url = String(args['url'] ?? '')
       if (!url) throw new ActionError('url 不能为空')
       const target = normalizeUrl(url, getSettings?.().searchEngine || searchUrl, newtabUrl)
-      const r = await doNavigate(tabs, target, { newTab: !!args['newTab'], tabId: args['tabId'] as string | undefined })
+      const r = await doNavigate(tabs, target, {
+        newTab: !!args['newTab'],
+        tabId: args['tabId'] as string | undefined,
+        signal: args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
+      })
       let body = `已导航: ${r.url}\ntitle: ${r.title}`
       if (args['snapshot'] !== false) {
         const tab = tabs.get(r.tabId)
@@ -253,49 +235,42 @@ export function buildTools(
     }
   })
 
-  tools.push({
-    name: 'browser_snapshot',
-    title: '页面快照',
-    description:
-      'Capture a structured accessibility snapshot of the active tab as a YAML-style tree. ' +
-      'Interactive elements carry [ref=eN] ids; pass a ref to browser_click / browser_type / ' +
-      'browser_select_option to act on them. Snapshots are incremental: if the page is unchanged ' +
-      'you get a one-line "no change" reply, and after small changes only the changed region is ' +
-      'returned (refs stay stable across snapshots). Pass full:true to force a complete tree ' +
-      '(automatic after navigation or large changes).',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        full: { type: 'boolean', description: 'Force a full snapshot instead of incremental (default false)' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
+  pushTool({
+    name: 'browser_reload',
+    handler: async (args) => {
+      const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      const want = args['snapshot'] !== false
+      const r = await doReload(tab, args['hard'] === true, args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined)
+      let body = `已刷新: ${r.url}\ntitle: ${r.title}`
+      if (want) {
+        try {
+          body += '\n\n' + snapshotText(await captureSnapshot(tab.view.webContents))
+        } catch {
+          body += '\n\n（刷新完成但快照获取失败，请单独调用 browser_snapshot）'
+        }
       }
-    },
+      return { content: [text(body)] }
+    }
+  })
+  pushTool({
+    name: 'browser_snapshot',
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       // 设置「快照默认全量」此前只存在配置里、从未被读取；这里让 full 参数真正回退到该设置。
       const forceFull = args['full'] === true || (args['full'] === undefined && getSettings?.().fullSnapshot === true)
-      const snap = await captureSnapshot(tab.view.webContents, forceFull ? { mode: 'full' } : undefined)
+      const maxNodes = typeof args['maxNodes'] === 'number' ? args['maxNodes'] : undefined
+      const cursor = typeof args['cursor'] === 'number' ? args['cursor'] : undefined
+      const snap = await captureSnapshot(tab.view.webContents, {
+        ...(forceFull ? { mode: 'full' as const } : {}),
+        ...(maxNodes !== undefined ? { maxNodes } : {}),
+        ...(cursor !== undefined ? { cursor } : {})
+      })
       return { content: [text(snapshotText(snap))] }
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_click',
-    title: '点击',
-    description:
-      'Click an element by its snapshot ref (e.g. "e12"). Supports left click, right click (context menu), ' +
-      'double click. A fresh snapshot is returned afterwards so you can see the result and continue.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        ref: { type: 'string', description: 'Element ref from browser_snapshot, e.g. "e12"' },
-        button: { type: 'string', enum: ['left', 'right', 'middle'], description: 'Mouse button (default "left")' },
-        doubleClick: { type: 'boolean', description: 'Perform double click (default false)' },
-        snapshot: { type: 'boolean', description: 'Return an incremental snapshot after the action (default true)' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      },
-      required: ['ref']
-    },
     handler: async (args) => {
       approvals?.assertRunning()
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
@@ -307,24 +282,8 @@ export function buildTools(
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_drag',
-    title: '拖拽',
-    description:
-      'Drag an element by ref to another element (toRef) or by a relative pixel offset (dx, dy). ' +
-      'Useful for sliders, drag-and-drop sortable lists, and canvas boards.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        ref: { type: 'string', description: 'Source element ref to drag from' },
-        toRef: { type: 'string', description: 'Target element ref to drop onto' },
-        dx: { type: 'number', description: 'Relative horizontal offset in pixels (e.g. 150)' },
-        dy: { type: 'number', description: 'Relative vertical offset in pixels (e.g. -50)' },
-        snapshot: { type: 'boolean', description: 'Return an incremental snapshot after the action (default true)' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      },
-      required: ['ref']
-    },
     handler: async (args) => {
       approvals?.assertRunning()
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
@@ -333,30 +292,15 @@ export function buildTools(
         toRef: args['toRef'] as string | undefined,
         dx: args['dx'] as number | undefined,
         dy: args['dy'] as number | undefined,
-        wantSnapshot: want
+        wantSnapshot: want,
+        signal: args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
       })
       return { content: [text(withSnap(`已拖拽: ${r.dragged}`, r.snapshot, want))] }
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_type',
-    title: '输入文本',
-    description:
-      'Type text into a textbox/contenteditable by ref. Use submit:true to press Enter after typing ' +
-      '(e.g. submit a search box). Use clear:true to empty the field first.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        ref: { type: 'string', description: 'Element ref of the textbox' },
-        text: { type: 'string', description: 'Text to type' },
-        submit: { type: 'boolean', description: 'Press Enter after typing (default false)' },
-        clear: { type: 'boolean', description: 'Clear the field before typing (default false)' },
-        snapshot: { type: 'boolean', description: 'Return an incremental snapshot after the action (default true)' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      },
-      required: ['ref', 'text']
-    },
     handler: async (args) => {
       approvals?.assertRunning()
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
@@ -396,21 +340,8 @@ export function buildTools(
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_select_option',
-    title: '下拉选择',
-    description: 'Select an option in a <select> dropdown by ref, matching by value or visible label.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        ref: { type: 'string', description: 'Element ref of the combobox' },
-        value: { type: 'string', description: 'Option value to select' },
-        label: { type: 'string', description: 'Option visible label to select' },
-        snapshot: { type: 'boolean', description: 'Return an incremental snapshot after the action (default true)' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      },
-      required: ['ref']
-    },
     handler: async (args) => {
       approvals?.assertRunning()
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
@@ -424,22 +355,8 @@ export function buildTools(
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_scroll',
-    title: '滚动页面',
-    description:
-      'Scroll the page (window first, then the largest scrollable area). ' +
-      'Useful before re-snapshotting content that is outside the viewport.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        direction: { type: 'string', enum: ['up', 'down', 'left', 'right'], description: 'Scroll direction' },
-        amount: { type: 'number', description: 'Pixels to scroll (default 700, max 3000)' },
-        snapshot: { type: 'boolean', description: 'Return an incremental snapshot after the action (default true)' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      },
-      required: ['direction']
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const want = args['snapshot'] !== false
@@ -451,19 +368,8 @@ export function buildTools(
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_extract',
-    title: '提取文本',
-    description:
-      'Extract readable text from the page (or a specific element by ref) as plain text. ' +
-      'Better than snapshot when you only need content, not interactive elements.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        ref: { type: 'string', description: 'Extract text of this element only (default: whole page)' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      }
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const r = await doExtract(tab, args['ref'] as string | undefined)
@@ -472,93 +378,89 @@ export function buildTools(
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_wait',
-    title: '等待',
-    description:
-      'Wait for one of: text to appear (`text`), text to disappear (`textGone`), or a fixed delay (`time`, ms). ' +
-      'When both text and textGone are given, waits for whichever happens first. Polls every 250ms. ' +
-      'Use after submit/navigation to wait for results, or after an action to wait for a loading state to clear.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        text: { type: 'string', description: 'Wait until this text appears on the page' },
-        textGone: { type: 'string', description: 'Wait until this text disappears from the page' },
-        time: { type: 'number', description: 'Wait a fixed number of milliseconds (max 30000)' },
-        timeoutMs: { type: 'number', description: 'Timeout in ms (default 10000, max 30000)' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      }
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const wantText = typeof args['text'] === 'string' && args['text'] !== ''
       const wantGone = typeof args['textGone'] === 'string' && args['textGone'] !== ''
+      const wantSelector = typeof args['selector'] === 'string' && args['selector'] !== ''
+      const wantSelectorGone = typeof args['selectorGone'] === 'string' && args['selectorGone'] !== ''
+      const wantUrl = typeof args['urlContains'] === 'string' && args['urlContains'] !== ''
       const fixed = typeof args['time'] === 'number' ? Math.min(30000, Math.max(0, args['time'])) : null
-      if (!wantText && !wantGone && fixed === null) {
-        throw new ActionError('请提供 text、textGone 或 time 之一')
+      if (!wantText && !wantGone && !wantSelector && !wantSelectorGone && !wantUrl && fixed === null) {
+        throw new ActionError('请提供 text、textGone、selector、selectorGone、urlContains 或 time 之一')
       }
-      if (fixed !== null) {
+      if (fixed !== null && !wantText && !wantGone && !wantSelector && !wantSelectorGone && !wantUrl) {
         await new Promise((r) => setTimeout(r, fixed))
         return { content: [text(`已等待 ${fixed}ms`)] }
       }
       const timeoutMs = typeof args['timeoutMs'] === 'number' ? args['timeoutMs'] : 10000
-      const r = await doWaitForCondition(tab, {
-        text: wantText ? String(args['text']) : undefined,
-        textGone: wantGone ? String(args['textGone']) : undefined,
-        timeoutMs
+      const wants: string[] = []
+      if (wantText) wants.push(`"${args['text']}" 出现`)
+      if (wantGone) wants.push(`"${args['textGone']}" 消失`)
+      if (wantSelector) wants.push(`${args['selector']} 出现`)
+      if (wantSelectorGone) wants.push(`${args['selectorGone']} 消失`)
+      if (wantUrl) wants.push(`URL 含 "${args['urlContains']}"`)
+      if (wantText || wantGone) {
+        const r = await doWaitForCondition(tab, {
+          text: wantText ? String(args['text']) : undefined,
+          textGone: wantGone ? String(args['textGone']) : undefined,
+          timeoutMs,
+          signal: args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
+        })
+        if (r.found) {
+          const what = r.which === 'gone' ? `"${args['textGone']}" 已消失` : `"${args['text']}" 已出现`
+          return { content: [text(`${what}（等待 ${r.elapsedMs}ms）`)] }
+        }
+        if (!wantSelector && !wantSelectorGone && !wantUrl) {
+          return {
+            content: [text(`超时 ${r.elapsedMs}ms，未等到 ${wants.join(' 或 ')}。可调用 browser_snapshot 查看当前页面。`)],
+            isError: true
+          }
+        }
+      }
+      const dom = await doWaitForDom(tab, {
+        selector: wantSelector ? String(args['selector']) : undefined,
+        selectorGone: wantSelectorGone ? String(args['selectorGone']) : undefined,
+        urlContains: wantUrl ? String(args['urlContains']) : undefined,
+        timeoutMs,
+        signal: args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
       })
-      if (!r.found) {
-        const what = [wantText ? `"${args['text']}" 出现` : '', wantGone ? `"${args['textGone']}" 消失` : '']
-          .filter(Boolean)
-          .join(' 或 ')
+      if (!dom.found) {
         return {
-          content: [text(`超时 ${r.elapsedMs}ms，未等到 ${what}。可调用 browser_snapshot 查看当前页面。`)],
+          content: [text(`超时 ${dom.elapsedMs}ms，未等到 ${wants.join(' 或 ')}。可调用 browser_snapshot 查看当前页面。`)],
           isError: true
         }
       }
-      const what = r.which === 'gone' ? `"${args['textGone']}" 已消失` : `"${args['text']}" 已出现`
-      return { content: [text(`${what}（等待 ${r.elapsedMs}ms）`)] }
+      const label =
+        dom.which === 'selector'
+          ? `${args['selector']} 已出现`
+          : dom.which === 'selectorGone'
+            ? `${args['selectorGone']} 已消失`
+            : `URL 已包含 "${args['urlContains']}"`
+      return { content: [text(`${label}（等待 ${dom.elapsedMs}ms）`)] }
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_press_key',
-    title: '按键',
-    description:
-      'Press a key on the focused element: Enter, Escape, Tab, Backspace, Delete, ArrowUp/Down/Left/Right, ' +
-      'PageUp/PageDown, Home/End, F1-F12, or a single character.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        key: { type: 'string', description: 'Key name, e.g. "Enter", "Escape", "ArrowDown"' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      },
-      required: ['key']
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
-      const r = await doPressKey(tab, String(args['key'] ?? ''))
-      return { content: [text(`已按下: ${r.pressed}`)] }
+      const r = await doPressKey(tab, String(args['key'] ?? ''), Array.isArray(args['modifiers']) ? args['modifiers'].map(String) : [])
+      const suffix = r.modifiers.length ? ` + ${r.modifiers.join('+')}` : ''
+      return { content: [text(`已按下: ${r.pressed}${suffix}`)] }
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_screenshot',
-    title: '截图',
-    description:
-      'Take a PNG screenshot of the active tab, or of a specific element (pass ref — the view is ' +
-      'scrolled to it and the image is cropped to its bounding box). Returns the image inline ' +
-      '(for vision-capable models) and saves it under ~/.aabrowser/screenshots/.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        ref: { type: 'string', description: 'Element ref: screenshot only this element (default: whole viewport)' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      }
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
-      const image = args['ref'] ? await doElementScreenshot(tab, String(args['ref'])) : await doScreenshot(tab)
+      const signal = args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
+      const image = args['ref']
+        ? await doElementScreenshot(tab, String(args['ref']))
+        : await doScreenshot(tab, signal, { fullPage: args['fullPage'] === true })
       const { app } = await import('electron')
         const dir = process.env['AA_BROWSER_SCREENSHOT_DIR'] || `${app.getPath('home')}/.aabrowser/screenshots`
       try {
@@ -567,6 +469,7 @@ export function buildTools(
         fs.mkdirSync(dir, { recursive: true })
         const file = path.join(dir, `aa-${Date.now()}.png`)
         fs.writeFileSync(file, Buffer.from(image.data ?? '', 'base64'))
+        getEvidenceManager().record(file, 'screenshot')
         return {
           content: [
             image,
@@ -581,20 +484,8 @@ export function buildTools(
 
   /* ── v0.4.0 新增：交互补全 ── */
 
-  tools.push({
+  pushTool({
     name: 'browser_hover',
-    title: '悬停',
-    description:
-      'Hover the mouse over an element by ref (triggers hover menus, tooltips, dropdown reveals). ' +
-      'Uses the real input path so hover-dependent UI behaves as for a human.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        ref: { type: 'string', description: 'Element ref from browser_snapshot' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      },
-      required: ['ref']
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const r = await doHover(tab, String(args['ref']))
@@ -602,17 +493,8 @@ export function buildTools(
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_navigate_back',
-    title: '后退',
-    description: 'Go back one page in the active tab history. Returns a fresh incremental snapshot.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        snapshot: { type: 'boolean', description: 'Return a snapshot after navigation (default true)' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      }
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const want = args['snapshot'] !== false
@@ -621,17 +503,8 @@ export function buildTools(
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_navigate_forward',
-    title: '前进',
-    description: 'Go forward one page in the active tab history. Returns a fresh incremental snapshot.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        snapshot: { type: 'boolean', description: 'Return a snapshot after navigation (default true)' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      }
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const want = args['snapshot'] !== false
@@ -640,20 +513,8 @@ export function buildTools(
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_resize',
-    title: '调整视口',
-    description:
-      'Resize the browser window content area (200–5000). Useful for responsive-design checks; ' +
-      'then take browser_snapshot or browser_screenshot to see the adapted layout.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        width: { type: 'number', description: 'Content width in px (200–5000)' },
-        height: { type: 'number', description: 'Content height in px (200–5000)' }
-      },
-      required: ['width', 'height']
-    },
     handler: async (args) => {
       const w = Number(args['width'])
       const h = Number(args['height'])
@@ -664,20 +525,8 @@ export function buildTools(
 
   /* ── v0.4.0 新增：观察增强 ── */
 
-  tools.push({
+  pushTool({
     name: 'browser_get_selector',
-    title: '导出选择器',
-    description:
-      'Generate a CSS selector for a snapshot ref element (verified against the DOM). Use it to reuse ' +
-      'the element in scripts, tests, or querySelector-based follow-up work.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        ref: { type: 'string', description: 'Element ref from browser_snapshot' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      },
-      required: ['ref']
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const r = await doGetSelector(tab, String(args['ref']))
@@ -686,20 +535,8 @@ export function buildTools(
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_find',
-    title: '页面查找',
-    description:
-      'Find text on the page (native Ctrl+F behavior): highlights every match, scrolls to the first one ' +
-      'and reports the match count. Keep the highlight for the user; call with empty text or browser_scroll to move on.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        text: { type: 'string', description: 'Text to find' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      },
-      required: ['text']
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const r = await doFind(tab, String(args['text'] ?? ''))
@@ -711,31 +548,24 @@ export function buildTools(
 
   /* ── v0.4.0 新增：状态与数据 ── */
 
-  tools.push({
+  pushTool({
     name: 'browser_cookies',
-    title: 'Cookie 管理',
-    description:
-      'Get / set / clear cookies of the browser session (covers all sites the session has visited). ' +
-      'Essential for login-state testing. set requires url + name + value.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        action: { type: 'string', enum: ['get', 'set', 'clear'], description: 'Operation' },
-        url: { type: 'string', description: '(get/set) Cookie belongs to this URL' },
-        name: { type: 'string', description: '(get: filter by name; set: cookie name; clear: only clear this name)' },
-        value: { type: 'string', description: '(set) Cookie value' },
-        domain: { type: 'string', description: '(set/clear filter) Cookie domain' },
-        secure: { type: 'boolean', description: '(set) Secure flag (default: true for https URLs)' },
-        httpOnly: { type: 'boolean', description: '(set) HttpOnly flag' },
-        expiresSeconds: { type: 'number', description: '(set) Expires in N seconds from now (omit = session cookie)' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      },
-      required: ['action']
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      const action = String(args['action'])
+      if (action === 'set' || action === 'clear') {
+        await opGate(
+          {
+            site: siteOf(tab),
+            tabTitle: tab.title,
+            action: action === 'set' ? '写入 Cookie（会改变登录态）' : '清除 Cookie（可能导致登出）',
+            detail: `域名: ${String(args['domain'] ?? args['url'] ?? '全部')} · 名称: ${String(args['name'] ?? '全部')}`
+          },
+          args['__aaSignal']
+        )
+      }
       const r = await doCookies(tab, {
-        action: String(args['action']) as 'get' | 'set' | 'clear',
+        action: action as 'get' | 'set' | 'clear',
         url: args['url'] as string | undefined,
         name: args['name'] as string | undefined,
         value: args['value'] as string | undefined,
@@ -748,25 +578,24 @@ export function buildTools(
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_storage',
-    title: '页面存储',
-    description: 'Read / write / remove / clear localStorage or sessionStorage of the active page origin.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        action: { type: 'string', enum: ['get', 'set', 'remove', 'clear'], description: 'Operation (get without key = list all)' },
-        kind: { type: 'string', enum: ['local', 'session'], description: 'localStorage (default) or sessionStorage' },
-        key: { type: 'string', description: 'Storage key (get without key = list all entries)' },
-        value: { type: 'string', description: '(set) Value to store' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      },
-      required: ['action']
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      const action = String(args['action'])
+      if (action === 'set' || action === 'remove' || action === 'clear') {
+        await opGate(
+          {
+            site: siteOf(tab),
+            tabTitle: tab.title,
+            action: action === 'set' ? '写入页面存储' : action === 'remove' ? '删除页面存储' : '清空页面存储',
+            detail: `${(args['kind'] as string) === 'session' ? 'sessionStorage' : 'localStorage'} · 键: ${String(args['key'] ?? '全部')}`
+          },
+          args['__aaSignal']
+        )
+      }
       const r = await doStorage(tab, {
-        action: String(args['action']) as 'get' | 'set' | 'remove' | 'clear',
+        action: action as 'get' | 'set' | 'remove' | 'clear',
         kind: (args['kind'] as 'local' | 'session') ?? 'local',
         key: args['key'] as string | undefined,
         value: args['value'] as string | undefined
@@ -775,42 +604,36 @@ export function buildTools(
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_downloads',
-    title: '下载列表',
-    description:
-      'List files captured by the browser (downloads are saved silently under ~/.aabrowser/downloads/, ' +
-      'no save dialog). Shows filename, source URL, size and progress/state.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        limit: { type: 'number', description: 'Max entries (default 20, newest last)' }
-      }
-    },
     handler: async (args) => {
+      const action = String(args['action'] ?? 'list')
+      if (action === 'cancel' || action === 'retry') {
+        const id = String(args['id'] ?? '')
+        if (!id) throw new ActionError('cancel / retry 需要提供 id（用 action=list 查看）')
+        if (action === 'cancel') {
+          const ok = downloads.cancel(id)
+          if (!ok) throw new ActionError(`下载 ${id} 不在进行中，无法取消`)
+          return { content: [text(`已取消下载 ${id}；文件不会继续使用。`)] }
+        }
+        const r = downloads.retry(id)
+        if (!r.ok) throw new ActionError(r.reason ?? '重试失败')
+        return { content: [text(`已重新发起下载（来源记录 ${id}）。用 action=list 查看新记录。`)] }
+      }
+      if (action !== 'list') throw new ActionError(`未知 action: ${action}（支持 list/cancel/retry）`)
       const limit = Math.min(100, Math.max(1, (args['limit'] as number) ?? 20))
       const items = downloads.list(limit)
       if (!items.length) return { content: [text('（暂无下载记录）')] }
       const lines = items.map(
         (d) =>
-          `[${d.id}] ${d.filename} — ${d.state} ${(d.receivedBytes / 1024).toFixed(1)}/${(d.totalBytes / 1024).toFixed(1)}KB\n    来源: ${d.url.slice(0, 120)}\n    保存: ${d.savePath}`
+          `[${d.id}] ${d.filename} — ${d.state} ${(d.receivedBytes / 1024).toFixed(1)}/${(d.totalBytes / 1024).toFixed(1)}KB${d.retriedFrom ? `（重试自 ${d.retriedFrom}）` : ''}\n    来源: ${d.url.slice(0, 120)}\n    保存: ${d.savePath}`
       )
       return { content: [text(`共 ${items.length} 条下载记录：\n${lines.join('\n')}`)] }
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_pdf',
-    title: '存为 PDF',
-    description: 'Render the active page to a PDF (A4, print background on) and save it. Returns the file path.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'Output file path (default ~/.aabrowser/downloads/aa-page-<ts>.pdf)' },
-        landscape: { type: 'boolean', description: 'Landscape orientation (default false)' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      }
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const r = await doPdf(tab, args['path'] as string | undefined, !!args['landscape'])
@@ -818,42 +641,28 @@ export function buildTools(
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_upload_file',
-    title: '上传文件',
-    description:
-      'Upload local file(s) into a <input type=file> element by ref. Accepts absolute local paths; ' +
-      'total size capped at 20MB. Fire-and-forget is enough — the change event fires for the page.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        ref: { type: 'string', description: 'Element ref of the file input' },
-        paths: { type: 'array', items: { type: 'string' }, description: 'Absolute local file path(s)' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      },
-      required: ['ref', 'paths']
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const paths = (args['paths'] as unknown[]).map(String)
       if (!paths.length) throw new ActionError('paths 不能为空')
+      await opGate(
+        {
+          site: siteOf(tab),
+          tabTitle: tab.title,
+          action: '把本机文件上传到网页',
+          detail: paths.map((p) => p.slice(-90)).join('、')
+        },
+        args['__aaSignal']
+      )
       const r = await doUploadFile(tab, String(args['ref']), paths)
       return { content: [text(r.content)] }
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_console',
-    title: '控制台日志',
-    description: 'Read recent console messages of the active tab (useful for debugging pages).',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        level: { type: 'string', enum: ['all', 'info', 'warning', 'error'], description: 'Filter level (default all)' },
-        limit: { type: 'number', description: 'Max entries (default 50)' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      }
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const r = doConsoleLogs(tab, {
@@ -868,20 +677,8 @@ export function buildTools(
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_performance',
-    title: '页面性能摘要',
-    description:
-      'Summarize performance metrics of the active tab: navigation timing (TTFB / DOMContentLoaded / load), ' +
-      'First Contentful Paint, resource count and transfer size, slowest resources, JS heap usage and DOM size. ' +
-      'Read-only diagnostics: use it to explain a slow page without opening DevTools. Requires the page to be loaded.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        slowest: { type: 'number', description: 'How many slowest resources to list (default 5, max 20)' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      }
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const wc = tab.view.webContents
@@ -916,25 +713,8 @@ export function buildTools(
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_network_requests',
-    title: '网络请求列表（抓包）',
-    description:
-      'List captured network requests of the active tab (HTTP-level packet capture): id, method, ' +
-      'status, type, size, duration, URL. Capture starts automatically on first use. Use browser_network_detail ' +
-      'with a request id to inspect headers and response body.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        urlContains: { type: 'string', description: 'Only requests whose URL contains this (case-insensitive)' },
-        method: { type: 'string', description: 'Filter by HTTP method, e.g. GET/POST' },
-        statusMin: { type: 'number', description: 'Minimum HTTP status (e.g. 400 for errors)' },
-        statusMax: { type: 'number', description: 'Maximum HTTP status' },
-        resourceType: { type: 'string', description: 'Filter by type: Document/Script/XHR/Fetch/Image/Stylesheet/…' },
-        limit: { type: 'number', description: 'Max entries (default 50, newest last)' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      }
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       await tab.net.ensure()
@@ -960,21 +740,8 @@ export function buildTools(
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_network_detail',
-    title: '网络请求详情',
-    description:
-      'Inspect one captured network request: headers, status, size, duration, and (with body:true) the response body text. Authentication headers and credential-like URL parameters are redacted by default; pass includeSensitive:true only when needed. When high-risk approvals are enabled, sensitive disclosure requires user approval.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        requestId: { type: 'string', description: 'Request id from browser_network_requests, e.g. "1234.5"' },
-        body: { type: 'boolean', description: 'Include the response body (default false)' },
-        includeSensitive: { type: 'boolean', description: 'Include authentication headers and credential-like URL parameters (default false; use only when needed)' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      },
-      required: ['requestId']
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const includeSensitive = args['includeSensitive'] === true
@@ -1008,19 +775,8 @@ export function buildTools(
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_har',
-    title: '导出 HAR',
-    description:
-      'Export captured network traffic as HAR 1.2 (no response bodies). Authentication headers and credential-like URL parameters are redacted by default; pass includeSensitive:true only when needed. When high-risk approvals are enabled, sensitive export requires user approval.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: 'Output file path (default ~/.aabrowser/har/aa-<timestamp>.har)' },
-        includeSensitive: { type: 'boolean', description: 'Include authentication headers and credential-like URL parameters (default false; handle the exported file as sensitive)' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      }
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const includeSensitive = args['includeSensitive'] === true
@@ -1042,34 +798,15 @@ export function buildTools(
         path.join(os.homedir(), '.aabrowser', 'har', `aa-${Date.now()}.har`)
       fs.mkdirSync(path.dirname(file), { recursive: true })
         fs.writeFileSync(file, JSON.stringify(tab.net.toHar(app.getVersion(), includeSensitive), null, 2), 'utf-8')
+        getEvidenceManager().record(file, 'har')
       return { content: [text(`HAR 已导出: ${file}\n共 ${fs.statSync(file).size} 字节`)] }
     }
   })
 
   /* ── v0.6.0 新增：请求拦截与 Mock ── */
 
-  tools.push({
+  pushTool({
     name: 'browser_mock_requests',
-    title: '请求拦截 Mock',
-    description:
-      'Intercept and mock HTTP requests of the active tab. Add or replace a rule that matches a URL ' +
-      'substring (and optional method); matched requests are answered with a fake status/headers/body ' +
-      'instead of reaching the network. Use to simulate API responses, error states, or stub third-party ' +
-      'calls during testing. Pass action:"continue" to just observe (log) a matching request without ' +
-      'answering it. Returns the rule id and current rules.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        urlContains: { type: 'string', description: 'Substring of request URL to match (case-insensitive), e.g. "/api/v1/quote"' },
-        method: { type: 'string', description: 'Only mock this HTTP method (e.g. GET/POST). Omit to match any.' },
-        status: { type: 'number', description: 'Fake response status code (default 200)' },
-        headers: { type: 'object', description: 'Fake response headers (optional)' },
-        body: { type: 'string', description: 'Fake response body text (default empty)' },
-        action: { type: 'string', enum: ['respond', 'continue'], description: 'respond=answer with mock (default); continue=just pass through' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      },
-      required: ['urlContains']
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const id = tab.net.setMock({
@@ -1089,16 +826,8 @@ export function buildTools(
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_list_mocks',
-    title: '列出 Mock 规则',
-    description: 'List all active request-mock rules of the active tab (id, matcher, status, hits).',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      }
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const list = tab.net.listMocks()
@@ -1110,19 +839,8 @@ export function buildTools(
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_clear_mocks',
-    title: '清空 Mock 规则',
-    description:
-      'Remove all (or one, by rule id) request-mock rules of the active tab and stop intercepting. ' +
-      'Pass id to remove a single rule. Returns how many were removed.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: 'string', description: 'Rule id to remove (omit to clear all)' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      }
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const id = args['id'] as string | undefined
@@ -1138,23 +856,8 @@ export function buildTools(
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_tabs',
-    title: '标签管理',
-    description:
-      'Manage tabs: "list" shows all tabs with ids (isolated ones are marked); "new" opens a URL in a new tab; ' +
-      '"select" makes a tab active; "close" closes a tab. Tabs share the default session (cookies/logins) ' +
-      'unless created with isolated:true, which uses a throwaway partition cleared on close.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        action: { type: 'string', enum: ['list', 'new', 'select', 'close'], description: 'Tab operation' },
-        url: { type: 'string', description: '(action=new) URL to open' },
-        isolated: { type: 'boolean', description: '(action=new) Use a throwaway session partition instead of the shared one (default: settings)' },
-        tabId: { type: 'string', description: '(action=select/close) target tab id' }
-      },
-      required: ['action']
-    },
     handler: async (args) => {
       approvals?.assertRunning()
       const action = String(args['action'] ?? 'list')
@@ -1191,37 +894,8 @@ export function buildTools(
     }
   })
 
-tools.push({
+pushTool({
     name: 'browser_fill_form',
-    title: '批量填写表单',
-    description:
-      'Fill multiple form fields in one call instead of one browser_type per field. Each item takes a ref plus ' +
-      'either `value` (text input / select option value), `label` (select by visible label), or `checked` ' +
-      '(checkbox / radio). Fields are filled in order and the resulting snapshot is returned once at the end, ' +
-      'which makes multi-field forms far cheaper than repeated single-field calls.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        fields: {
-          type: 'array',
-          description: 'Fields to fill, in order',
-          items: {
-            type: 'object',
-            properties: {
-              ref: { type: 'string', description: 'Element ref' },
-              value: { type: 'string', description: 'Text to type, or option value for a <select>' },
-              label: { type: 'string', description: 'Option visible label for a <select>' },
-              checked: { type: 'boolean', description: 'Desired checked state for checkbox/radio' },
-              submit: { type: 'boolean', description: 'Press Enter after typing this field (default false)' }
-            },
-            required: ['ref']
-          }
-        },
-        snapshot: { type: 'boolean', description: 'Return an incremental snapshot after all fields (default true)' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      },
-      required: ['fields']
-    },
     handler: async (args) => {
       approvals?.assertRunning()
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
@@ -1276,20 +950,8 @@ tools.push({
     }
   })
 
-  tools.push({
+  pushTool({
     name: 'browser_dialogs',
-    title: '页面对话框记录',
-    description:
-      'Read (and optionally clear) dialogs the page tried to open — alert / confirm / prompt. ' +
-      'Dialogs are intercepted instead of blocking: confirm always returns false, prompt returns null. ' +
-      'Use this to detect "are you sure?" style interruptions without stalling the automation.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        clear: { type: 'boolean', description: 'Clear the recorded list after reading (default false)' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      }
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const list = await readDialogs(tab.view.webContents)
@@ -1297,38 +959,64 @@ tools.push({
       if (!list.length) return { content: [text('（页面未弹出任何对话框）')] }
       const lines = list.map((d, i) => {
         const def = d.type === 'prompt' && d.defaultValue != null ? ` [默认值: ${d.defaultValue}]` : ''
-        return `${i + 1}. [${d.type}] ${d.message}${def}`
+        const answer = 'accepted' in d ? ` → 返回 ${String(d.accepted)}` : 'answered' in d ? ` → 返回 ${d.answered === null ? 'null' : JSON.stringify(d.answered)}` : ''
+        return `${i + 1}. [${d.type}] ${d.message}${def}${answer}`
       })
       return {
         content: [
           text(
-            `共 ${list.length} 条对话框记录（已拦截，未阻塞页面；confirm→false，prompt→null）：\n${lines.join('\n')}`
+            `共 ${list.length} 条对话框记录（已拦截，未阻塞页面）：\n${lines.join('\n')}`
           )
         ]
       }
     }
   })
 
-  tools.push({
+  pushTool({
+    name: 'browser_dialog_respond',
+    handler: async (args) => {
+      const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      const wc = tab.view.webContents
+      if (args['reset'] === true) {
+        await clearDialogPolicy(wc)
+        return { content: [text('已清除对话框策略：confirm→false，prompt→null。')] }
+      }
+      const policy: { confirm?: boolean; prompt?: string; once?: boolean } = { once: args['once'] !== false }
+      if (typeof args['confirm'] === 'boolean') policy.confirm = args['confirm']
+      if (typeof args['prompt'] === 'string') policy.prompt = args['prompt']
+      if (policy.confirm === undefined && policy.prompt === undefined) {
+        throw new ActionError('至少提供 confirm、prompt 或 reset:true 之一')
+      }
+      const ok = await setDialogPolicy(wc, policy)
+      const ready = ok || (await dialogGuardReady(wc))
+      const parts: string[] = []
+      if (policy.confirm !== undefined) parts.push(`confirm→${policy.confirm}`)
+      if (policy.prompt !== undefined) parts.push(`prompt→${JSON.stringify(policy.prompt)}`)
+      const scope = policy.once ? '下一次对话框' : '之后每次对话框'
+      if (!ready) {
+        return {
+          content: [text(`已记录策略（${parts.join('，')}，作用于${scope}），但当前页面未安装对话框守卫；若点击后仍卡住，请先重新打开该页面再试。`)]
+        }
+      }
+      return { content: [text(`已设置对话框策略：${parts.join('，')}（作用于${scope}）。现在可以点击会触发该对话框的按钮，再用 browser_dialogs 核对结果。`)] }
+    }
+  })
+
+  pushTool({
     name: 'browser_evaluate',
-    title: '执行 JavaScript',
-    description:
-      'Evaluate a JavaScript expression in the page (or on a specific element by ref) and return the result ' +
-      'as JSON. Runs in the page main world. Use for values not exposed by snapshot/extract, e.g. reading a ' +
-      'computed style or a JS variable. The expression must be a single expression or IIFE.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        expression: { type: 'string', description: 'JavaScript expression to evaluate, e.g. "document.title" or "(() => {...})()"' },
-        ref: { type: 'string', description: 'Element ref to bind as the `element` variable (optional)' },
-        tabId: { type: 'string', description: 'Tab id (default: active tab)' }
-      },
-      required: ['expression']
-    },
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const expression = String(args['expression'] ?? '')
       if (!expression.trim()) throw new ActionError('expression 不能为空')
+      await opGate(
+        {
+          site: siteOf(tab),
+          tabTitle: tab.title,
+          action: '在网页中执行 JavaScript',
+          detail: expression.replace(/\s+/g, ' ').slice(0, 120)
+        },
+        args['__aaSignal']
+      )
       const ref = args['ref'] ? String(args['ref']) : ''
       // expression 是 browser_evaluate 的语义本身（在页面内求值的代码），刻意不转义；
       // 数据部分（ref 与错误文案）一律走白名单字面量，避免 ref 破坏注入脚本的结构。
@@ -1338,7 +1026,10 @@ tools.push({
         : `(() => { return (${expression}) })()`
       let value: unknown
       try {
-        value = await tab.view.webContents.executeJavaScript(source, false)
+        value = await raceAbort(
+          tab.view.webContents.executeJavaScript(source, false),
+          args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
+        )
       } catch (err) {
         throw new ActionError(`执行失败：${(err as Error).message}`)
       }
@@ -1355,6 +1046,237 @@ tools.push({
       const MAX = 20000
       if (rendered.length > MAX) rendered = rendered.slice(0, MAX) + '\n…（结果过长已截断）'
       return { content: [text(rendered)] }
+    }
+  })
+
+  pushTool({
+    name: 'browser_assert',
+    handler: async (args) => {
+      const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      const raw = Array.isArray(args['checks']) ? (args['checks'] as Record<string, unknown>[]) : []
+      if (!raw.length) throw new ActionError('checks 不能为空')
+      if (raw.length > 20) throw new ActionError('一次最多 20 条断言，请分批校验')
+      const checks: AssertCheck[] = raw.map((item) => ({
+        kind: String(item['kind'] ?? '') as AssertCheck['kind'],
+        target: item['target'] === undefined ? undefined : String(item['target']),
+        match: item['match'] === undefined ? undefined : (String(item['match']) as AssertCheck['match']),
+        expected: item['expected'] as AssertCheck['expected'],
+        message: item['message'] === undefined ? undefined : String(item['message']),
+        attribute: item['attribute'] === undefined ? undefined : String(item['attribute']),
+        level: item['level'] === undefined ? undefined : (String(item['level']) as AssertCheck['level']),
+        since: typeof item['since'] === 'number' ? item['since'] : undefined,
+        urlContains: item['urlContains'] === undefined ? undefined : String(item['urlContains']),
+        method: item['method'] === undefined ? undefined : String(item['method']),
+        status: typeof item['status'] === 'number' ? item['status'] : undefined,
+        statusMin: typeof item['statusMin'] === 'number' ? item['statusMin'] : undefined,
+        statusMax: typeof item['statusMax'] === 'number' ? item['statusMax'] : undefined
+      }))
+      const outcome = await runAssertions(tab, checks)
+      const body = formatAssertions(outcome)
+      return { content: [text(body)], ...(outcome.failed > 0 ? { isError: true } : {}) }
+    }
+  })
+
+  pushTool({
+    name: 'browser_frame',
+    handler: async (args) => {
+      const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      const wc = tab.view.webContents
+      const action = String(args['action'] ?? '')
+      if (action === 'list') {
+        const frames = listFrames(wc)
+        if (!frames.length) return { content: [text('（当前页面没有可访问的 frame）')] }
+        const lines = frames.map((f) => {
+          const indent = '  '.repeat(f.depth)
+          const badge = f.depth === 0 ? '[主文档]' : f.crossOrigin ? '[跨域]' : '[同源]'
+          const name = f.name ? ` name="${f.name}"` : ''
+          return `${indent}[${f.id}] ${badge}${name} ${f.url || '(about:blank)'}`
+        })
+        return { content: [text(`共 ${frames.length} 个 frame：\n${lines.join('\n')}`)] }
+      }
+      const frameId = String(args['frameId'] ?? '')
+      if (!frameId) throw new ActionError('缺少 frameId；先调用 action=list 查看可用 frame')
+      try {
+        if (action === 'text') {
+          const r = await frameText(wc, frameId, typeof args['maxChars'] === 'number' ? args['maxChars'] : 4000)
+          if (!r.text) return { content: [text(`[${frameId}] 内没有可见文本（${r.url}）`)] }
+          return { content: [text(`[${frameId}] ${r.url}\n${r.text}${r.truncated ? '\n…（文本已截断）' : ''}`)] }
+        }
+        if (action === 'elements') {
+          const items = await frameElements(wc, frameId, typeof args['limit'] === 'number' ? args['limit'] : 80)
+          if (!items.length) return { content: [text(`[${frameId}] 内没有可见的可交互元素`) ] }
+          const lines = items.map((item, i) => `${i + 1}. ${item.description}\n   选择器: ${item.selector}`)
+          return { content: [text(`[${frameId}] 共 ${items.length} 个可交互元素：\n${lines.join('\n')}`)] }
+        }
+        if (action === 'evaluate') {
+          const expression = String(args['expression'] ?? '')
+          if (!expression.trim()) throw new ActionError('expression 不能为空')
+          const value = await raceAbort(
+            frameEvaluate(wc, frameId, expression),
+            args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
+          )
+          let rendered: string
+          try {
+            rendered = JSON.stringify(value, null, 2)
+          } catch {
+            rendered = String(value)
+          }
+          if (rendered === undefined) rendered = String(value)
+          const MAX = 20000
+          if (rendered.length > MAX) rendered = rendered.slice(0, MAX) + '\n…（结果过长已截断）'
+          return { content: [text(rendered)] }
+        }
+        const selector = String(args['selector'] ?? '')
+        if (!selector) throw new ActionError(`${action} 需要提供 selector`)
+        if (action === 'click') {
+          const r = await frameClick(wc, frameId, selector, typeof args['index'] === 'number' ? args['index'] : 0)
+          return { content: [text(`已在 [${frameId}] 内点击: ${r.clicked}`)] }
+        }
+        if (action === 'type') {
+          const r = await frameType(wc, frameId, selector, String(args['text'] ?? ''))
+          return { content: [text(`已在 [${frameId}] 内输入: ${r.typed} = ${JSON.stringify(String(args['text'] ?? ''))}`)] }
+        }
+        if (action === 'select') {
+          const r = await frameSelect(wc, frameId, selector, {
+            value: args['value'] === undefined ? undefined : String(args['value']),
+            label: args['label'] === undefined ? undefined : String(args['label'])
+          })
+          return { content: [text(`已在 [${frameId}] 内选择: ${r.selected}`)] }
+        }
+        throw new ActionError(`未知 action: ${action}`)
+      } catch (error) {
+        throw error instanceof ActionError ? error : new ActionError((error as Error).message)
+      }
+    }
+  })
+
+  /* ── v0.7.0 新增：视觉评审闭环 ── */
+
+  pushTool({
+    name: 'browser_visual_diff',
+    handler: async (args) => {
+      const action = String(args['action'] ?? '')
+      if (action === 'list') {
+        const list = visualList()
+        if (!list.length) return { content: [text('（暂无视觉基线；先用 action=save 保存一条）')] }
+        const lines = list.map(
+          (b) => `[${b.name}] ${b.width}×${b.height}${b.fullPage ? ' 整页' : ''} · ${b.bytes}B · ${new Date(b.createdAt).toISOString()}\n    ${b.url}\n    ${b.file}`
+        )
+        return { content: [text(`共 ${list.length} 条视觉基线：\n${lines.join('\n')}`)] }
+      }
+      const name = String(args['name'] ?? '')
+      if (!name) throw new ActionError('save / compare / delete 需要提供 name')
+      if (action === 'delete') {
+        const removed = visualDelete(name)
+        if (!removed) throw new ActionError(`找不到基线 ${name}（用 action=list 查看）`)
+        return { content: [text(`已删除视觉基线 ${name}`)] }
+      }
+      const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      const fullPage = args['fullPage'] === true
+      if (action === 'save') {
+        const meta = await visualSave(tab, name, { fullPage })
+        return { content: [text(`已保存视觉基线 [${name}]：${meta.width}×${meta.height}${fullPage ? '（整页）' : ''}\n页面: ${meta.url}\n文件: ${meta.file}\n\n之后用 action=compare 对比当前页面。`)] }
+      }
+      if (action === 'compare') {
+        const r = await visualCompare(tab, name, {
+          fullPage,
+          pixelThreshold: typeof args['pixelThreshold'] === 'number' ? args['pixelThreshold'] : undefined,
+          maxDiffPercent: typeof args['maxDiffPercent'] === 'number' ? args['maxDiffPercent'] : undefined,
+          writeDiff: args['writeDiff'] !== false
+        })
+        return { content: [text(formatDiff(r))], ...(r.ok ? {} : { isError: true }) }
+      }
+      throw new ActionError(`未知 action: ${action}（支持 save/compare/list/delete）`)
+    }
+  })
+
+  pushTool({
+    name: 'browser_contrast_audit',
+    handler: async (args) => {
+      const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      const level = (args['level'] === 'AAA' ? 'AAA' : 'AA') as 'AA' | 'AAA'
+      const report = await auditContrast(tab, {
+        level,
+        maxResults: typeof args['maxResults'] === 'number' ? args['maxResults'] : undefined,
+        signal: args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
+      })
+      const ok = report.violations.length === 0
+      const failOnViolation = args['failOnViolation'] !== false
+      return { content: [text(formatContrast(report, ok))], ...(failOnViolation && !ok ? { isError: true } : {}) }
+    }
+  })
+
+  pushTool({
+    name: 'browser_viewport_matrix',
+    handler: async (args) => {
+      const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      let specs: ViewportSpec[]
+      if (Array.isArray(args['viewports']) && (args['viewports'] as unknown[]).length) {
+        specs = (args['viewports'] as Record<string, unknown>[]).map((v) => ({
+          name: v['name'] === undefined ? undefined : String(v['name']),
+          width: Number(v['width']),
+          height: Number(v['height']),
+          deviceScaleFactor: typeof v['deviceScaleFactor'] === 'number' ? v['deviceScaleFactor'] : undefined,
+          mobile: v['mobile'] === true
+        }))
+      } else {
+        const preset = String(args['preset'] ?? 'all')
+        specs = VIEWPORT_PRESETS[preset] ?? VIEWPORT_PRESETS['all'] ?? []
+      }
+      const results = await captureViewportMatrix(tab, specs, {
+        signal: args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
+      })
+      const content: import('@shared/types').ToolContent[] = [text(formatViewportMatrix(results))]
+      if (args['includeImages'] === true) {
+        try {
+          const fs = await import('node:fs')
+          for (const r of results.slice(0, 4)) {
+            content.push({ type: 'image', data: fs.readFileSync(r.file).toString('base64'), mimeType: 'image/png' })
+          }
+        } catch {
+          /* 图片是可选增强；文件已保存，文本里仍给出路径 */
+        }
+      }
+      return { content }
+    }
+  })
+
+  pushTool({
+    name: 'browser_evidence',
+    handler: async (args) => {
+      const ev = getEvidenceManager()
+      const action = String(args['action'] ?? 'list')
+      if (action === 'sweep') {
+        const r = ev.sweep()
+        return {
+          content: [
+            text(
+              `证据清理完成：删除 ${r.removed.length} 个文件，释放 ${(r.bytesFreed / 1024).toFixed(1)}KB，保留 ${r.kept} 条登记。\n` +
+                (r.removed.length ? r.removed.join('\n') : '（无需清理）')
+            )
+          ]
+        }
+      }
+      if (action === 'hash' || action === 'forget') {
+        const file = String(args['file'] ?? '')
+        if (!file) throw new ActionError(`${action} 需要提供 file`)
+        if (action === 'hash') {
+          const hash = ev.hash(file)
+          return { content: [text(`sha256: ${hash}\n文件: ${file}`)] }
+        }
+        const removed = ev.forget(file)
+        if (!removed) throw new ActionError(`登记表中没有该文件: ${file}`)
+        return { content: [text(`已从证据登记表移除（文件本身未删除）: ${file}`)] }
+      }
+      if (action !== 'list') throw new ActionError(`未知 action: ${action}（支持 list/sweep/hash/forget）`)
+      const limit = Math.min(500, Math.max(1, (args['limit'] as number) ?? 50))
+      const entries = ev.list(limit)
+      if (!entries.length) return { content: [text('（暂无证据登记；生成截图 / HAR / PDF / 基线后会自动登记）')] }
+      const lines = entries.map(
+        (e) =>
+          `[${e.kind}] ${e.bytes}B · ${e.hash.slice(0, 16)}… · ${e.ttlMs ? `TTL ${Math.round(e.ttlMs / 86400000)}d` : '保留'}\n    ${e.file}`
+      )
+      return { content: [text(`共 ${entries.length} 条证据登记：\n${lines.join('\n')}`)] }
     }
   })
 

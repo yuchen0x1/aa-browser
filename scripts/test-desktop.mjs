@@ -22,6 +22,7 @@ if (!process.versions.electron) {
     AA_BROWSER_SETTINGS_FILE: path.join(runDir, 'settings.json'),
     AA_BROWSER_SESSION_FILE: path.join(runDir, 'session.json'),
     AA_BROWSER_DOWNLOAD_DIR: path.join(runDir, 'downloads'),
+    AA_BROWSER_EVIDENCE_FILE: path.join(runDir, 'evidence-registry.json'),
     AA_DESKTOP_TEST_DIR: runDir
   }
   delete env.ELECTRON_RUN_AS_NODE
@@ -158,6 +159,8 @@ if (!process.versions.electron) {
     await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject) })
     ws.on('message', (raw) => {
       const response = JSON.parse(String(raw))
+      // 进度事件与响应共用 WS 通道，不能当成工具结果（否则会把在途调用误判为失败）
+      if (response.event === 'progress') return
       const item = pending.get(response.id)
       if (!item) return
       pending.delete(response.id)
@@ -175,6 +178,91 @@ if (!process.versions.electron) {
     assert.ok(initial.tabs.some((tab) => tab.url === base + '/restored-b'))
     assert.equal(initial.tabs.find((tab) => tab.active)?.url, base + '/restored-b')
     pass('startup restores the previous session tabs and the saved active tab')
+    const initialSettings = await ui('window.aa.settingsGet()')
+    assert.equal(initialSettings.settings.theme, 'light')
+    assert.equal(await ui('document.documentElement.dataset.theme'), 'light')
+    pass('new desktop profiles default to the light browser shell theme')
+
+    // Agent activity HUD: a live MCP call expands the chrome view over the window,
+    // interrupt pauses/aborts the call, and explicit resume releases the overlay.
+    // 用“等一个永远不出现的文案”而不是固定 sleep，才能证明中断真的取消了长操作。
+    const interruptStart = Date.now()
+    const activityProbe = tool('browser_wait', { text: '中断测试_永远不会出现的文案', timeoutMs: 8000 }).then(
+      (value) => ({ ok: true, value }),
+      (error) => ({ ok: false, error })
+    )
+    await until(async () => (await state()).agentActivity?.active === true, 'agent activity HUD active', 5000)
+    const browserWindow = BaseWindow.getAllWindows()[0]
+    const activityShellView = browserWindow.contentView.children.find((view) => view.webContents === chrome)
+    assert.ok(activityShellView)
+    assert.equal(activityShellView.getBounds().height, browserWindow.getContentBounds().height)
+    await ui('window.aa.interruptAgent()')
+    await until(async () => (await state()).agentActivity?.paused === true, 'agent activity paused', 5000)
+    assert.equal((await state()).agentActivity?.active, false)
+    assert.equal(activityShellView.getBounds().height, browserWindow.getContentBounds().height)
+    const probeOutcome = await Promise.race([
+      activityProbe,
+      new Promise((resolve) => setTimeout(() => resolve({ ok: true, timedOut: true }), 4000))
+    ])
+    assert.equal(probeOutcome.timedOut, undefined, 'interrupted wait must not keep running')
+    assert.equal(probeOutcome.ok, false, `interrupted wait should fail, got ${JSON.stringify(probeOutcome)}`)
+    assert.match(String(probeOutcome.error?.message ?? ''), /中断/, `unexpected error: ${probeOutcome.error?.message}`)
+    const interruptElapsed = Date.now() - interruptStart
+    assert.ok(interruptElapsed < 6000, `interrupt took too long: ${interruptElapsed}ms`)
+    await ui('window.aa.resumeAgent()')
+    await until(async () => (await state()).agentActivity?.paused === false, 'agent activity resumed', 5000)
+    pass('AI activity HUD tracks tool calls, and interrupt cancels a running wait instead of letting it finish')
+
+    // 多客户端并发：HUD 必须列出所有调用（而非只显示最近一次），且可以只停止其中一个。
+    const ws2 = new WebSocket(`ws://127.0.0.1:${connection.port}/?token=${connection.token}`)
+    await new Promise((resolve, reject) => { ws2.once('open', resolve); ws2.once('error', reject) })
+    let callId2 = 0
+    const pending2 = new Map()
+    const progress2 = []
+    ws2.on('message', (raw) => {
+      const msg = JSON.parse(String(raw))
+      if (msg.event === 'progress') { progress2.push(msg); return }
+      const item = pending2.get(msg.id)
+      if (!item) return
+      pending2.delete(msg.id)
+      clearTimeout(item.timer)
+      if (msg.ok) item.resolve(msg.result)
+      else item.reject(new Error(msg.error))
+    })
+    const call2 = (name, args, progressToken) => {
+      const id = ++callId2
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => { pending2.delete(id); reject(new Error(`Tool2 timeout: ${name}`)) }, 15_000)
+        pending2.set(id, { resolve, reject, timer })
+        ws2.send(JSON.stringify({ id, tool: name, args, ...(progressToken !== undefined ? { progressToken } : {}) }))
+      })
+    }
+    const settle = (promise) => promise.then((value) => ({ ok: true, value }), (error) => ({ ok: false, error }))
+    const concurrentA = settle(call2('browser_wait', { text: '并发A_永不出现', timeoutMs: 9000 }, 'desktop-progress'))
+    const concurrentB = settle(tool('browser_wait', { text: '并发B_永不出现', timeoutMs: 9000 }))
+    await until(async () => ((await state()).agentActivity?.calls?.length ?? 0) >= 2, 'concurrent calls visible in activity', 5000)
+    const visibleCalls = (await state()).agentActivity.calls
+    assert.equal(new Set(visibleCalls.map((c) => c.client)).size, 2, `expected two distinct clients, got ${JSON.stringify(visibleCalls)}`)
+    assert.ok(visibleCalls.every((c) => c.tool === 'browser_wait' && c.id > 0))
+    await until(async () => (await ui('document.querySelectorAll("#agent-activity-calls .agent-call-row").length')) >= 2, 'HUD renders a row per concurrent call', 5000)
+    await until(() => progress2.length > 0, 'long operation reports progress over WS', 5000)
+    const secondClient = visibleCalls.find((c) => c.client === 2)
+    assert.ok(secondClient, `second client call missing: ${JSON.stringify(visibleCalls)}`)
+    assert.ok(progress2.some((p) => p.id === secondClient.id && p.progress > 0), `progress for second call missing: ${JSON.stringify(progress2)}`)
+    const cancelled = await ui(`window.aa.cancelAgentCall(${secondClient.id})`)
+    assert.equal(cancelled, true, 'per-call cancel should find the active call')
+    const aOutcome = await Promise.race([concurrentA, pause(4000).then(() => ({ ok: true, timedOut: true }))])
+    assert.equal(aOutcome.timedOut, undefined, 'cancelled call must not keep running')
+    assert.equal(aOutcome.ok, false, `cancelled call should fail, got ${JSON.stringify(aOutcome)}`)
+    await until(async () => ((await state()).agentActivity?.calls?.length ?? 0) === 1, 'the other call keeps running', 3000)
+    await ui('window.aa.interruptAgent()')
+    await until(async () => (await state()).agentActivity?.paused === true, 'global pause still works with concurrent calls', 5000)
+    await Promise.race([concurrentB, pause(4000)])
+    await ui('window.aa.resumeAgent()')
+    await until(async () => (await state()).agentActivity?.paused === false, 'resume after concurrency test', 5000)
+    ws2.close()
+    pass('multi-client activity HUD lists every call, relays progress, and cancels only the selected call')
+
     if (updateUi) {
       await until(async () => (await state()).update?.status === 'downloading', 'automatic update on startup/focus')
       await until(() => ui('!document.querySelector("#update-notice").hidden && document.querySelector("#btn-update-notice").textContent.includes("40%")'), 'visible download notice')
@@ -224,13 +312,46 @@ if (!process.versions.electron) {
     }
     assert.ok(initial.update)
     assert.equal(initial.canReopenClosed, false)
-    pass('initial UI state includes updater, finder and restore availability')
+    assert.equal(await ui('document.querySelector("#agent-stop").disabled'), true)
+     pass('initial UI state includes updater, finder and restore availability')
     await click('#btn-settings')
     await until(() => ui('document.querySelector("#set-engine").options.length > 0'), 'settings ready')
     await ui('document.querySelector("#set-engine").value="https://duckduckgo.com/?q="; document.querySelector("#set-engine").dispatchEvent(new Event("change"))')
     await click('#btn-save-settings')
     assert.equal((await ui('window.aa.settingsGet()')).settings.searchEngine, 'https://duckduckgo.com/?q=')
     pass('search preset selection is saved instead of the old custom URL')
+    await ui('document.querySelector("#set-theme").value="dark"; document.querySelector("#set-theme").dispatchEvent(new Event("change"))')
+    await until(() => ui('document.documentElement.dataset.theme === "dark"'), 'dark theme preview')
+    await click('#btn-close-settings')
+    await until(() => ui('document.documentElement.dataset.theme === "light"'), 'unsaved theme rollback')
+    pass('theme preview rolls back when settings close without saving')
+    await click('#btn-settings')
+    await until(() => ui('document.querySelector("#set-theme").value === "light"'), 'theme setting reopened')
+    await ui('document.querySelector("#set-theme").value="dark"; document.querySelector("#set-theme").dispatchEvent(new Event("change"))')
+    await click('#btn-save-settings')
+    await until(() => ui('document.documentElement.dataset.theme === "dark"'), 'saved dark theme')
+    await ui('document.querySelector("#set-theme").value="light"; document.querySelector("#set-theme").dispatchEvent(new Event("change"))')
+    await click('#btn-save-settings')
+    await until(() => ui('document.documentElement.dataset.theme === "light"'), 'saved light theme')
+    pass('theme setting persists explicit dark and light choices')
+    // 原生标题栏覆盖层不受 CSS 控制，切换主题时必须同步更新颜色
+    const originalOverlay = BaseWindow.prototype.setTitleBarOverlay
+    const overlayCalls = []
+    BaseWindow.prototype.setTitleBarOverlay = function (opts) {
+      overlayCalls.push(opts)
+      return originalOverlay.call(this, opts)
+    }
+    try {
+      await ui('window.aa.settingsSet({theme:"dark"})')
+      await ui('window.aa.settingsSet({theme:"light"})')
+      const darkOverlay = overlayCalls.find((o) => o.color === '#1b1c21')
+      const lightOverlay = overlayCalls.find((o) => o.color === '#ebf1f4')
+      assert.ok(darkOverlay && lightOverlay, `title bar overlay did not follow theme: ${JSON.stringify(overlayCalls)}`)
+      assert.equal(lightOverlay.symbolColor, '#1d2a2f')
+    } finally {
+      BaseWindow.prototype.setTitleBarOverlay = originalOverlay
+    }
+    pass('native title bar overlay follows the light/dark theme setting')
     await click('#btn-close-settings')
 
     await ui(`window.aa.tabNew(${jsLiteral(base + '/normal')})`)
@@ -256,7 +377,13 @@ if (!process.versions.electron) {
     assert.match(denied?.message ?? '', /高危操作已取消/)
     await ui('window.aa.settingsSet({requireOperationApproval:false})')
     pass('sensitive network disclosure is blocked until the user approves it')
+    const reloadResult = await tool('browser_reload', { tabId: normalId, snapshot: false })
+    assert.match(toolText(reloadResult), /已刷新:/)
+    await until(() => page.executeJavaScript('document.body.innerText.includes("needle")'), 'reloaded fixture DOM')
+    await tool('browser_press_key', { tabId: normalId, key: 'Ctrl+Shift+R' })
+    await until(() => page.executeJavaScript('document.body.innerText.includes("needle")'), 'browser_press_key Ctrl+Shift+R')
     page.focus()
+    pass('browser_reload and browser_press_key support tab targeting and Ctrl combinations')
     page.sendInputEvent({ type: 'keyDown', keyCode: 'F', modifiers: ['control'] })
     page.sendInputEvent({ type: 'keyUp', keyCode: 'F', modifiers: ['control'] })
     await until(() => ui('!document.querySelector("#find-bar").hidden && document.activeElement.id === "find-query"'), 'Ctrl+F')
@@ -341,6 +468,30 @@ if (!process.versions.electron) {
     assert.equal((await state()).find.open, false)
     pass('tab switch closes search and isolates asynchronous results')
 
+    // 站点权限请求：不再静默拒绝，而是进入人工审批；允许后同会话内查询为 granted
+    await tool('browser_navigate', { url: base + '/perm-fixture', snapshot: false })
+    await until(async () => (await state()).tabs.some((t) => t.active && t.url.startsWith(base) && !t.loading), 'permission fixture page')
+    const permPage = await until(
+      () => webContents.getAllWebContents().find((wc) => wc !== chrome && wc.getURL().startsWith(base)) ?? null,
+      'permission fixture webContents'
+    )
+    assert.ok(permPage)
+    const permPromise = permPage.executeJavaScript('Notification.requestPermission()').then(
+      (value) => ({ ok: true, value }),
+      (error) => ({ ok: false, error })
+    )
+    await until(async () => (await state()).pendingApprovals?.some((p) => p.kind === 'permission'), 'permission approval visible', 5000)
+    const permApproval = (await state()).pendingApprovals.find((p) => p.kind === 'permission')
+    assert.equal(permApproval.permission, 'notifications')
+    await ui(`window.aa.decideApproval(${jsLiteral(permApproval.id)}, true)`)
+    const permOutcome = await Promise.race([permPromise, pause(4000).then(() => ({ ok: false, timedOut: true }))])
+    assert.equal(permOutcome.timedOut, undefined, 'permission promise must settle after approval')
+    assert.equal(permOutcome.ok, true, `permission request failed: ${permOutcome.error?.message}`)
+    assert.equal(permOutcome.value, 'granted')
+    const permQuery = await permPage.executeJavaScript('navigator.permissions.query({name:"notifications"}).then(p=>p.state)')
+    assert.equal(permQuery, 'granted')
+    pass('site permission prompts use the approval panel and grants persist in the session')
+
     await tool('browser_tabs', { action: 'new', url: base + '/private', isolated: true })
     await until(async () => (await state()).tabs.some((t) => t.active && t.url === base + '/private' && !t.loading), 'private page')
     const privatePage = await activePage()
@@ -375,13 +526,30 @@ if (!process.versions.electron) {
     await until(async () => (await state()).tabs.some((t) => t.active && t.url === base + '/private-context' && !t.loading), 'context source')
     const contextSource = await activePage()
     const originalPopup = Menu.prototype.popup
+    const originalMenuLocale = (await ui('window.aa.settingsGet()')).settings.locale
     let contextItem
-    Menu.prototype.popup = function () { contextItem = this.items.find((item) => item.label === '在新标签页打开链接') }
+    let contextLabels = []
+    Menu.prototype.popup = function () {
+      contextLabels = this.items.map((item) => item.label)
+      contextItem = this.items.find((item) => item.label === '在新标签页打开链接')
+    }
     try {
       contextSource.emit('context-menu', {}, { linkURL: base + '/private-context-child', selectionText: '', isEditable: false })
       assert.ok(contextItem)
       contextItem.click()
-    } finally { Menu.prototype.popup = originalPopup }
+      // 右键菜单的图片项与打印项（原有测试只覆盖了链接项）
+      contextSource.emit('context-menu', {}, { mediaType: 'image', srcURL: base + '/pic.png', selectionText: '', isEditable: false })
+      assert.ok(contextLabels.includes('复制图片地址') && contextLabels.includes('图片另存为') && contextLabels.includes('打印'),
+        `missing image/print items: ${JSON.stringify(contextLabels)}`)
+      // 语言设置驱动原生菜单文案
+      await ui('window.aa.settingsSet({locale:"en-US"})')
+      contextSource.emit('context-menu', {}, { mediaType: 'image', srcURL: base + '/pic2.png', selectionText: '', isEditable: false })
+      assert.ok(contextLabels.includes('Copy Image Address') && contextLabels.includes('Print'),
+        `English menu labels missing: ${JSON.stringify(contextLabels)}`)
+    } finally {
+      Menu.prototype.popup = originalPopup
+      await ui(`window.aa.settingsSet({locale:${jsLiteral(originalMenuLocale)}})`)
+    }
     await until(async () => (await state()).tabs.some((t) => t.active && t.url === base + '/private-context-child'), 'context child')
     assert.equal((await state()).tabs.find((t) => t.active).isolated, true)
     pass('context-menu link opening also preserves isolation')

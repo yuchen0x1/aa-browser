@@ -21,10 +21,12 @@ export interface PendingApprovalInfo {
   tabTitle: string
   fieldLabel: string
   createdAt: number
-  /** sensitive=敏感输入；operation=高危操作确认 */
-  kind?: 'sensitive' | 'operation'
-  /** operation 类型的说明文案 */
+  /** sensitive=敏感输入；operation=高危操作确认；permission=站点权限请求 */
+  kind?: 'sensitive' | 'operation' | 'permission'
+  /** operation / permission 类型的说明文案 */
   detail?: string
+  /** permission 类型的权限名 */
+  permission?: string
 }
 
 export interface ActionLogItem {
@@ -33,6 +35,35 @@ export interface ActionLogItem {
   summary: string
   ts: number
   isError?: boolean
+}
+
+/** 单个正在执行的 MCP 调用（多客户端并发时 HUD 需要逐个展示与取消） */
+export interface AgentCallInfo {
+  /** WS 调用 id；同一客户端内唯一，HUD 用它做“停止此调用”。 */
+  id: number
+  tool: string
+  startedAt: number
+  /** 客户端序号（1 起），用于区分并发的不同 MCP 客户端。 */
+  client: number
+  /** 进度（0–1 或原始进度值），由工具在长操作中上报。 */
+  progress?: number
+  total?: number
+  message?: string
+}
+
+export interface AgentActivityState {
+  /** 当前是否有工具调用正在执行；中断/暂停时为 false。 */
+  active: boolean
+  /** 当前（或最近开始的）MCP 工具名称；保留字段以兼容旧版 HUD。 */
+  tool?: string
+  /** 当前工具调用开始时间（Unix ms）。 */
+  startedAt?: number
+  /** 是否处于用户中断后的暂停窗口。 */
+  paused: boolean
+  /** 自动恢复时间（Unix ms）；非暂停状态省略。 */
+  resumeAt?: number
+  /** 所有正在执行的调用，按开始时间排序；无并发时可能只有一项。 */
+  calls?: AgentCallInfo[]
 }
 
 export interface UiState {
@@ -45,6 +76,8 @@ export interface UiState {
   connectionMessage: string
   pendingApprovals: PendingApprovalInfo[]
   agentInterrupted: boolean
+  /** Agent 工具调用活动状态，供外壳显示操作中的高亮/状态提示。 */
+  agentActivity?: AgentActivityState
   recentActions?: ActionLogItem[]
   downloads?: DownloadInfo[]
   update?: UpdateState
@@ -101,6 +134,7 @@ export interface HistoryEntry {
 /** 用户可调设置（渲染层视图，主进程持久化） */
 export interface AppSettings {
   locale: 'auto' | 'zh-CN' | 'en-US'
+  theme: 'light' | 'dark' | 'system'
   searchEngine: string
   fullSnapshot: boolean
   downloadDir: string
@@ -152,8 +186,8 @@ export interface SnapshotElement {
 /** 页面结构化快照（注入引擎的返回值，全部可 JSON 序列化） */
 export interface PageSnapshot {
   v: number
-  /** full=完整树 / unchanged=与上次一致 / patch=仅变更区块 */
-  mode: 'full' | 'unchanged' | 'patch'
+  /** full=完整树 / unchanged=与上次一致 / patch=仅变更区块 / page=分页片段 */
+  mode: 'full' | 'unchanged' | 'patch' | 'page'
   url: string
   title: string
   /** Agent 可读文本：完整树或增量块（引擎已拼好头部） */
@@ -162,6 +196,11 @@ export interface PageSnapshot {
   newRefs?: string[]
   removedRefs?: string[]
   truncated: boolean
+  /** 分页模式：总行数 / 当前游标 / 下一页游标 / 是否还有后续页 */
+  totalLines?: number
+  cursor?: number
+  nextCursor?: number | null
+  hasMore?: boolean
   capturedAt: number
 }
 
@@ -171,12 +210,22 @@ export interface WsRequest {
   tool: string
   args?: Record<string, unknown>
   cancel?: boolean
+  /** MCP tools/call 的 _meta.progressToken，由桥透传，用于回传 notifications/progress */
+  progressToken?: string | number
 }
 export interface WsResponse {
   id: number
   ok: boolean
   result?: unknown
   error?: string
+}
+/** 长操作进度事件（与响应共用 WS 通道，靠 event 字段区分） */
+export interface WsProgressEvent {
+  id: number
+  event: 'progress'
+  progress: number
+  total?: number
+  message?: string
 }
 
 /** 写入 ~/.aabrowser/connection.json，供 MCP CLI 发现本地浏览器实例 */

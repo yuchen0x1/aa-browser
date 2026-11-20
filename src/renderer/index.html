@@ -83,6 +83,21 @@
           <div class="empty-feed">暂无下载记录</div>
         </div>
       </div>
+      <div id="agent-activity-overlay" aria-hidden="true" hidden>
+        <div class="agent-aura" aria-hidden="true"></div>
+        <div id="agent-activity-card" class="agent-activity-card" role="status" aria-live="polite">
+          <div class="agent-activity-head">
+            <span class="agent-activity-dot" aria-hidden="true"></span>
+            <strong id="agent-activity-title">AI 工具正在操作中</strong>
+          </div>
+          <div id="agent-activity-tool" class="agent-activity-tool">正在准备浏览器操作…</div>
+          <div id="agent-activity-calls" class="agent-activity-calls" hidden></div>
+          <div class="agent-activity-foot">
+            <span id="agent-activity-detail">浏览器由 AI 控制</span>
+            <button id="agent-activity-action" type="button" class="agent-activity-action">中断</button>
+          </div>
+        </div>
+      </div>
       <div id="settings-modal" class="settings-modal" hidden>
         <div class="settings-card" role="dialog" aria-modal="true" aria-labelledby="settings-title">
           <header class="settings-head">
@@ -126,6 +141,20 @@
                   <p id="settings-desc-general" class="settings-section-desc">界面语言与默认搜索引擎</p>
                 </header>
                 <div class="settings-panel">
+                  <div class="settings-group settings-row">
+                    <div class="settings-row-text">
+                      <label id="settings-theme-label" class="settings-label" for="set-theme">主题</label>
+                    </div>
+                    <div class="settings-control">
+                      <div class="settings-select-wrap">
+                        <select id="set-theme" class="settings-select">
+                          <option id="settings-theme-light" value="light">浅色（默认）</option>
+                          <option id="settings-theme-dark" value="dark">深色</option>
+                          <option id="settings-theme-system" value="system">跟随系统</option>
+                        </select>
+                      </div>
+                    </div>
+                  </div>
                   <div class="settings-group settings-row">
                     <div class="settings-row-text">
                       <label class="settings-label" for="set-locale">语言 / Language</label>

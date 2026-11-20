@@ -34,6 +34,21 @@ export function __aaSnapshot() {
 
   var opts = typeof arguments[0] === 'object' && arguments[0] !== null ? arguments[0] : {}
 
+  // 分页：仍完整遍历 DOM 以分配稳定 ref，只把其中一段渲染成文本返回。
+  // 这样跨页的 ref 连续且可复用，也不怕第一页截断后拿不到后面的元素。
+  var paging = typeof opts.maxNodes === 'number' && opts.maxNodes > 0
+  var pageSize = paging ? Math.max(1, Math.min(2000, Math.floor(opts.maxNodes))) : 0
+  var cursor = paging ? Math.max(0, Math.floor(typeof opts.cursor === 'number' ? opts.cursor : 0)) : 0
+  // 分页时要先遍历完整棵树才能定位 cursor；普通快照保持原 500 行上限。
+  if (paging) MAX_NODES = 10000
+
+  // document-start 注入的 closed shadow 记录器（见 src/main/closed-shadow.ts）
+  var readClosed = null
+  try {
+    var closedProbe = window[Symbol.for('aa.closedRoots')]
+    if (typeof closedProbe === 'function') readClosed = closedProbe
+  } catch (e) {}
+
   var truncated = false
   var seq = 0
   var refs = {} // ref -> Element（动作定位）
@@ -292,6 +307,54 @@ export function __aaSnapshot() {
     return ref
   }
 
+  /** ARIA 状态与数值范围：复杂控件（菜单/标签页/滑块/开关）只有状态可读才可测 */
+  function ariaState(el) {
+    var out = {}
+    function attr(n) {
+      try {
+        return el.getAttribute ? el.getAttribute(n) : null
+      } catch (e) {
+        return null
+      }
+    }
+    function boolValue(raw) {
+      if (raw === 'true') return true
+      if (raw === 'false') return false
+      if (raw === 'mixed') return 'mixed'
+      return undefined
+    }
+    var expanded = boolValue(attr('aria-expanded'))
+    if (expanded !== undefined) out.expanded = expanded
+    var pressed = boolValue(attr('aria-pressed'))
+    if (pressed !== undefined) out.pressed = pressed
+    var selected = boolValue(attr('aria-selected'))
+    if (selected !== undefined) out.selected = selected
+    var ariaChecked = boolValue(attr('aria-checked'))
+    if (ariaChecked !== undefined) out.checked = ariaChecked
+    if (el.disabled || attr('aria-disabled') === 'true') out.disabled = true
+    if (el.readOnly || attr('aria-readonly') === 'true') out.readonly = true
+    if (el.required || attr('aria-required') === 'true') out.required = true
+    if (attr('aria-invalid') === 'true' || attr('aria-invalid') === 'grammar' || attr('aria-invalid') === 'spelling') out.invalid = true
+    var now = attr('aria-valuenow')
+    var min = attr('aria-valuemin')
+    var max = attr('aria-valuemax')
+    var tag = el.tagName
+    if (tag === 'INPUT' && (el.type === 'range' || el.type === 'number')) {
+      if (el.value !== '') now = String(el.value)
+      if (el.min !== '') min = String(el.min)
+      if (el.max !== '') max = String(el.max)
+    }
+    if (tag === 'METER' || tag === 'PROGRESS') {
+      if (el.value !== undefined && String(el.value) !== '') now = String(el.value)
+      if (el.max !== undefined && String(el.max) !== '') max = String(el.max)
+      if (el.min !== undefined && String(el.min) !== '') min = String(el.min)
+    }
+    if (now !== null && now !== '') out.valueNow = clip(now, 40)
+    if (min !== null && min !== '') out.valueMin = clip(min, 40)
+    if (max !== null && max !== '') out.valueMax = clip(max, 40)
+    return out
+  }
+
   /** 记录一个交互元素并输出树行 */
   function record(el, role, name, depth, ox, oy) {
     var info = {
@@ -319,6 +382,8 @@ export function __aaSnapshot() {
       info.checked = !!el.checked
     }
     if (el.disabled) info.disabled = true
+    var aria = ariaState(el)
+    for (var ak in aria) info[ak] = aria[ak]
     if (role === 'heading') info.level = parseInt(el.tagName.charAt(1), 10) || undefined
     if (role === 'combobox' && el.tagName === 'SELECT') {
       var optsList = []
@@ -341,7 +406,18 @@ export function __aaSnapshot() {
     line += ' [ref=' + info.ref + ']'
     if (info.checked) line += ' [checked]'
     if (info.disabled) line += ' [disabled]'
-    if (info.expanded !== undefined) line += ' [expanded]'
+    if (info.readonly) line += ' [readonly]'
+    if (info.required) line += ' [required]'
+    if (info.invalid) line += ' [invalid]'
+    if (info.expanded === true) line += ' [expanded]'
+    if (info.expanded === false) line += ' [collapsed]'
+    if (info.pressed === true) line += ' [pressed]'
+    if (info.pressed === false) line += ' [not-pressed]'
+    if (info.pressed === 'mixed') line += ' [pressed=mixed]'
+    if (info.selected === true) line += ' [selected]'
+    if (info.valueNow !== undefined) {
+      line += ' [value=' + info.valueNow + (info.valueMin !== undefined ? ' min=' + info.valueMin : '') + (info.valueMax !== undefined ? ' max=' + info.valueMax : '') + ']'
+    }
     if ((role === 'textbox' || role === 'searchbox' || role === 'combobox') && info.value) {
       line += ': ' + info.value
     }
@@ -478,10 +554,12 @@ export function __aaSnapshot() {
       for (var j = 0; j < kids2.length; j++) walk(kids2[j], depth, ox, oy)
     }
 
-    // open shadow root
+    // open shadow root，以及 document-start 补丁记录的 closed shadow root
     try {
-      if (el.shadowRoot) {
-        var sr = el.shadowRoot.childNodes
+      var shadow = el.shadowRoot
+      if (!shadow && readClosed) shadow = readClosed(el)
+      if (shadow) {
+        var sr = shadow.childNodes
         for (var k2 = 0; k2 < sr.length; k2++) walk(sr[k2], depth + 1, ox, oy)
       }
     } catch (e) {}
@@ -609,8 +687,23 @@ export function __aaSnapshot() {
   var text = fullText()
   var newRefs = []
   var removedRefs = []
+  var totalLines = lines.length
+  var nextCursor = null
+  var hasMore = false
 
-  if (prevState) {
+  if (paging) {
+    var start = Math.min(cursor, totalLines)
+    var end = Math.min(start + pageSize, totalLines)
+    hasMore = end < totalLines
+    nextCursor = hasMore ? end : null
+    var pageLines = lines.slice(start, end)
+    mode = 'page'
+    text =
+      '页面快照（分页 ' + (start + 1) + '–' + end + ' / ' + totalLines + '） url: ' + url + '\n' +
+      'title: ' + title + '\n' +
+      '本页 ' + pageLines.length + ' 行' + (hasMore ? '，下一页 cursor=' + nextCursor : '，已到末页') + '\n\n' +
+      (pageLines.join('\n') || '（本页无可渲染内容）')
+  } else if (prevState) {
     // 统计新增/失效 ref
     for (var rk in refs) {
       if (!(rk in prevState.refs)) newRefs.push(rk)
@@ -696,6 +789,10 @@ export function __aaSnapshot() {
     newRefs: newRefs,
     removedRefs: removedRefs,
     truncated: truncated,
+    totalLines: totalLines,
+    cursor: cursor,
+    nextCursor: nextCursor,
+    hasMore: hasMore,
     capturedAt: Date.now()
   }
 }
