@@ -2,6 +2,13 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
+## v0.6.5 — 2026-11-20
+
+- 统一外壳与新标签页主题、完善英文文案和键盘焦点；发行说明与错误详情标明来源语言。
+- 新增 Biome 独立 lint 并接入 check，新增 125% / 150% / 200% DPI 与显示器工作区回归。
+- 清理 Electron 事件接口、初始化加载取消、favicon CSP、预期设置校验及 smoke 主动退出噪声。
+- MCP 工具保持 42 个；本机三档 DPI 与单显示器边界已通过，多物理显示器遍历尚未实测。
+
 ## v0.6.4 — 2026-11-20
 
 - 新增视觉评审闭环：`browser_visual_diff`（基线 / 逐像素 diff / 差异图 / 视觉断言）、`browser_contrast_audit`（WCAG AA/AAA 对比度审计）、`browser_viewport_matrix`（320/480/768/桌面 + 2x 高 DPI，CDP 设备指标模拟）。

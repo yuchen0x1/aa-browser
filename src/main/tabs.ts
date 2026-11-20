@@ -150,6 +150,8 @@ export class TabManager {
   getAllowedSites: () => string[] = () => []
   /** 由主进程注入：是否默认使用隔离会话（设置项） */
   getDefaultIsolated: () => boolean = () => false
+  /** 由主进程注入：内部页加载完成后同步当前主题 */
+  applyInternalTheme: ((wc: WebContents) => void) | null = null
   /** 由主进程注入：隔离标签关闭时回调（用于清理分区数据） */
   onIsolatedClosed: ((partition: string) => void) | null = null
 
@@ -235,7 +237,9 @@ export class TabManager {
     try {
       await withTimeout(wc.loadURL('about:blank'), 3000, 'about:blank 初始化')
     } catch (error) {
-      console.warn(`[aa-browser] 标签 ${id} 空白上下文初始化失败: ${error instanceof Error ? error.message : String(error)}`)
+      const message = error instanceof Error ? error.message : String(error)
+      const expectedBlankCancellation = message.includes('ERR_FAILED (-2)') && message.includes("about:blank")
+      if (!expectedBlankCancellation) console.warn(`[aa-browser] 标签 ${id} 空白上下文初始化失败: ${message}`)
     }
     if (wc.isDestroyed()) return
     try {
@@ -250,6 +254,12 @@ export class TabManager {
       console.warn(`[aa-browser] 标签 ${id} closed shadow 捕获未就绪: ${error instanceof Error ? error.message : String(error)}`)
     }
     if (wc.isDestroyed()) return
+    // 内部页每次加载完成都同步一次主题（含导航返回新标签页的场景）。
+    // 回调由主进程提供，并自行判断当前 URL 是否内部页，绝不接触外部网页 DOM。
+    wc.on('dom-ready', () => {
+      if (wc.isDestroyed()) return
+      try { this.applyInternalTheme?.(wc) } catch { /* 主题同步失败不应影响页面 */ }
+    })
     // 抓包和对话框守卫共用 CDP，按顺序启用后再开始首个页面导航。
     try {
       await withTimeout(net.ensure(), 3000, 'Network.enable 初始化')
@@ -375,8 +385,8 @@ export class TabManager {
       tab.title = '页面已崩溃'
       this.onChange()
     })
-    wc.on('console-message', (...args: unknown[]) => {
-      const msg = readConsoleMessage(args)
+    wc.on('console-message', (event) => {
+      const msg = readConsoleMessage([event])
       if (!msg) return
       tab.consoleBuf.push({ level: msg.level, text: msg.text, ts: Date.now() })
       if (tab.consoleBuf.length > 200) tab.consoleBuf.splice(0, tab.consoleBuf.length - 200)
@@ -435,6 +445,13 @@ export class TabManager {
     }
     if (wc.navigationHistory) wc.navigationHistory.goForward()
     else (wc as unknown as { goForward: () => void }).goForward()
+  }
+
+  /** 遍历所有标签视图（供主进程向内部页广播主题等设置） */
+  forEachWebView(fn: (wc: WebContents) => void): void {
+    for (const tab of [...this.tabs]) {
+      if (!tab.view.webContents.isDestroyed()) fn(tab.view.webContents)
+    }
   }
 
   infos(): TabInfo[] {

@@ -41,8 +41,14 @@ if (!process.versions.electron) {
   // Do not await app.whenReady() at module top level: Electron waits for its
   // ESM entry to finish evaluating before it can emit ready.
   void (async () => {
-  const { app, webContents, BaseWindow, Menu } = await import('electron')
+  const { app, webContents, BaseWindow, Menu, screen } = await import('electron')
   const runDir = process.env.AA_DESKTOP_TEST_DIR
+  const displayOnly = process.argv.includes('--display-only')
+  const displayScale = Number(process.env.AA_DISPLAY_MATRIX_SCALE || 1)
+  if (displayOnly && Number.isFinite(displayScale) && displayScale > 0) {
+    app.commandLine.appendSwitch('disable-gpu')
+    app.commandLine.appendSwitch('force-device-scale-factor', String(displayScale))
+  }
   const updateUi = process.argv.includes('--update-ui')
   let updateProvider
   if (updateUi) {
@@ -57,7 +63,7 @@ if (!process.versions.electron) {
     updateProvider = new EventEmitter()
     updateProvider.downloads = 0
     updateProvider.installs = 0
-    const info = { version: '0.0.4', releaseDate: '2026-11-13', files: [{ size: 100 }] }
+    const info = { version: '0.0.4', releaseDate: '2026-11-13', releaseNotes: [{ version: '0.0.4', note: 'Fixture publisher release note' }], files: [{ size: 100 }] }
     updateProvider.checkForUpdates = async () => {
       updateProvider.emit('checking-for-update')
       updateProvider.emit('update-available', info)
@@ -150,8 +156,8 @@ if (!process.versions.electron) {
     chrome.setBackgroundThrottling(false)
     BaseWindow.getAllWindows()[0].show()
     const errors = []
-    chrome.on('console-message', (_event, details) => {
-      if (details?.level === 'error') errors.push(details.message)
+    chrome.on('console-message', (event) => {
+      if (event?.level === 'error') errors.push(event.message)
     })
     await until(() => fs.existsSync(process.env.AA_BROWSER_CONNECTION_FILE), 'discovery')
     const connection = JSON.parse(fs.readFileSync(process.env.AA_BROWSER_CONNECTION_FILE, 'utf8'))
@@ -173,6 +179,44 @@ if (!process.versions.electron) {
       const urls = current.tabs.map((tab) => tab.url)
       return urls.includes(base + '/restored-a') && urls.includes(base + '/restored-b') ? current : null
     }, 'restored session tabs', 20_000)
+    assert.equal(initial.tabs.length, 2)
+
+    if (displayOnly) {
+      const currentWindow = BaseWindow.getAllWindows()[0]
+      const displays = screen.getAllDisplays()
+      const dpr = await ui('window.devicePixelRatio')
+      assert.ok(Math.abs(dpr - displayScale) < 0.02, `devicePixelRatio ${dpr} should match forced scale ${displayScale}`)
+      const viewport = await ui('({width: innerWidth, height: innerHeight, minWidth: document.documentElement.scrollWidth})')
+      assert.ok(viewport.width >= 960, `renderer viewport too narrow at ${displayScale}: ${JSON.stringify(viewport)}`)
+      await click('#btn-settings')
+      assert.equal(await ui('document.querySelector("#settings-modal").hidden'), false)
+      const navState = await ui('({width: innerWidth, display: getComputedStyle(document.querySelector(".settings-nav")).display})')
+      assert.equal(navState.display, navState.width <= 1000 ? 'none' : 'flex', `unexpected settings navigation at CSS viewport ${navState.width}`)
+      await click('#btn-close-settings')
+      pass(`renderer layout remains usable at ${Math.round(displayScale * 100)}% device scale`)
+
+      const originalBounds = currentWindow.getBounds()
+      for (const [index, display] of displays.entries()) {
+        const area = display.workArea
+        const width = Math.min(originalBounds.width, area.width)
+        const height = Math.min(originalBounds.height, area.height)
+        currentWindow.setBounds({ x: area.x + Math.min(24, area.width - width), y: area.y + Math.min(24, area.height - height), width, height })
+        await pause(100)
+        const bounds = currentWindow.getBounds()
+        assert.ok(bounds.x >= area.x && bounds.y >= area.y, `window origin outside display ${index}: ${JSON.stringify({ bounds, area })}`)
+        assert.ok(bounds.x + bounds.width <= area.x + area.width && bounds.y + bounds.height <= area.y + area.height, `window exceeds display ${index} work area: ${JSON.stringify({ bounds, area })}`)
+      }
+      currentWindow.setBounds(originalBounds)
+      if (displays.length < 2) console.log('[display-matrix] multiple physical displays unavailable; single-display placement verified, multi-display iteration skipped')
+      else pass(`window placement remains within all ${displays.length} display work areas`)
+      if (displays.length < 2) pass('window placement remains within the available display work area')
+      ws.close()
+      await new Promise((resolve) => server.close(resolve))
+      await new Promise((resolve) => { app.once('will-quit', resolve); app.quit() })
+      fs.writeFileSync(path.join(runDir, 'result.json'), JSON.stringify({ status: 'PASS', scale: displayScale, devicePixelRatio: dpr, displays: displays.map((display) => ({ bounds: display.bounds, workArea: display.workArea, scaleFactor: display.scaleFactor })), checks: results }, null, 2))
+      console.log(`PASS: display matrix at ${Math.round(displayScale * 100)}%`)
+      return
+    }
     assert.equal(initial.tabs.length, 2)
     assert.ok(initial.tabs.some((tab) => tab.url === base + '/restored-a'), `restored tabs: ${JSON.stringify(initial.tabs.map((tab) => tab.url))}`)
     assert.ok(initial.tabs.some((tab) => tab.url === base + '/restored-b'))
@@ -267,6 +311,9 @@ if (!process.versions.electron) {
       await until(async () => (await state()).update?.status === 'downloading', 'automatic update on startup/focus')
       await until(() => ui('!document.querySelector("#update-notice").hidden && document.querySelector("#btn-update-notice").textContent.includes("40%")'), 'visible download notice')
       assert.equal(await ui('document.querySelector("#settings-modal").hidden'), true)
+      const notesMeta = await ui('({title: document.querySelector("#update-status").title, locale: document.documentElement.lang})')
+      assert.ok(notesMeta.title.includes(notesMeta.locale === 'en-US' ? 'Release notes (publisher original language)' : '发行说明（发布者原文）'))
+      assert.ok(notesMeta.title.includes('Fixture publisher release note'))
       const window = BaseWindow.getAllWindows()[0]
       const shellView = window.contentView.children.find((view) => view.webContents === chrome)
       await until(() => shellView.getBounds().height === 128, 'update banner native bounds')
@@ -316,14 +363,30 @@ if (!process.versions.electron) {
      pass('initial UI state includes updater, finder and restore availability')
     await click('#btn-settings')
     await until(() => ui('document.querySelector("#set-engine").options.length > 0'), 'settings ready')
+     assert.equal(await ui('document.activeElement?.id'), 'btn-close-settings')
+     assert.equal(await ui('document.querySelector("#set-agent-info")?.getAttribute("title")'), null)
+     assert.equal(await ui('window.aa.agentInfo().then((info) => Object.prototype.hasOwnProperty.call(info, "token"))'), false)
     await ui('document.querySelector("#set-engine").value="https://duckduckgo.com/?q="; document.querySelector("#set-engine").dispatchEvent(new Event("change"))')
     await click('#btn-save-settings')
     assert.equal((await ui('window.aa.settingsGet()')).settings.searchEngine, 'https://duckduckgo.com/?q=')
     pass('search preset selection is saved instead of the old custom URL')
     await ui('document.querySelector("#set-theme").value="dark"; document.querySelector("#set-theme").dispatchEvent(new Event("change"))')
     await until(() => ui('document.documentElement.dataset.theme === "dark"'), 'dark theme preview')
+     assert.match(await ui('getComputedStyle(document.documentElement).getPropertyValue("--surface-settings").trim()'), /#171b20/)
     await click('#btn-close-settings')
     await until(() => ui('document.documentElement.dataset.theme === "light"'), 'unsaved theme rollback')
+     assert.match(await ui('getComputedStyle(document.documentElement).getPropertyValue("--surface-settings").trim()'), /#ffffff/)
+     assert.equal(await ui('document.activeElement?.id'), 'btn-settings')
+     const originalWindowSize = browserWindow.getSize()
+     browserWindow.setSize(960, 720)
+     await pause(160)
+     await click('#btn-settings')
+     await until(() => ui('document.querySelector("#set-engine").options.length > 0'), 'narrow settings ready')
+     assert.equal(await ui('getComputedStyle(document.querySelector(".settings-nav")).display'), 'none')
+     await click('#btn-close-settings')
+     browserWindow.setSize(originalWindowSize[0], originalWindowSize[1])
+     await pause(80)
+     pass('settings remain usable at the 960px desktop minimum and collapse the side navigation')
     pass('theme preview rolls back when settings close without saving')
     await click('#btn-settings')
     await until(() => ui('document.querySelector("#set-theme").value === "light"'), 'theme setting reopened')
@@ -344,7 +407,7 @@ if (!process.versions.electron) {
     try {
       await ui('window.aa.settingsSet({theme:"dark"})')
       await ui('window.aa.settingsSet({theme:"light"})')
-      const darkOverlay = overlayCalls.find((o) => o.color === '#1b1c21')
+      const darkOverlay = overlayCalls.find((o) => o.color === '#0a0b10')
       const lightOverlay = overlayCalls.find((o) => o.color === '#ebf1f4')
       assert.ok(darkOverlay && lightOverlay, `title bar overlay did not follow theme: ${JSON.stringify(overlayCalls)}`)
       assert.equal(lightOverlay.symbolColor, '#1d2a2f')

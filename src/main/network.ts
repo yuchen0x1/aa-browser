@@ -29,7 +29,9 @@ export function safeNetworkUrl(raw: string, includeSensitive = false): string {
   try {
     const url = new URL(raw)
     const safeParams = new URLSearchParams()
-    url.searchParams.forEach((value, key) => safeParams.append(key, SENSITIVE_QUERY.test(key) ? '[redacted]' : value))
+    url.searchParams.forEach((value, key) => {
+      safeParams.append(key, SENSITIVE_QUERY.test(key) ? '[redacted]' : value)
+    })
     url.search = safeParams.toString()
     if (url.username) url.username = '[redacted]'
     if (url.password) url.password = '[redacted]'
@@ -439,7 +441,9 @@ function toHarHeaders(h: Record<string, string>): { name: string; value: string 
 function toHarQuery(url: string): { name: string; value: string }[] {
   try {
     const out: { name: string; value: string }[] = []
-    new URL(url).searchParams.forEach((value, name) => out.push({ name, value }))
+    new URL(url).searchParams.forEach((value, name) => {
+      out.push({ name, value })
+    })
     return out
   } catch {
     return []

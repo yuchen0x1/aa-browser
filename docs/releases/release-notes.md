@@ -6,6 +6,7 @@
 
 | 版本 | 完整 Release 正文 |
 | --- | --- |
+| v0.6.5 | [bodies/v0.6.5.md](./bodies/v0.6.5.md) |
 | v0.6.4 | [bodies/v0.6.4.md](./bodies/v0.6.4.md) |
 | v0.3.0 | [bodies/v0.3.0.md](./bodies/v0.3.0.md) |
 | v0.2.0 | [bodies/v0.2.0.md](./bodies/v0.2.0.md) |
@@ -18,6 +19,13 @@
 | v0.0.3 | [bodies/v0.0.3.md](./bodies/v0.0.3.md) |
 | v0.0.2 | [bodies/v0.0.2.md](./bodies/v0.0.2.md) |
 | v0.0.1 | [bodies/v0.0.1.md](./bodies/v0.0.1.md) |
+
+## v0.6.5 — 2026-11-20
+
+- 统一外壳与新标签页主题、完善英文文案和键盘焦点；发行说明与错误详情标明来源语言。
+- 新增 Biome 独立 lint 并接入 check，新增 125% / 150% / 200% DPI 与显示器工作区回归。
+- 清理 Electron 事件接口、初始化加载取消、favicon CSP、预期设置校验及 smoke 主动退出噪声。
+- MCP 工具保持 42 个；本机三档 DPI 与单显示器边界已通过，多物理显示器遍历尚未实测。
 
 ## v0.6.4 — 2026-11-20
 

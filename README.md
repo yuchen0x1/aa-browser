@@ -32,9 +32,9 @@
 
 <!-- github-release:start -->
 
-**[v0.6.4](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.6.4)** · 2026-11-20
+**[v0.6.5](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.6.5)** · 2026-11-20
 
-本版改善日常使用的观感与安全边界：设置面板从窄单列改成 960px 宽的分区布局，控件、排版和窗口自适应一并调整；应用图标重做为透明满幅，桌面快捷方式、任务栏和 favicon 不再出现白边；Agent 注入脚本的数据字面量统一加固，特殊字符不会再截断脚本。功能面与 MCP 工具集（41 个）保持不变。
+本版统一外壳与新标签页主题，完善英文界面与键盘可访问性；新增独立 lint 和 125% / 150% / 200% DPI 显示矩阵，并清理 Electron 测试噪声。MCP 工具集保持 42 个。
 
 [全部发行记录](https://github.com/yuchen0x1/aa-browser/releases)
 

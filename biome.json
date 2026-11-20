@@ -1,0 +1,20 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.6.8/schema.json",
+	"files": {
+		"includes": [
+			"src/**/*.ts",
+			"scripts/**/*.mjs",
+			"cli/**/*.mjs",
+			"packages/dsh/**/*.mjs"
+		]
+	},
+	"formatter": {
+		"enabled": false
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"preset": "recommended"
+		}
+	}
+}

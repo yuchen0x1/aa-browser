@@ -5,21 +5,57 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
     <title>Aa Browser — 安装并连接 AI</title>
+    <script>
+      /* 内部页没有 preload；由主进程在 dom-ready 后调用 __aaApplyTheme 同步主题。
+         未收到指令时先跟随系统，避免出现深浅色闪屏。 */
+      (function () {
+        var media = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null
+        var setting = 'system'
+        function apply(next) {
+          setting = next === 'dark' || next === 'light' ? next : 'system'
+          var resolved = setting === 'system' ? ((media && media.matches) ? 'dark' : 'light') : setting
+          document.documentElement.dataset.theme = resolved
+          document.documentElement.style.colorScheme = resolved
+        }
+        window.__aaApplyTheme = apply
+        apply(new URLSearchParams(location.search).get('theme') || 'system')
+        if (media && media.addEventListener) {
+          media.addEventListener('change', function () { if (setting === 'system') apply('system') })
+        }
+      })()
+    </script>
     <style>
       :root {
-        color-scheme: light;
         --canvas: #f7f9fb;
         --panel: #ffffff;
         --panel-raised: #f1f5f6;
         --line: rgba(22, 54, 66, 0.14);
+        --line-mint: rgba(20, 140, 120, 0.34);
+        --mint-hover: rgba(20, 140, 120, 0.18);
         --text: #1d2a2f;
         --muted: #5b6b72;
-        --quiet: #7f8e94;
+        --quiet: #64757b;
         --mint: #176b61;
         --mint-soft: rgba(20, 140, 120, 0.1);
         --amber: #9b6d1a;
         --mono: 'Cascadia Code', Consolas, monospace;
       }
+      :root[data-theme="dark"] {
+        color-scheme: dark;
+        --canvas: #111619;
+        --panel: #1a2023;
+        --panel-raised: #222a2e;
+        --line: rgba(232, 238, 236, 0.12);
+        --line-mint: rgba(120, 203, 185, 0.34);
+        --mint-hover: rgba(120, 203, 185, 0.18);
+        --text: #e8eeec;
+        --muted: #a2afad;
+        --quiet: #74817f;
+        --mint: #78cbb9;
+        --mint-soft: rgba(120, 203, 185, 0.12);
+        --amber: #e1bd75;
+      }
+      ::selection { background: var(--mint-soft); color: var(--text); }
 
       * { box-sizing: border-box; }
       html, body { min-height: 100%; }
@@ -49,7 +85,7 @@
         width: 29px;
         height: 29px;
         place-items: center;
-        border: 1px solid rgba(120, 203, 185, .34);
+        border: 1px solid var(--line-mint);
         border-radius: 9px;
         background: var(--mint-soft);
         color: var(--mint);
@@ -97,7 +133,7 @@
         width: 22px;
         height: 22px;
         place-items: center;
-        border: 1px solid rgba(120, 203, 185, .35);
+        border: 1px solid var(--line-mint);
         border-radius: 50%;
         font-size: 11px;
         font-variant-numeric: tabular-nums;
@@ -125,7 +161,7 @@
       .prompt-heading h2 { margin: 0; font-size: 14px; font-weight: 650; }
       .copy-button {
         flex: none;
-        border: 1px solid rgba(120, 203, 185, .34);
+        border: 1px solid var(--line-mint);
         border-radius: 7px;
         padding: 7px 11px;
         background: var(--mint-soft);
@@ -134,7 +170,7 @@
         font-size: 12px;
         cursor: pointer;
       }
-      .copy-button:hover { background: rgba(120, 203, 185, .18); }
+      .copy-button:hover { background: var(--mint-hover); }
       .copy-button:focus-visible, textarea:focus-visible {
         outline: 2px solid var(--mint);
         outline-offset: 3px;
@@ -144,11 +180,11 @@
         width: 100%;
         min-height: 380px;
         resize: vertical;
-        border: 1px solid rgba(22, 54, 66, .16);
+        border: 1px solid var(--line);
         border-radius: 8px;
         padding: 12px 13px;
-        background: #f1f5f6;
-        color: #24353a;
+        background: var(--panel-raised);
+        color: var(--text);
         font: 12px/1.7 var(--mono);
         user-select: text;
       }

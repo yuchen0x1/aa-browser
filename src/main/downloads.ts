@@ -77,6 +77,7 @@ export class DownloadTracker {
       const rawFilename = item.getFilename() || `download-${stamp}`
       // Chromium normally supplies a basename, but a hostile server can still
       // return separators or traversal segments in Content-Disposition.
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: This sanitizer intentionally matches ASCII control characters in untrusted filenames.
       const filename = path.basename(rawFilename).replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_').trim() || `download-${stamp}`
       const savePath = path.join(dir, `${stamp}${retriedFrom ? '-r' : '-'}${filename}`)
       item.setSavePath(savePath)

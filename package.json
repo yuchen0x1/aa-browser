@@ -2,7 +2,7 @@
   "name": "aa-browser",
   "productName": "Aa Browser",
   "desktopName": "aa-browser.desktop",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "description": "AI-native browser — browse like a human, drive like an agent (为 Agent 而生的浏览器)",
   "license": "MIT",
   "author": {
@@ -17,6 +17,7 @@
     "build": "electron-vite build && node scripts/build-bridge.mjs && node packages/dsh/scripts/sync-bridge.mjs",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit",
+    "lint": "biome lint .",
     "check:tools": "node scripts/check-tools.mjs",
     "check:prompt": "node scripts/generate-prompt.mjs --check",
     "check:dsh": "node scripts/check-dsh-plugin.mjs",
@@ -28,13 +29,14 @@
     "test:tools": "node scripts/test-tool-contract.mjs",
     "test:page-scripts": "node scripts/test-page-scripts.mjs",
     "test:evidence": "node scripts/test-evidence.mjs",
-    "check": "npm run typecheck && npm run check:tools && npm run check:prompt && npm run check:dsh && npm run test:page-scripts && npm run test:evidence && npm run check:readme-i18n && npm run check:release-bodies",
+    "check": "npm run typecheck && npm run lint && npm run check:tools && npm run check:prompt && npm run check:dsh && npm run test:page-scripts && npm run test:evidence && npm run check:readme-i18n && npm run check:release-bodies",
     "test:installer": "node scripts/test-installer.mjs",
     "test:bridge": "node scripts/test-bridge-offline.mjs",
     "test:bridge-autolaunch": "node scripts/test-bridge-autolaunch.mjs",
     "test:connect": "node scripts/test-connect-flow.mjs",
     "smoke": "node scripts/smoke.mjs",
     "test:desktop": "node scripts/test-desktop.mjs",
+    "test:display-matrix": "node scripts/test-display-matrix.mjs",
     "test:update-ui": "node scripts/test-desktop.mjs --update-ui",
     "test:stores": "node scripts/test-stores.mjs",
     "test:security": "node scripts/test-security.mjs",
@@ -60,6 +62,7 @@
     "browser-automation"
   ],
   "devDependencies": {
+    "@biomejs/biome": "^2.6.8",
     "@types/node": "^26.6.6",
     "@types/ws": "^8.18.2",
     "electron": "^45.3.2",
@@ -76,4 +79,3 @@
     "minimatch@^10": "^11.0.4"
   }
 }
-

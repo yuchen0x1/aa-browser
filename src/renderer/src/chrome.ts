@@ -81,7 +81,7 @@ declare global {
   }
 }
 
-let state: UiState = { tabs: [], activeId: null, agentCount: 0, agentVerifiedCount: 0, bridgeState: 'waiting', connectionMessage: '等待 AI 客户端连接 MCP 桥', pendingApprovals: [], agentInterrupted: false, agentActivity: { active: false, paused: false } }
+let state: UiState = { tabs: [], activeId: null, agentCount: 0, agentVerifiedCount: 0, bridgeState: 'waiting', pendingApprovals: [], agentInterrupted: false, agentActivity: { active: false, paused: false } }
 
 const tabsEl = document.getElementById('tabs') as HTMLDivElement
 const omnibox = document.getElementById('omnibox') as HTMLInputElement
@@ -121,6 +121,7 @@ const setAllowedSites = document.getElementById('set-allowed-sites') as HTMLText
 const setAgentInfo = document.getElementById('set-agent-info') as HTMLDivElement | null
 const settingsStatus = document.getElementById('settings-status') as HTMLSpanElement | null
 let settingsStatusTimer: ReturnType<typeof setTimeout> | undefined
+let settingsReturnFocus: HTMLElement | null = null
 const setClientList = document.getElementById('set-client-list') as HTMLDivElement | null
 const btnClientScan = document.getElementById('btn-client-scan') as HTMLButtonElement | null
 const btnClientSetup = document.getElementById('btn-client-setup') as HTMLButtonElement | null
@@ -147,6 +148,7 @@ function resolveUiLocale(setting: AppSettings['locale'] = 'auto'): Locale {
 let savedLocale = resolveUiLocale()
 let activeLocale = savedLocale
 const t = (key: LocaleKey): string => translate(activeLocale, key)
+const uiText = (zh: string, en: string): string => activeLocale === 'en-US' ? en : zh
 
 type ThemeSetting = AppSettings['theme']
 let activeThemeSetting: ThemeSetting = 'light'
@@ -316,7 +318,7 @@ for (const panel of [suggestPanel, dlPanel, feedDrawer]) {
 window.addEventListener('resize', syncOverlayExtent)
 
 function formatUpdateBytes(value?: number): string {
-  if (!value || value < 1024) return value ? `${value} B` : '未知大小'
+  if (!value || value < 1024) return value ? `${value} B` : uiText('未知大小', 'Unknown size')
   const units = ['KB', 'MB', 'GB']
   let n = value / 1024
   let i = 0
@@ -330,12 +332,14 @@ function renderUpdate(update?: UpdateState): void {
     disabled: activeLocale === 'en-US' ? 'Updates disabled in development' : '开发模式不检查更新', idle: `${t('currentVersion')} ${update.currentVersion}`, checking: activeLocale === 'en-US' ? 'Checking for updates…' : '正在检查更新…',
     'up-to-date': activeLocale === 'en-US' ? `Already up to date (${update.currentVersion})` : `已是最新版本（${update.currentVersion}）`, available: activeLocale === 'en-US' ? `New version ${update.version ?? ''} found` : `发现新版本 ${update.version ?? ''}`,
     downloading: activeLocale === 'en-US' ? `Downloading ${update.version ?? ''} · ${Math.max(0, Math.round(update.progress ?? 0))}%` : `正在下载 ${update.version ?? ''} · ${Math.max(0, Math.round(update.progress ?? 0))}%`,
-    downloaded: activeLocale === 'en-US' ? `${update.version ?? ''} downloaded; restart to install` : `已下载 ${update.version ?? ''}，可以重启安装`, error: activeLocale === 'en-US' ? `Update failed: ${update.error ?? 'Unknown error'}` : `更新失败：${update.error ?? '未知错误'}`
+    downloaded: activeLocale === 'en-US' ? `${update.version ?? ''} downloaded; restart to install` : `已下载 ${update.version ?? ''}，可以重启安装`, error: uiText('更新失败', 'Update failed')
   }
   updateStatus.textContent = labels[update.status]
   const navVersion = document.getElementById('settings-nav-version')
   if (navVersion) navVersion.textContent = `v${update.currentVersion}`
-  updateStatus.title = [update.checkedAt ? `上次检查：${new Date(update.checkedAt).toLocaleString()}` : '', update.retryAt ? `自动重试：${new Date(update.retryAt).toLocaleTimeString()}` : '', update.releaseDate ? `发布时间：${update.releaseDate}` : '', update.size ? `大小：${formatUpdateBytes(update.size)}` : '', update.releaseNotes ?? ''].filter(Boolean).join('\n')
+  const releaseNotesLabel = uiText('发行说明（发布者原文）', 'Release notes (publisher original language)')
+  const errorDetailsLabel = uiText('错误详情（来源语言）', 'Error details (source language)')
+  updateStatus.title = [update.checkedAt ? `${uiText('上次检查：', 'Last checked: ')}${new Date(update.checkedAt).toLocaleString()}` : '', update.retryAt ? `${uiText('自动重试：', 'Auto retry: ')}${new Date(update.retryAt).toLocaleTimeString()}` : '', update.releaseDate ? `${uiText('发布时间：', 'Release date: ')}${update.releaseDate}` : '', update.size ? `${uiText('大小：', 'Size: ')}${formatUpdateBytes(update.size)}` : '', update.error ? `${errorDetailsLabel}:\n${update.error}` : '', update.releaseNotes ? `${releaseNotesLabel}:\n${update.releaseNotes}` : ''].filter(Boolean).join('\n')
   if (btnUpdateCheck) btnUpdateCheck.disabled = update.failedOperation === 'install' || ['checking', 'downloading', 'downloaded'].includes(update.status)
   if (btnUpdateAction) {
     btnUpdateAction.hidden = !['available', 'downloaded', 'error'].includes(update.status)
@@ -378,7 +382,7 @@ function renderTabs(): void {
   for (const t of state.tabs) {
     const el = document.createElement('div')
     el.className = 'tab' + (t.active ? ' active' : '')
-    el.title = `${t.title}\n${t.url}${t.isolated ? '\n（隔离会话：不共享登录态）' : ''}`
+    el.title = `${t.title}\n${t.url}${t.isolated ? `\n${uiText('（隔离会话：不共享登录态）', '(Isolated session: sign-in state is not shared)')}` : ''}`
     el.setAttribute('role', 'tab')
     el.setAttribute('aria-selected', String(t.active))
     el.tabIndex = t.active ? 0 : -1
@@ -396,18 +400,18 @@ function renderTabs(): void {
       img.onerror = () => {
         img.remove()
         fav.textContent = '•'
-        fav.style.color = '#66676e'
+        fav.classList.add('favicon-fallback')
       }
       fav.appendChild(img)
     } else {
       fav.textContent = '•'
-      fav.style.color = '#66676e'
+      fav.classList.add('favicon-fallback')
     }
     el.appendChild(fav)
 
     const title = document.createElement('span')
     title.className = 'title'
-    title.textContent = t.title || '无标题'
+    title.textContent = t.title || uiText('无标题', 'Untitled')
     el.appendChild(title)
 
     // 隔离会话标签带锁标识：用户必须能一眼看出哪些标签不共享登录态
@@ -415,16 +419,16 @@ function renderTabs(): void {
       const lock = document.createElement('span')
       lock.className = 'tab-lock'
       lock.textContent = '🔒'
-      lock.title = '隔离会话：不共享 Cookie / 登录态，关闭后清除数据'
-      lock.setAttribute('aria-label', '隔离会话标签')
+      lock.title = uiText('隔离会话：不共享 Cookie / 登录态，关闭后清除数据', 'Isolated session: cookies and sign-in are not shared and data is cleared on close')
+      lock.setAttribute('aria-label', uiText('隔离会话标签', 'Isolated session tab'))
       el.appendChild(lock)
       el.classList.add('isolated')
     }
 
     const close = document.createElement('button')
     close.className = 'close'
-    close.title = '关闭标签页 (Ctrl+W)'
-    close.setAttribute('aria-label', `关闭标签页：${t.title || '无标题'}`)
+    close.title = uiText('关闭标签页 (Ctrl+W)', 'Close tab (Ctrl+W)')
+    close.setAttribute('aria-label', `${uiText('关闭标签页：', 'Close tab: ')}${t.title || uiText('无标题', 'Untitled')}`)
     close.textContent = '×'
     close.addEventListener('click', (e) => {
       e.stopPropagation()
@@ -459,7 +463,7 @@ function renderAgentCallList(activity: AgentActivityState, paused: boolean): voi
 
     const label = document.createElement('span')
     label.className = 'agent-call-label'
-    label.textContent = `#${call.id} · 客户端 ${call.client} · ${call.tool}`
+    label.textContent = `#${call.id} · ${uiText('客户端', 'Client')} ${call.client} · ${call.tool}`
     row.appendChild(label)
 
     const detail = document.createElement('span')
@@ -473,8 +477,8 @@ function renderAgentCallList(activity: AgentActivityState, paused: boolean): voi
     const stop = document.createElement('button')
     stop.type = 'button'
     stop.className = 'agent-call-stop'
-    stop.textContent = '停止'
-    stop.title = `只停止调用 #${call.id}`
+    stop.textContent = uiText('停止', 'Stop')
+    stop.title = uiText(`只停止调用 #${call.id}`, `Stop call #${call.id} only`)
     stop.addEventListener('click', () => void window.aa.cancelAgentCall(call.id))
     row.appendChild(stop)
     agentActivityCalls.appendChild(row)
@@ -482,7 +486,7 @@ function renderAgentCallList(activity: AgentActivityState, paused: boolean): voi
   if (calls.length > 6) {
     const more = document.createElement('div')
     more.className = 'agent-call-more'
-    more.textContent = `还有 ${calls.length - 6} 个调用…`
+    more.textContent = uiText(`还有 ${calls.length - 6} 个调用…`, `${calls.length - 6} more calls…`)
     agentActivityCalls.appendChild(more)
   }
 }
@@ -505,17 +509,17 @@ function renderAgentActivity(): void {
     return
   }
 
-  if (agentActivityTitle) agentActivityTitle.textContent = paused ? 'AI 操作已暂停' : 'AI 工具正在操作中'
+  if (agentActivityTitle) agentActivityTitle.textContent = paused ? uiText('AI 操作已暂停', 'AI operation paused') : uiText('AI 工具正在操作中', 'AI tool is working')
   const callCount = activity.calls?.length ?? 0
   if (agentActivityTool) {
     agentActivityTool.textContent = activity.tool
-      ? `工具：${activity.tool}${callCount > 1 ? `（共 ${callCount} 个并发调用）` : ''}`
-      : (paused ? '等待 AI 恢复…' : '正在准备浏览器操作…')
+      ? `${uiText('工具：', 'Tool: ')}${activity.tool}${callCount > 1 ? uiText(`（共 ${callCount} 个并发调用）`, ` (${callCount} concurrent calls)`) : ''}`
+      : (paused ? uiText('等待 AI 恢复…', 'Waiting for AI to resume…') : uiText('正在准备浏览器操作…', 'Preparing browser action…'))
   }
   renderAgentCallList(activity, paused)
   if (agentActivityAction) {
-    agentActivityAction.textContent = paused ? '恢复' : '中断'
-    agentActivityAction.title = paused ? '立即恢复 AI 的浏览器操作' : '立即中断 AI 的后续浏览器操作'
+    agentActivityAction.textContent = paused ? t('resume') : t('interrupt')
+    agentActivityAction.title = paused ? uiText('立即恢复 AI 的浏览器操作', 'Resume AI browser actions now') : uiText('立即中断 AI 的后续浏览器操作', 'Interrupt further AI browser actions now')
   }
 
   const updateCountdown = (): void => {
@@ -523,8 +527,8 @@ function renderAgentActivity(): void {
     const remaining = resumeAt ? Math.max(0, Math.ceil((resumeAt - Date.now()) / 1000)) : 0
     if (agentActivityDetail) {
       agentActivityDetail.textContent = paused
-        ? remaining > 0 ? `已中断，${remaining} 秒后自动继续` : '已中断，等待自动继续…'
-        : '浏览器由 AI 控制'
+        ? remaining > 0 ? uiText(`已中断，${remaining} 秒后自动继续`, `Interrupted; continuing in ${remaining}s`) : uiText('已中断，等待自动继续…', 'Interrupted; waiting to continue…')
+        : uiText('浏览器由 AI 控制', 'Browser controlled by AI')
     }
     if (remaining <= 0 && agentActivityTimer) {
       clearInterval(agentActivityTimer)
@@ -557,8 +561,12 @@ function renderToolbar(): void {
   agentPill.classList.toggle('waiting', waiting)
   agentPill.classList.toggle('disconnected', !connected && !waiting)
   agentPill.textContent = statusText
-  agentPill.title = `${state.connectionMessage}。点击打开“连接 AI 客户端”设置。`
-  agentPill.setAttribute('aria-label', `${statusText}。点击打开连接设置`)
+  agentPill.title = connected
+    ? uiText(`${state.agentVerifiedCount} 个 MCP 客户端已验证连接。点击打开 AI 客户端连接设置。`, `${state.agentVerifiedCount} MCP client(s) verified. Click to open AI client connection settings.`)
+    : waiting
+      ? uiText(state.agentCount > 0 ? `${state.agentCount} 个 MCP 桥已认证，等待 AI 首次调用。点击打开设置。` : '等待 AI 客户端连接。点击打开连接设置。', state.agentCount > 0 ? `${state.agentCount} MCP bridge(s) authenticated; waiting for the first AI call. Click to open settings.` : 'Waiting for an AI client connection. Click to open connection settings.')
+      : uiText('Agent 服务未连接。请打开连接设置检查服务状态。', 'Agent service is disconnected. Open connection settings to check its status.')
+  agentPill.setAttribute('aria-label', activeLocale === 'en-US' ? `${statusText}. Click to open connection settings` : `${statusText}。点击打开连接设置`)
   agentStop.textContent = state.agentInterrupted ? t('resume') : t('interrupt')
   agentStop.disabled = !connected && !state.agentInterrupted && !state.agentActivity?.active
    agentStop.classList.toggle('active', state.agentInterrupted)
@@ -578,26 +586,26 @@ function renderApprovals(): void {
     const isPermission = item.kind === 'permission'
     const title = document.createElement('div')
     title.className = 'approval-title'
-    title.textContent = isPermission ? '网站请求设备权限' : isOp ? 'Agent 请求执行高危操作' : '需要你亲自填写敏感信息'
+    title.textContent = isPermission ? uiText('网站请求设备权限', 'Website requests device permission') : isOp ? uiText('Agent 请求执行高危操作', 'Agent requests a high-risk action') : uiText('需要你亲自填写敏感信息', 'Sensitive information requires your input')
     const meta = document.createElement('div')
     meta.className = 'approval-meta'
-    meta.textContent = `网站：${item.site} · 标签：${item.tabTitle} · 操作：${item.fieldLabel}`
+    meta.textContent = `${uiText('网站：', 'Site: ')}${item.site} · ${uiText('标签：', 'Tab: ')}${item.tabTitle} · ${uiText('操作：', 'Action: ')}${item.fieldLabel}`
     const help = document.createElement('div')
     help.className = 'approval-help'
     help.textContent = isPermission
-      ? (item.detail || '允许后该站点仅在本次浏览器会话内可使用此权限；拒绝则保持阻断。')
+      ? (item.detail || uiText('允许后该站点仅在本次浏览器会话内可使用此权限；拒绝则保持阻断。', 'After allowing, this site may use the permission only in this browser session; denying keeps it blocked.'))
       : isOp
-        ? (item.detail || 'Agent 即将执行此操作。请确认后点“允许”，拒绝则中止该步骤。')
-        : '请直接在网页输入框中填写内容；敏感内容不会由 Agent 写入或回传。填写完成后再点“允许继续”。'
+        ? (item.detail || uiText('Agent 即将执行此操作。请确认后点“允许”，拒绝则中止该步骤。', 'The Agent is about to perform this action. Confirm with “Allow”; denying stops the step.'))
+        : uiText('请直接在网页输入框中填写内容；敏感内容不会由 Agent 写入或回传。填写完成后再点“允许继续”。', 'Enter the value directly in the webpage; sensitive content is never written or returned by the Agent. Select “Continue” when finished.')
     const actions = document.createElement('div')
     actions.className = 'approval-actions'
     const deny = document.createElement('button')
     deny.className = 'approval-deny'
-    deny.textContent = '拒绝'
+    deny.textContent = uiText('拒绝', 'Deny')
     deny.addEventListener('click', () => void window.aa.decideApproval(item.id, false))
     const allow = document.createElement('button')
     allow.className = 'approval-allow'
-    allow.textContent = isOp || isPermission ? '允许' : '允许继续'
+    allow.textContent = isOp || isPermission ? uiText('允许', 'Allow') : uiText('允许继续', 'Continue')
     allow.addEventListener('click', () => void window.aa.decideApproval(item.id, true))
     actions.append(deny, allow)
     approvalPanel.append(title, meta, help, actions)
@@ -610,7 +618,7 @@ function renderFeed(): void {
   if (!actions.length) {
     const empty = document.createElement('div')
     empty.className = 'empty-feed'
-    empty.textContent = '暂无 Agent 操作记录'
+    empty.textContent = uiText('暂无 Agent 操作记录', 'No Agent activity yet')
     feedList.replaceChildren(empty)
     return
   }
@@ -651,10 +659,10 @@ function formatBytes(n: number): string {
 
 function downloadStateLabel(s: string): string {
   switch (s) {
-    case 'progressing': return '下载中'
-    case 'completed': return '完成'
-    case 'cancelled': return '已取消'
-    case 'interrupted': return '已中断'
+    case 'progressing': return uiText('下载中', 'Downloading')
+    case 'completed': return uiText('完成', 'Completed')
+    case 'cancelled': return uiText('已取消', 'Cancelled')
+    case 'interrupted': return uiText('已中断', 'Interrupted')
     default: return s
   }
 }
@@ -665,10 +673,10 @@ function renderDownloads(): void {
   const hasActive = items.some((d) => d.state === 'progressing')
   if (btnDownloads) {
     btnDownloads.classList.toggle('has-active', hasActive)
-    btnDownloads.title = items.length ? `下载（${items.length}）` : '下载'
+    btnDownloads.title = items.length ? uiText(`下载（${items.length}）`, `Downloads (${items.length})`) : t('downloads')
   }
   if (!items.length) {
-    dlList.innerHTML = '<div class="empty-feed">暂无下载记录</div>'
+    dlList.innerHTML = `<div class="empty-feed">${uiText('暂无下载记录', 'No downloads yet')}</div>`
     return
   }
   dlList.innerHTML = ''
@@ -708,23 +716,23 @@ function renderDownloads(): void {
     actions.className = 'dl-actions'
     const open = document.createElement('button')
     open.className = 'dl-act'
-    open.textContent = '打开'
+    open.textContent = uiText('打开', 'Open')
     open.addEventListener('click', () => void window.aa.downloadOpen(d.id))
     const show = document.createElement('button')
     show.className = 'dl-act'
-    show.textContent = '在文件夹中显示'
+    show.textContent = uiText('在文件夹中显示', 'Show in folder')
     show.addEventListener('click', () => void window.aa.downloadShow(d.id))
     actions.append(open, show)
     if (d.state === 'progressing') {
       const cancel = document.createElement('button')
       cancel.className = 'dl-act dl-act-danger'
-      cancel.textContent = '取消'
+      cancel.textContent = uiText('取消', 'Cancel')
       cancel.addEventListener('click', () => void window.aa.downloadCancel(d.id))
       actions.appendChild(cancel)
     } else {
       const retry = document.createElement('button')
       retry.className = 'dl-act'
-      retry.textContent = '重试'
+      retry.textContent = uiText('重试', 'Retry')
       retry.addEventListener('click', () => void window.aa.downloadRetry(d.id))
       actions.appendChild(retry)
     }
@@ -736,6 +744,7 @@ function renderDownloads(): void {
 
 function hideSuggest(): void {
   if (suggestPanel) suggestPanel.hidden = true
+  omnibox.removeAttribute('aria-activedescendant')
 }
 
 function renderSuggest(items: HistoryEntry[]): void {
@@ -745,12 +754,23 @@ function renderSuggest(items: HistoryEntry[]): void {
     return
   }
   suggestList.innerHTML = ''
-  for (const it of items) {
+  for (const [index, it] of items.entries()) {
     const el = document.createElement('div')
     el.className = 'suggest-item'
+    el.id = `suggestion-${index}`
+    el.setAttribute('role', 'option')
+    el.setAttribute('aria-selected', 'false')
+    el.tabIndex = -1
     el.addEventListener('click', () => {
       void window.aa.submit(it.url)
       hideSuggest()
+    })
+    el.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault()
+        void window.aa.submit(it.url)
+        hideSuggest()
+      }
     })
     const icon = document.createElement('span')
     icon.className = 'suggest-icon'
@@ -857,12 +877,15 @@ btnCloseFeed?.addEventListener('click', () => {
 })
 
 /* ── 设置面板：连接 AI 客户端 ─────────────── */
-const CLIENT_STATUS_BADGE: Record<ClientSetupResult['status'], string> = {
-  added: '✅ 已写入',
-  updated: '✅ 已更新',
-  skipped: 'ℹ️ 已配置',
-  manual: '⚠️ 需手动',
-  error: '❌ 失败'
+function clientStatusBadge(status: ClientSetupResult['status']): string {
+  const label = {
+    added: uiText('已写入', 'Written'),
+    updated: uiText('已更新', 'Updated'),
+    skipped: uiText('已配置', 'Already configured'),
+    manual: uiText('需手动', 'Manual action'),
+    error: uiText('失败', 'Failed')
+  }[status] ?? uiText('完成', 'Done')
+  return `${status === 'added' || status === 'updated' ? '✅' : status === 'skipped' ? 'ℹ️' : status === 'manual' ? '⚠️' : '❌'} ${label}`
 }
 
 function renderClients(clients: ClientDetectResult[]): void {
@@ -871,7 +894,7 @@ function renderClients(clients: ClientDetectResult[]): void {
   if (!installed.length) {
     const empty = document.createElement('span')
     empty.className = 'settings-hint'
-    empty.textContent = '未检测到已安装的 AI 客户端。安装后点「重新扫描」。'
+    empty.textContent = uiText('未检测到已安装的 AI 客户端。安装后点「重新扫描」。', 'No installed AI clients detected. Install one and select “Rescan”.')
     setClientList.replaceChildren(empty)
     setClientList.removeAttribute('aria-busy')
     if (btnClientSetup) btnClientSetup.disabled = true
@@ -891,7 +914,7 @@ function renderClients(clients: ClientDetectResult[]): void {
     name.textContent = client.name
     const badge = document.createElement('span')
     badge.className = client.configured ? 'client-pill ok' : client.outdated ? 'client-pill warn' : 'client-pill'
-    badge.textContent = client.configured ? '已配置' : client.outdated ? '路径待修复' : '未配置'
+    badge.textContent = client.configured ? uiText('已配置', 'Configured') : client.outdated ? uiText('路径待修复', 'Path needs repair') : uiText('未配置', 'Not configured')
     label.append(checkbox, name, badge)
     fragment.appendChild(label)
   }
@@ -905,12 +928,12 @@ function renderClients(clients: ClientDetectResult[]): void {
 async function refreshClients(): Promise<void> {
   if (!setClientList || !btnClientSetup) return
   setClientList.setAttribute('aria-busy', 'true')
-  setClientList.textContent = '正在扫描已安装的 AI 客户端…'
+  setClientList.textContent = t('scanningClients')
   btnClientSetup.disabled = true
   try {
     renderClients(await window.aa.clientsDetect())
   } catch (err) {
-    setClientList.textContent = `扫描失败：${err instanceof Error ? err.message : String(err)}`
+    setClientList.textContent = `${uiText('扫描失败：', 'Scan failed: ')}${err instanceof Error ? err.message : String(err)}`
     setClientList.removeAttribute('aria-busy')
   }
 }
@@ -927,22 +950,22 @@ btnClientSetup?.addEventListener('click', async () => {
     .map((input) => input.dataset['id'] ?? '')
     .filter(Boolean)
   if (!ids.length) {
-    if (setClientResult) setClientResult.textContent = '请先勾选要接入的客户端。'
+    if (setClientResult) setClientResult.textContent = uiText('请先勾选要接入的客户端。', 'Select at least one client to connect.')
     return
   }
   btnClientSetup.disabled = true
   btnClientSetup.setAttribute('aria-busy', 'true')
-  if (setClientResult) setClientResult.textContent = '正在写入接入配置…'
+  if (setClientResult) setClientResult.textContent = uiText('正在写入接入配置…', 'Writing connection configuration…')
   try {
     const results = await window.aa.clientsSetup(ids)
     if (setClientResult) {
       setClientResult.textContent = results.length
-        ? results.map((r) => `${CLIENT_STATUS_BADGE[r.status] ?? '完成'} ${r.name} — ${r.message}`).join('　')
-        : '没有可写入的客户端。'
+        ? results.map((r) => `${clientStatusBadge(r.status)} ${r.name} — ${r.message}`).join('　')
+        : uiText('没有可写入的客户端。', 'No clients available to configure.')
     }
     await refreshClients()
   } catch (err) {
-    if (setClientResult) setClientResult.textContent = `写入失败：${err instanceof Error ? err.message : String(err)}`
+    if (setClientResult) setClientResult.textContent = `${uiText('写入失败：', 'Write failed: ')}${err instanceof Error ? err.message : String(err)}`
   } finally {
     btnClientSetup.removeAttribute('aria-busy')
   }
@@ -968,11 +991,15 @@ window.addEventListener('online', () => { void window.aa.updateWake() })
 /* ── 设置面板 ─────────────────────── */
 async function openSettings(): Promise<void> {
   if (!settingsModal) return
+  if (settingsModal.hidden) {
+    settingsReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : btnSettings
+  }
   hideSuggest()
   if (dlPanel) dlPanel.hidden = true
   if (feedDrawer) feedDrawer.hidden = true
   await window.aa.settingsOpen(true)
   settingsModal.hidden = false
+  document.getElementById('btn-close-settings')?.focus()
   if (settingsBody) settingsBody.scrollTop = 0
   if (settingsSections[0]) setActiveSettingsSection(settingsSections[0].id)
   if (settingsStatus) settingsStatus.textContent = ''
@@ -1009,10 +1036,12 @@ async function openSettings(): Promise<void> {
   }
   if (setAgentInfo) {
     if (agent) {
-      setAgentInfo.textContent = `MCP 桥：${agent.clientCount} 个 · 已验证调用：${agent.verifiedClientCount} 个 · 端口 ${agent.port} · 发现文件 ${agent.discoveryFile}`
-      setAgentInfo.title = `token: ${agent.token}`
+      setAgentInfo.textContent = activeLocale === 'en-US'
+        ? `MCP bridge: ${agent.clientCount} · verified calls: ${agent.verifiedClientCount} · port ${agent.port} · discovery file ${agent.discoveryFile}`
+        : `MCP 桥：${agent.clientCount} 个 · 已验证调用：${agent.verifiedClientCount} 个 · 端口 ${agent.port} · 发现文件 ${agent.discoveryFile}`
+      setAgentInfo.removeAttribute('title')
     } else {
-      setAgentInfo.textContent = 'Agent 服务未启动'
+      setAgentInfo.textContent = uiText('Agent 服务未启动', 'Agent service is not running')
     }
   }
   void refreshClients()
@@ -1024,6 +1053,9 @@ function closeSettings(): void {
   if (activeLocale !== savedLocale) applyLocale(savedLocale)
   if (activeThemeSetting !== savedThemeSetting) applyTheme(savedThemeSetting)
   void window.aa.settingsOpen(false)
+  const returnFocus = settingsReturnFocus
+  settingsReturnFocus = null
+  if (returnFocus && document.contains(returnFocus)) returnFocus.focus()
 }
 btnSettings?.addEventListener('click', () => {
   if (settingsModal?.hidden) void openSettings()
@@ -1154,8 +1186,13 @@ omnibox.addEventListener('keydown', (e) => {
   }
 })
 function selectSuggest(el: HTMLElement): void {
-  suggestList?.querySelectorAll('.suggest-item').forEach((x) => x.classList.remove('selected'))
+  suggestList?.querySelectorAll<HTMLElement>('.suggest-item').forEach((x) => {
+    x.classList.remove('selected')
+    x.setAttribute('aria-selected', 'false')
+  })
   el.classList.add('selected')
+  el.setAttribute('aria-selected', 'true')
+  omnibox.setAttribute('aria-activedescendant', el.id)
   const u = el.querySelector('.suggest-url')?.textContent
   if (u) {
     omnibox.value = u
@@ -1174,6 +1211,20 @@ window.aa.onFocusOmnibox(() => {
 /* 键盘快捷键（chrome UI 焦点时） */
 window.addEventListener('keydown', (e) => {
   const ctrl = e.ctrlKey || e.metaKey
+  const modal = settingsModal
+  if (modal && !modal.hidden && e.key === 'Tab') {
+    const focusable = Array.from(modal.querySelectorAll<HTMLElement>('button, input, select, textarea, [tabindex]:not([tabindex="-1"])'))
+      .filter((element) => !element.hidden && element.getAttribute('aria-hidden') !== 'true' && element.offsetParent !== null)
+    if (focusable.length) {
+      const current = focusable.indexOf(document.activeElement as HTMLElement)
+      const next = e.shiftKey
+        ? focusable[(current <= 0 ? focusable.length : current) - 1]
+        : focusable[(current + 1) % focusable.length]
+      e.preventDefault()
+      next?.focus()
+    }
+    return
+  }
   if (e.key === 'Escape') {
     hideSuggest()
     if (dlPanel) dlPanel.hidden = true

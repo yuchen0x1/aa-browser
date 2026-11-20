@@ -73,7 +73,6 @@ export interface UiState {
   /** 已成功调用 browser_tabs 的 MCP 客户端数；仅令牌握手不计为已验证连接 */
   agentVerifiedCount: number
   bridgeState: 'connected' | 'waiting' | 'disconnected'
-  connectionMessage: string
   pendingApprovals: PendingApprovalInfo[]
   agentInterrupted: boolean
   /** Agent 工具调用活动状态，供外壳显示操作中的高亮/状态提示。 */
@@ -157,7 +156,6 @@ export interface SettingsView {
 /** 本地 Agent 服务连接信息（设置面板展示） */
 export interface AgentInfo {
   port: number
-  token: string
   version: string
   discoveryFile: string
   /** 已通过本机令牌认证的 MCP 桥数量 */

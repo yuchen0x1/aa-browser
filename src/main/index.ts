@@ -49,7 +49,6 @@ let agentServer: AgentServer | null = null
 let agentCount = 0
 let agentVerifiedCount = 0
 let bridgeState: UiState['bridgeState'] = 'waiting'
-let connectionMessage = '等待 MCP 桥启动并连接'
 let agentActivity: NonNullable<UiState['agentActivity']> = { active: false, paused: false }
 let settingsOpen = false
 let overlayHeight = 0
@@ -128,7 +127,6 @@ function pushState(): void {
     agentCount,
     agentVerifiedCount,
     bridgeState,
-    connectionMessage,
     pendingApprovals: approvals.list(),
     agentInterrupted: approvals.isInterrupted(),
     agentActivity,
@@ -288,13 +286,26 @@ function installPageContextMenu(wc: Electron.WebContents): void {
   })
 }
 
+/** 外壳 UI 使用的解析后主题（与渲染层 resolveUiTheme 保持一致）。 */
+function resolvedTheme(): 'light' | 'dark' {
+  const setting = getSettingsStore().get().theme
+  return setting === 'dark' || (setting === 'system' && nativeTheme.shouldUseDarkColors) ? 'dark' : 'light'
+}
+
 /** 原生标题栏覆盖层不受页面 CSS 控制，必须单独跟随主题设置。 */
 function titleBarColors(): { color: string; symbolColor: string } {
-  const setting = getSettingsStore().get().theme
-  const dark = setting === 'dark' || (setting === 'system' && nativeTheme.shouldUseDarkColors)
-  return dark
-    ? { color: '#1b1c21', symbolColor: '#d7d8db' }
+  return resolvedTheme() === 'dark'
+    ? { color: '#0a0b10', symbolColor: '#e8eeec' }
     : { color: '#ebf1f4', symbolColor: '#1d2a2f' }
+}
+
+/** 把当前主题同步给所有内部页（新标签页）。外部网页不会被注入或读取。 */
+function syncInternalTheme(): void {
+  const theme = resolvedTheme()
+  tabManager?.forEachWebView((wc) => {
+    if (wc.getURL() !== newtabUrl()) return
+    void wc.executeJavaScript(`window.__aaApplyTheme && window.__aaApplyTheme(${JSON.stringify(theme)})`).catch(() => {})
+  })
 }
 
 function applyTitleBarOverlay(): void {
@@ -321,7 +332,10 @@ function createWindow(): void {
     },
     title: 'Aa Browser'
   })
-  nativeTheme.on('updated', applyTitleBarOverlay)
+  nativeTheme.on('updated', () => {
+    applyTitleBarOverlay()
+    syncInternalTheme()
+  })
   applyTitleBarOverlay()
 
   // chrome UI 加载完成后再显示窗口，避免白闪（见下方 chromeView 创建处）
@@ -388,7 +402,6 @@ function registerIpc(): void {
       agentCount,
       agentVerifiedCount,
       bridgeState,
-      connectionMessage,
       pendingApprovals: approvals.list(),
       agentInterrupted: approvals.isInterrupted(),
     agentActivity,
@@ -549,12 +562,20 @@ function registerIpc(): void {
   })
   ipcMain.handle('aa:settings-set', (event, patch: unknown) => {
     return guard(event, null, () => {
-      const result = getSettingsStore().set((patch ?? {}) as Record<string, unknown>)
+      let result: ReturnType<ReturnType<typeof getSettingsStore>['set']>
+      try {
+        result = getSettingsStore().set((patch ?? {}) as Record<string, unknown>)
+      } catch {
+        return null
+      }
       updater?.refreshSettings()
       // 关闭恢复时立刻删除旧记录；重新开启时立即记录当前标签，避免下次启动恢复过期页面。
       if (!result.restoreSession) getSessionStore().clear()
       else if ((patch as Record<string, unknown> | null)?.['restoreSession'] === true) flushSessionRecord?.()
-      if ((patch as Record<string, unknown> | null)?.['theme'] !== undefined) applyTitleBarOverlay()
+      if ((patch as Record<string, unknown> | null)?.['theme'] !== undefined) {
+        applyTitleBarOverlay()
+        syncInternalTheme()
+      }
       pushState()
       return result
     })
@@ -566,7 +587,17 @@ function registerIpc(): void {
     })
   })
   ipcMain.handle('aa:agent-info', (event) => {
-    return guard(event, null, () => agentServer?.info() ?? null)
+    return guard(event, null, () => {
+      const info = agentServer?.info()
+      if (!info) return null
+      return {
+        port: info.port,
+        version: info.version,
+        discoveryFile: info.discoveryFile,
+        clientCount: info.clientCount,
+        verifiedClientCount: info.verifiedClientCount
+      }
+    })
   })
   ipcMain.handle('aa:update-check', async (event) => {
     if (!isTrustedSender(event)) return updater?.getState() ?? null
@@ -652,6 +683,11 @@ app.whenReady().then(() => {
   tabManager.onNavigate = (url, title) => getHistoryStore().add(url, title)
   tabManager.getAllowedSites = () => getSettingsStore().get().allowedSites
   tabManager.getDefaultIsolated = () => getSettingsStore().get().isolatedSessions
+  tabManager.applyInternalTheme = (wc) => {
+    if (wc.getURL() !== newtabUrl()) return
+    const theme = resolvedTheme()
+    void wc.executeJavaScript(`window.__aaApplyTheme && window.__aaApplyTheme(${JSON.stringify(theme)})`).catch(() => {})
+  }
   tabManager.onSession = (ses) => {
     applyPermissionPolicy(ses, { requestApproval: (meta) => approvals.request(meta) })
     getDownloadTracker().attach(ses)
@@ -745,11 +781,6 @@ app.whenReady().then(() => {
       agentCount = n
       agentVerifiedCount = verifiedCount
       bridgeState = n > 0 ? 'connected' : 'waiting'
-      connectionMessage = verifiedCount > 0
-        ? `${verifiedCount} 个 MCP 客户端已成功调用 browser_tabs，连接已验证`
-        : n > 0
-          ? `${n} 个 MCP 桥已通过本机认证，等待 AI 首次调用 browser_tabs`
-          : '等待 AI 客户端连接 MCP 桥'
       pushState()
     },
     VERSION,
@@ -760,16 +791,11 @@ app.whenReady().then(() => {
     }
   )
   void agentServer.start().then(() => {
-    if (agentCount === 0) {
-      bridgeState = 'waiting'
-      const discoveryFile = process.env['AA_BROWSER_CONNECTION_FILE'] || path.join(app.getPath('home'), '.aabrowser', 'connection.json')
-      connectionMessage = `本地服务已启动，等待 AI 客户端连接并调用 browser_tabs；服务发现文件：${discoveryFile}`
-    }
+    if (agentCount === 0) bridgeState = 'waiting'
     pushState()
     console.log('[aa-browser] agent server ready')
-  }).catch((err: unknown) => {
+  }).catch(() => {
     bridgeState = 'disconnected'
-    connectionMessage = `本地 Agent 服务启动失败：${err instanceof Error ? err.message : String(err)}`
     pushState()
   })
 })

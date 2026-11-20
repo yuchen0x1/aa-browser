@@ -38,6 +38,7 @@ process.env['AA_BROWSER_DOWNLOAD_DIR'] = SMOKE_DOWNLOAD_DIR
 const TEST_PAGE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'test-page.html')
 let appChild = null
 let mcpClient = null
+let appChildStopping = false
 let testServer = null
 let testPageServer = null
 let testTmpFiles = []
@@ -97,6 +98,7 @@ async function ensureAppRunning() {
       /* 忽略：断言阶段会报告 */
     }
   }
+  appChildStopping = false
   const child = spawn(electronPath, packagedApp ? [] : ['.'], {
     cwd: ROOT,
     env: (() => {
@@ -120,7 +122,9 @@ async function ensureAppRunning() {
     stdio: 'inherit'
   })
   child.on('error', (err) => console.error('[smoke] Electron launch failed:', err.message))
-  child.on('exit', (code) => console.error(`[smoke] isolated Electron exited: ${code}`))
+  child.on('exit', (code) => {
+    if (!appChildStopping && code !== 0) console.error(`[smoke] isolated Electron exited unexpectedly: ${code}`)
+  })
   appChild = child
   const deadline = Date.now() + 25000
   while (Date.now() < deadline) {
@@ -1059,8 +1063,13 @@ async function main() {
 
   // 只关闭由本脚本启动的隔离实例，并清理专属临时目录。
   if (spawned) {
+    appChildStopping = true
     try { process.kill(info.pid) } catch {}
-    await sleep(800)
+    if (appProc) await new Promise((resolve) => {
+      if (appProc.exitCode !== null) return resolve()
+      appProc.once('exit', resolve)
+      setTimeout(resolve, 2000).unref()
+    })
     try { fs.rmSync(SMOKE_DIR, { recursive: true, force: true }) } catch {}
   }
 

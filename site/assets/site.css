@@ -863,7 +863,7 @@ main {
 .mock__nav {
   display: flex;
   gap: 8px;
-  color: #6f7d7a;
+  color: #8b9b97;
   font-size: 11px;
   padding: 0 2px;
 }
@@ -895,7 +895,7 @@ main {
 .mock__tools {
   display: flex;
   gap: 7px;
-  color: #5d6b68;
+  color: #84948f;
   font-size: 10px;
 }
 
@@ -941,7 +941,7 @@ main {
 .fake-search__links {
   display: flex;
   gap: 9px;
-  color: #6d7b78;
+  color: #8b9b97;
   font-size: 8.5px;
 }
 
@@ -990,7 +990,7 @@ main {
   display: flex;
   gap: 8px;
   margin-top: 9px;
-  color: #5f6d6a;
+  color: #84948f;
   font-size: 8px;
   font-family: var(--font-mono);
 }
@@ -1005,7 +1005,7 @@ main {
   display: flex;
   align-items: center;
   gap: 5px;
-  color: #6f817d;
+  color: #8fa19c;
   font-size: 8px;
   font-family: var(--font-mono);
 }
@@ -1027,7 +1027,7 @@ main {
 
 .fake-result__snippet {
   margin-top: 2px;
-  color: #687672;
+  color: #8b9b97;
   font-size: 8.5px;
   line-height: 1.55;
 }
