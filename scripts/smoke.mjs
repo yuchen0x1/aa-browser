@@ -80,13 +80,12 @@ async function ensureAppRunning() {
   console.log('正在启动隔离的测试实例…')
   const electronPath = packagedApp || require('electron')
   fs.mkdirSync(SMOKE_DIR, { recursive: true })
-  if (packagedApp) {
-    fs.writeFileSync(path.join(SMOKE_DIR, 'settings.json'), JSON.stringify({ autoUpdate: false }))
-    if (process.platform === 'linux') {
-      fs.mkdirSync(path.dirname(bridgePath), { recursive: true })
-      fs.writeFileSync(bridgePath, 'throw new Error("The previous bridge was not refreshed")')
-    }
+  if (packagedApp && process.platform === 'linux') {
+    fs.mkdirSync(path.dirname(bridgePath), { recursive: true })
+    fs.writeFileSync(bridgePath, 'throw new Error("The previous bridge was not refreshed")')
   }
+  // CI runners resolve `auto` to en-US; pin zh-CN so the wizard assertions stay deterministic.
+  fs.writeFileSync(path.join(SMOKE_DIR, 'settings.json'), JSON.stringify({ autoUpdate: false, locale: 'zh-CN' }))
   // 在应用启动前布置"上次异常退出遗留"的分区目录，
   // 用于验证启动阶段的分区清理（见 [18]）。
   const partsDir = path.join(SMOKE_DIR, 'profile', 'Partitions')
