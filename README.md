@@ -32,9 +32,9 @@
 
 <!-- github-release:start -->
 
-**[v0.6.5](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.6.5)** · 2026-11-20
+**[v0.6.6](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.6.6)** · 2026-11-20
 
-本版统一外壳与新标签页主题，完善英文界面与键盘可访问性；新增独立 lint 和 125% / 150% / 200% DPI 显示矩阵，并清理 Electron 测试噪声。MCP 工具集保持 42 个。
+本版修复双主题文字对比度、键盘焦点连续性、最小窗口抽屉裁切和官网手机首屏溢出；补齐基础设计 Token，新增桌面 UI/UX 38 项与官网 UI 44 项回归，DPI 覆盖 100% / 125% / 150% / 200%。MCP 工具集保持 42 个。
 
 [全部发行记录](https://github.com/yuchen0x1/aa-browser/releases)
 

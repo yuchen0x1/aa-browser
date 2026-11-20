@@ -2,6 +2,14 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
+## v0.6.6 — 2026-11-20
+
+- 修复设置禁用控件造成 Tab 焦点卡住、状态刷新丢失按钮焦点，以及方向键切换标签后焦点进入网页的问题；补齐 Left / Right / Home / End 与边界切换。
+- 修复浅色下载完成状态、深色新标签提示及官网代码文字对比度；完善设置控件标签、焦点可见性和历史建议自动滚动。
+- 修复最小窗口多提示条叠加时抽屉裁切，以及官网 390px 首屏横溢和移动导航断点不一致。
+- 补齐基础尺寸、字体、动效 Token；新增桌面 UI/UX 38 项、官网 UI 44 项回归并接入 CI，DPI 矩阵扩展为 100% / 125% / 150% / 200%。
+- MCP 工具保持 42 个，既有设置、历史、Cookie、下载及会话数据无需迁移；跨平台打包验证以本次 CI 结果为准。
+
 ## v0.6.5 — 2026-11-20
 
 - 统一外壳与新标签页主题、完善英文文案和键盘焦点；发行说明与错误详情标明来源语言。

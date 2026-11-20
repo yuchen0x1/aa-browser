@@ -141,8 +141,9 @@
       }
     });
 
-    window.addEventListener("resize", () => {
-      if (window.innerWidth > 860) setNavOpen(false);
+    const compactNav = window.matchMedia("(max-width: 1080px)");
+    compactNav.addEventListener("change", (event) => {
+      if (!event.matches) setNavOpen(false);
     });
   }
 

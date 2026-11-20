@@ -15,6 +15,20 @@
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Microsoft YaHei', sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace;
 
+  /* 主题无关的尺寸与节奏；切换主题时保持布局稳定。 */
+  --radius-control: 6px;
+  --radius-item: 8px;
+  --radius-panel: 12px;
+  --space-xs: 4px;
+  --space-sm: 8px;
+  --space-md: 12px;
+  --space-lg: 16px;
+  --font-size-ui: 13px;
+  --font-size-control: 12px;
+  --duration-fast: 150ms;
+  --duration-normal: 200ms;
+  --opacity-disabled: 0.45;
+
   /* ── 语义 Token：暗色（默认）映射 ────────────────────────
      组件只引用语义 Token；主题差异全部在两个 :root 块内完成。 */
   --bg-primary: #111619;
@@ -148,7 +162,7 @@ body {
   background: transparent;
   font-family: var(--font-sans);
   color: var(--text-main);
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   user-select: none;
   -webkit-font-smoothing: antialiased;
 }
@@ -167,7 +181,7 @@ body {
   display: flex;
   align-items: flex-end;
   padding: 6px 12px 0 12px;
-  gap: 4px;
+  gap: var(--space-xs);
   background: var(--surface-tabstrip);
   border-bottom: 1px solid var(--border-item);
   -webkit-app-region: drag;
@@ -191,7 +205,7 @@ body {
 .tab {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-sm);
   height: 33px;
   min-width: 110px;
   max-width: 210px;
@@ -205,7 +219,7 @@ body {
   -webkit-app-region: no-drag;
   flex: none;
   position: relative;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: all var(--duration-normal) cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .tab:focus-visible,
@@ -281,7 +295,7 @@ textarea:focus-visible {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 12px;
+  font-size: var(--font-size-control);
   font-weight: 500;
   letter-spacing: 0.2px;
 }
@@ -318,12 +332,17 @@ textarea:focus-visible {
   flex: none;
   opacity: 0;
   font-size: 14px;
-  transition: all 0.15s ease;
+  transition: all var(--duration-fast) ease;
 }
 
 .tab:hover .close,
-.tab.active .close {
+.tab.active .close,
+.tab:focus-within .close {
   opacity: 0.65;
+}
+
+.tab .close:focus-visible {
+  opacity: 1;
 }
 
 .tab .close:hover {
@@ -347,7 +366,7 @@ textarea:focus-visible {
   justify-content: center;
   -webkit-app-region: no-drag;
   flex: none;
-  transition: all 0.2s ease;
+  transition: all var(--duration-normal) ease;
 }
 
 #btn-newtab:hover {
@@ -385,14 +404,14 @@ textarea:focus-visible {
   border: 1px solid transparent;
   background: transparent;
   color: var(--text-muted);
-  border-radius: 8px;
+  border-radius: var(--radius-item);
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
   -webkit-app-region: no-drag;
   flex: none;
-  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: all var(--duration-normal) cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .navbtn:hover {
@@ -421,7 +440,7 @@ textarea:focus-visible {
   height: 32px;
   padding: 0 14px;
   background: var(--surface-omnibox);
-  border-radius: 8px;
+  border-radius: var(--radius-item);
   border: 1px solid var(--border-panel);
   -webkit-app-region: no-drag;
   margin: 0 6px;
@@ -496,7 +515,7 @@ textarea:focus-visible {
 
 .suggest-icon {
   color: var(--accent-ink);
-  font-size: 12px;
+  font-size: var(--font-size-control);
   flex: none;
   margin-top: 2px;
 }
@@ -525,13 +544,13 @@ textarea:focus-visible {
   border: 1px solid var(--border-control);
   cursor: pointer;
   padding: 0 11px;
-  border-radius: 8px;
+  border-radius: var(--radius-item);
   background: var(--pill-idle-bg);
   color: var(--pill-idle-ink);
   font: 650 13px/1 var(--font-sans);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-sm);
   white-space: nowrap;
   -webkit-app-region: no-drag;
   flex: none;
@@ -603,7 +622,7 @@ textarea:focus-visible {
   font-weight: 600;
   cursor: pointer;
   -webkit-app-region: no-drag;
-  transition: all 0.2s ease;
+  transition: all var(--duration-normal) ease;
 }
 
 .agent-stop:hover {
@@ -712,7 +731,7 @@ textarea:focus-visible {
 .agent-activity-status {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-sm);
   color: var(--text-muted);
   font-size: 11px;
   letter-spacing: 0.2px;
@@ -741,10 +760,10 @@ textarea:focus-visible {
 .agent-call-row {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-sm);
   padding: 5px 8px;
   border: 1px solid var(--border-item);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   background: var(--surface-item);
   font-size: 11px;
 }
@@ -819,7 +838,7 @@ textarea:focus-visible {
   background: var(--surface-panel);
   backdrop-filter: blur(20px);
   border: 1px solid var(--warning-border);
-  border-radius: 12px;
+  border-radius: var(--radius-panel);
   box-shadow: var(--shadow-panel), 0 0 20px var(--warning-glow);
   color: var(--text-main);
   animation: slideDown 0.25s cubic-bezier(0.16, 1, 0.3, 1);
@@ -832,7 +851,7 @@ textarea:focus-visible {
   color: var(--text-title);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-sm);
 }
 .approval-title::before {
   content: '⚠️';
@@ -842,18 +861,18 @@ textarea:focus-visible {
 .approval-meta {
   color: var(--text-body);
   line-height: 1.6;
-  font-size: 12px;
+  font-size: var(--font-size-control);
   margin-bottom: 10px;
   padding: 8px 10px;
   background: var(--surface-code);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   border-left: 2px solid var(--warning-ink);
 }
 
 .approval-help {
   color: var(--warning-ink);
   margin-bottom: 14px;
-  font-size: 12px;
+  font-size: var(--font-size-control);
   line-height: 1.5;
 }
 
@@ -868,9 +887,9 @@ textarea:focus-visible {
   border: 0;
   border-radius: 7px;
   cursor: pointer;
-  font-size: 12px;
+  font-size: var(--font-size-control);
   font-weight: 600;
-  transition: all 0.2s ease;
+  transition: all var(--duration-normal) ease;
 }
 
 .approval-allow {
@@ -902,7 +921,7 @@ textarea:focus-visible {
   background: var(--surface-panel);
   backdrop-filter: blur(24px);
   border: 1px solid var(--accent-border);
-  border-radius: 12px;
+  border-radius: var(--radius-panel);
   box-shadow: var(--shadow-panel), 0 0 24px var(--accent-soft);
   display: flex;
   flex-direction: column;
@@ -912,13 +931,13 @@ textarea:focus-visible {
 
 .drawer-header {
   height: 42px;
-  padding: 0 16px;
+  padding: 0 var(--space-lg);
   display: flex;
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid var(--border-item);
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   color: var(--text-title);
   background: linear-gradient(90deg, var(--accent-soft), transparent);
 }
@@ -926,7 +945,7 @@ textarea:focus-visible {
 .drawer-header span {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-sm);
 }
 .drawer-header span::before {
   content: '';
@@ -943,13 +962,13 @@ textarea:focus-visible {
   color: var(--text-muted);
   font-size: 18px;
   cursor: pointer;
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   width: 24px;
   height: 24px;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.15s ease;
+  transition: all var(--duration-fast) ease;
 }
 .drawer-close:hover {
   background: var(--surface-hover);
@@ -957,7 +976,7 @@ textarea:focus-visible {
 }
 
 .drawer-content {
-  padding: 12px 14px;
+  padding: var(--space-md) 14px;
   overflow-y: auto;
   max-height: 460px;
   display: flex;
@@ -967,7 +986,7 @@ textarea:focus-visible {
 
 .empty-feed {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--font-size-control);
   text-align: center;
   padding: 36px 0;
   font-style: italic;
@@ -989,7 +1008,7 @@ textarea:focus-visible {
   background: var(--surface-panel);
   backdrop-filter: blur(24px);
   border: 1px solid var(--accent-border);
-  border-radius: 12px;
+  border-radius: var(--radius-panel);
   box-shadow: var(--shadow-panel), 0 0 24px var(--accent-soft);
   display: flex;
   flex-direction: column;
@@ -1001,15 +1020,15 @@ textarea:focus-visible {
   background: var(--surface-item);
   border: 1px solid var(--border-item);
   border-left: 3px solid var(--accent-ink);
-  border-radius: 8px;
+  border-radius: var(--radius-item);
   padding: 9px 12px;
-  transition: all 0.2s ease;
+  transition: all var(--duration-normal) ease;
 }
 .dl-item.active {
   border-left-color: var(--accent-blue);
 }
 .dl-item.done {
-  border-left-color: var(--accent-green);
+  border-left-color: var(--success-ink);
 }
 
 .dl-name {
@@ -1032,7 +1051,7 @@ textarea:focus-visible {
   color: var(--accent-ink);
 }
 .dl-item.done .dl-state {
-  color: var(--accent-green);
+  color: var(--success-ink);
 }
 
 .dl-bar {
@@ -1051,7 +1070,7 @@ textarea:focus-visible {
 
 .dl-actions {
   display: flex;
-  gap: 8px;
+  gap: var(--space-sm);
   margin-top: 8px;
 }
 .dl-act {
@@ -1059,10 +1078,10 @@ textarea:focus-visible {
   border: 1px solid var(--border-control);
   background: var(--surface-hover-soft);
   color: var(--text-control);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   font-size: 11px;
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all var(--duration-fast) ease;
 }
 .dl-act:hover {
   background: var(--surface-pressed);
@@ -1162,14 +1181,14 @@ textarea:focus-visible {
   width: 100%;
   padding: 9px 10px;
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-item);
   background: transparent;
   color: var(--text-muted);
   font: inherit;
   font-size: 12.5px;
   text-align: left;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: background var(--duration-fast) ease, color var(--duration-fast) ease;
 }
 .settings-nav-item:hover {
   background: var(--surface-hover-soft);
@@ -1250,7 +1269,7 @@ textarea:focus-visible {
 .settings-section-head h3 {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-sm);
   font-size: 13.5px;
   font-weight: 650;
   color: var(--text-strong);
@@ -1273,7 +1292,7 @@ textarea:focus-visible {
   flex-direction: column;
   background: var(--surface-settings-panel);
   border: 1px solid var(--border-item);
-  border-radius: 12px;
+  border-radius: var(--radius-panel);
   overflow: hidden;
 }
 .settings-panel > .settings-group + .settings-group {
@@ -1283,7 +1302,7 @@ textarea:focus-visible {
 .settings-group {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-sm);
 }
 
 .settings-row {
@@ -1297,14 +1316,14 @@ textarea:focus-visible {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: var(--space-xs);
 }
 .settings-control {
   flex: 0 1 320px;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: var(--space-sm);
 }
 .settings-row-stack {
   flex-direction: column;
@@ -1350,12 +1369,12 @@ label.settings-label {
   padding: 6px 12px;
   background: var(--surface-input);
   border: 1px solid var(--border-control);
-  border-radius: 8px;
+  border-radius: var(--radius-item);
   color: var(--text-main);
   font-size: 12.5px;
   font-family: var(--font-sans);
   outline: none;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color var(--duration-fast) ease, box-shadow var(--duration-fast) ease;
 }
 .settings-select {
   appearance: none;
@@ -1376,7 +1395,7 @@ label.settings-label {
   min-height: 96px;
   line-height: 1.55;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--font-size-control);
 }
 
 .settings-hint {
@@ -1443,7 +1462,7 @@ label.settings-label {
   background: var(--surface-code);
   border: 1px solid var(--border-item);
   border-left: 2px solid var(--accent-ink);
-  border-radius: 8px;
+  border-radius: var(--radius-item);
   word-break: break-word;
 }
 
@@ -1458,7 +1477,7 @@ label.settings-label {
 }
 .settings-status {
   margin-right: auto;
-  font-size: 12px;
+  font-size: var(--font-size-control);
   color: var(--success-ink);
 }
 #btn-save-settings {
@@ -1477,7 +1496,7 @@ label.settings-label {
   .settings-card {
     width: 100%;
     height: 100%;
-    border-radius: 12px;
+    border-radius: var(--radius-panel);
   }
   .settings-main {
     grid-template-columns: minmax(0, 1fr);
@@ -1501,21 +1520,21 @@ label.settings-label {
 .client-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-sm);
 }
 
 .client-item {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-sm);
   padding: 8px 12px;
   background: var(--surface-hover-soft);
   border: 1px solid var(--border-panel);
   border-radius: 9px;
-  font-size: 12px;
+  font-size: var(--font-size-control);
   color: var(--text-control);
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition: border-color var(--duration-fast) ease, background var(--duration-fast) ease;
 }
 .client-item:hover {
   border-color: var(--accent-border);
@@ -1549,26 +1568,26 @@ label.settings-label {
 .settings-actions {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: var(--space-sm);
 }
 
 .settings-btn {
   padding: 7px 13px;
   border: 1px solid var(--border-control);
-  border-radius: 8px;
+  border-radius: var(--radius-item);
   background: var(--surface-hover);
   color: var(--text-control);
-  font-size: 12px;
+  font-size: var(--font-size-control);
   font-weight: 600;
   font-family: var(--font-sans);
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease;
 }
 .settings-btn:hover:not(:disabled) {
   background: var(--surface-pressed);
 }
 .settings-btn:disabled {
-  opacity: 0.45;
+  opacity: var(--opacity-disabled);
   cursor: default;
 }
 .settings-btn-primary {
@@ -1584,10 +1603,10 @@ label.settings-label {
   background: var(--surface-item);
   border: 1px solid var(--border-item);
   border-left: 3px solid var(--accent-ink);
-  border-radius: 8px;
+  border-radius: var(--radius-item);
   padding: 9px 12px;
-  font-size: 12px;
-  transition: all 0.2s ease;
+  font-size: var(--font-size-control);
+  transition: all var(--duration-normal) ease;
 }
 
 .feed-item:hover {
@@ -1631,7 +1650,7 @@ label.settings-label {
   color: var(--text-body);
   line-height: 1.45;
   word-break: break-word;
-  font-size: 12px;
+  font-size: var(--font-size-control);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1668,7 +1687,7 @@ label.settings-label {
   color: var(--text-main);
   background: var(--surface-input);
   border: 1px solid var(--border-control);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   font: inherit;
 }
 .find-bar input[aria-invalid="true"] { border-color: var(--danger-ink); }
@@ -1676,7 +1695,7 @@ label.settings-label {
   height: 30px;
   padding: 0 10px;
   border: 1px solid var(--accent-ink);
-  border-radius: 6px;
+  border-radius: var(--radius-control);
   background: var(--notice-ok-bg);
   color: var(--pill-ok-ink);
   white-space: nowrap;
@@ -1707,7 +1726,10 @@ button:focus-visible, input:focus-visible, [role="tab"]:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
-.action-feed-drawer, .download-panel { max-height: 360px; }
+.action-feed-drawer, .download-panel {
+  max-height: min(360px, max(0px, calc(var(--window-height, 100vh) - var(--page-top, 84px) - 8px)));
+}
+.drawer-header { flex-shrink: 0; }
 .drawer-content { min-height: 0; overflow-y: auto; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }

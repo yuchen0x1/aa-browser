@@ -20,6 +20,7 @@
   --text: #e8eeec;
   --muted: #a3b1ae;
   --dim: #839390;
+  --code-secondary: #92a6a0;
 
   --mint: #78cbb9;
   --mint-bright: #a4e8d7;
@@ -1648,7 +1649,7 @@ main {
 }
 
 .mini-code .c {
-  color: #5f6f6a;
+  color: var(--code-secondary);
 }
 
 /* trust pills */
@@ -2175,11 +2176,11 @@ main {
 }
 
 .code .tok-punc {
-  color: #64736e;
+  color: var(--code-secondary);
 }
 
 .code .tok-com {
-  color: #5c6a66;
+  color: var(--code-secondary);
   font-style: italic;
 }
 
@@ -3456,7 +3457,7 @@ details.disclosure .disclosure__body p {
    ========================================================================== */
 @media (max-width: 1080px) {
   .hero__grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: 44px;
   }
 

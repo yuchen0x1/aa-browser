@@ -171,14 +171,14 @@
                   </div>
                   <div class="settings-group settings-row">
                     <div class="settings-row-text">
-                      <div id="settings-engine-label" class="settings-label">默认搜索引擎</div>
+                      <label id="settings-engine-label" class="settings-label" for="set-engine">默认搜索引擎</label>
                       <div id="settings-engine-hint" class="settings-hint">浏览器与 Agent 共用；也可直接填写自定义搜索基址。</div>
                     </div>
                     <div class="settings-control">
                       <div class="settings-select-wrap">
-                        <select id="set-engine" class="settings-select"></select>
+                        <select id="set-engine" class="settings-select" aria-describedby="settings-engine-hint"></select>
                       </div>
-                      <input id="set-engine-url" class="settings-input" type="text" placeholder="自定义搜索基址（以 = 结尾）" />
+                      <input id="set-engine-url" class="settings-input" type="text" aria-labelledby="settings-engine-label settings-engine-custom" aria-describedby="settings-engine-hint" placeholder="自定义搜索基址（以 = 结尾）" />
                     </div>
                   </div>
                 </div>
@@ -237,7 +237,7 @@
                 <div class="settings-panel">
                   <div class="settings-group settings-row">
                     <div class="settings-row-text">
-                      <div id="settings-download-dir-label" class="settings-label">下载保存目录</div>
+                      <label id="settings-download-dir-label" class="settings-label" for="set-download-dir">下载保存目录</label>
                     </div>
                     <div class="settings-control">
                       <input id="set-download-dir" class="settings-input" type="text" placeholder="留空=默认 ~/.aabrowser/downloads" />
@@ -245,10 +245,10 @@
                   </div>
                   <div class="settings-group settings-row settings-row-stack">
                     <div class="settings-row-text">
-                      <div id="settings-allowlist-label" class="settings-label">站点白名单</div>
+                      <label id="settings-allowlist-label" class="settings-label" for="set-allowed-sites">站点白名单</label>
                       <div id="settings-allowlist-hint" class="settings-hint">填写后仅允许匹配的 HTTP/HTTPS 站点。留空表示不启用白名单。支持 *.example.com 子域名匹配。</div>
                     </div>
-                    <textarea id="set-allowed-sites" class="settings-input settings-textarea" rows="4" placeholder="每行一个规则，例如：&#10;https://example.com&#10;https://*.example.org:8443"></textarea>
+                    <textarea id="set-allowed-sites" class="settings-input settings-textarea" rows="4" aria-describedby="settings-allowlist-hint" placeholder="每行一个规则，例如：&#10;https://example.com&#10;https://*.example.org:8443"></textarea>
                   </div>
                 </div>
               </section>

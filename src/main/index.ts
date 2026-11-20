@@ -134,7 +134,8 @@ function pushState(): void {
     downloads: getDownloadTracker().list(20),
     update: updater?.getState(),
     find: finder?.getState(),
-    canReopenClosed: tabManager?.canReopenClosed ?? false
+    canReopenClosed: tabManager?.canReopenClosed ?? false,
+    windowHeight: win?.getContentBounds().height
   }
   chromeView.webContents.send('aa:state', state)
 }
@@ -339,7 +340,7 @@ function createWindow(): void {
   applyTitleBarOverlay()
 
   // chrome UI 加载完成后再显示窗口，避免白闪（见下方 chromeView 创建处）
-  win.on('resize', layout)
+  win.on('resize', pushState)
   win.on('focus', () => { void updater?.checkIfDue() })
   win.on('closed', () => {
     win = null
@@ -409,7 +410,8 @@ function registerIpc(): void {
       recentActions: [...recentActions],
       update: updater?.getState(),
       find: finder?.getState(),
-      canReopenClosed: tabManager?.canReopenClosed ?? false
+      canReopenClosed: tabManager?.canReopenClosed ?? false,
+      windowHeight: win?.getContentBounds().height
     } satisfies UiState))
   })
   ipcMain.handle('aa:tab-new', (event, url?: string) => {
@@ -445,7 +447,7 @@ function registerIpc(): void {
       tabManager?.closeTab(id)
     })
   })
-  ipcMain.handle('aa:tab-select', (event, id: string) => {
+  ipcMain.handle('aa:tab-select', (event, id: string, focusPage: unknown = true) => {
     return guard(event, undefined, () => {
       const prev = tabManager?.tabs.find((t) => t.id === tabManager?.activeId)
       const next = tabManager?.get(id)
@@ -453,7 +455,8 @@ function registerIpc(): void {
       if (prev && prev.id !== id) detachTabView(prev.view)
       attachTabView(next.view)
       tabManager.selectTab(id)
-      next.view.webContents.focus()
+      if (focusPage !== false) next.view.webContents.focus()
+      else chromeView?.webContents.focus()
     })
   })
   ipcMain.handle('aa:back', (event) => {

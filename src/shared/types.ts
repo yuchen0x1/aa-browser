@@ -82,6 +82,8 @@ export interface UiState {
   update?: UpdateState
   find?: FindState
   canReopenClosed?: boolean
+  /** 原生窗口完整内容高度（外壳 WebContentsView 可能只覆盖工具栏和浮层）。 */
+  windowHeight?: number
 }
 
 export interface FindState {

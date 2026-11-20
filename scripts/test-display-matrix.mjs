@@ -5,7 +5,7 @@ import { spawn } from 'node:child_process'
 import { fitWindowToDisplay } from './display-fit.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const scales = [1.25, 1.5, 2]
+const scales = [1, 1.25, 1.5, 2]
 let failed = false
 
 // Placement rules are pure, so both the large-display and the CI small-display

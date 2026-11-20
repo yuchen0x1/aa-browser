@@ -45,7 +45,7 @@ declare global {
       find: (query: string, forward?: boolean, next?: boolean) => Promise<void>
       findClose: () => Promise<void>
       overlayHeight: (height: number) => Promise<void>
-      tabSelect: (id: string) => Promise<void>
+      tabSelect: (id: string, focusPage?: boolean) => Promise<void>
       back: () => Promise<void>
       forward: () => Promise<void>
       reload: () => Promise<void>
@@ -387,6 +387,7 @@ function renderTabs(): void {
     el.setAttribute('aria-selected', String(t.active))
     el.tabIndex = t.active ? 0 : -1
     el.dataset['tabId'] = t.id
+    el.dataset['focusKey'] = `tab:${t.id}`
 
     const fav = document.createElement('div')
     fav.className = 'favicon'
@@ -427,6 +428,7 @@ function renderTabs(): void {
 
     const close = document.createElement('button')
     close.className = 'close'
+    close.dataset['focusKey'] = `tab-close:${t.id}`
     close.title = uiText('关闭标签页 (Ctrl+W)', 'Close tab (Ctrl+W)')
     close.setAttribute('aria-label', `${uiText('关闭标签页：', 'Close tab: ')}${t.title || uiText('无标题', 'Untitled')}`)
     close.textContent = '×'
@@ -477,6 +479,7 @@ function renderAgentCallList(activity: AgentActivityState, paused: boolean): voi
     const stop = document.createElement('button')
     stop.type = 'button'
     stop.className = 'agent-call-stop'
+    stop.dataset['focusKey'] = `call-stop:${call.id}`
     stop.textContent = uiText('停止', 'Stop')
     stop.title = uiText(`只停止调用 #${call.id}`, `Stop call #${call.id} only`)
     stop.addEventListener('click', () => void window.aa.cancelAgentCall(call.id))
@@ -601,10 +604,12 @@ function renderApprovals(): void {
     actions.className = 'approval-actions'
     const deny = document.createElement('button')
     deny.className = 'approval-deny'
+    deny.dataset['focusKey'] = `approval-deny:${item.id}`
     deny.textContent = uiText('拒绝', 'Deny')
     deny.addEventListener('click', () => void window.aa.decideApproval(item.id, false))
     const allow = document.createElement('button')
     allow.className = 'approval-allow'
+    allow.dataset['focusKey'] = `approval-allow:${item.id}`
     allow.textContent = isOp || isPermission ? uiText('允许', 'Allow') : uiText('允许继续', 'Continue')
     allow.addEventListener('click', () => void window.aa.decideApproval(item.id, true))
     actions.append(deny, allow)
@@ -716,22 +721,26 @@ function renderDownloads(): void {
     actions.className = 'dl-actions'
     const open = document.createElement('button')
     open.className = 'dl-act'
+    open.dataset['focusKey'] = `download-open:${d.id}`
     open.textContent = uiText('打开', 'Open')
     open.addEventListener('click', () => void window.aa.downloadOpen(d.id))
     const show = document.createElement('button')
     show.className = 'dl-act'
+    show.dataset['focusKey'] = `download-show:${d.id}`
     show.textContent = uiText('在文件夹中显示', 'Show in folder')
     show.addEventListener('click', () => void window.aa.downloadShow(d.id))
     actions.append(open, show)
     if (d.state === 'progressing') {
       const cancel = document.createElement('button')
       cancel.className = 'dl-act dl-act-danger'
+      cancel.dataset['focusKey'] = `download-cancel:${d.id}`
       cancel.textContent = uiText('取消', 'Cancel')
       cancel.addEventListener('click', () => void window.aa.downloadCancel(d.id))
       actions.appendChild(cancel)
     } else {
       const retry = document.createElement('button')
       retry.className = 'dl-act'
+      retry.dataset['focusKey'] = `download-retry:${d.id}`
       retry.textContent = uiText('重试', 'Retry')
       retry.addEventListener('click', () => void window.aa.downloadRetry(d.id))
       actions.appendChild(retry)
@@ -807,15 +816,21 @@ function onOmniboxInput(): void {
 }
 
 function applyState(next: UiState): void {
-  const focusedTabId = (document.activeElement as HTMLElement | null)?.dataset?.['tabId']
+  // 状态流会重建列表；只恢复外壳内同一业务控件，不能抢走网页的焦点。
+  const focused = document.hasFocus() ? document.activeElement as HTMLElement | null : null
+  const focusKey = focused?.dataset['focusKey']
   state = next
+  if (typeof next.windowHeight === 'number') document.documentElement.style.setProperty('--window-height', `${next.windowHeight}px`)
   renderTabs()
-  if (focusedTabId) tabsEl.querySelector<HTMLElement>(`[data-tab-id="${CSS.escape(focusedTabId)}"]`)?.focus()
   renderToolbar()
   renderFeed()
   renderDownloads()
   renderUpdate(next.update)
   renderFind()
+  if (focusKey && focused && !focused.isConnected && document.activeElement === document.body) {
+    const target = document.querySelector<HTMLElement>(`[data-focus-key="${CSS.escape(focusKey)}"]`)
+    if (target && target.offsetParent !== null && !target.matches(':disabled')) target.focus({ preventScroll: true })
+  }
   syncOverlayExtent()
   if (document.activeElement !== omnibox) hideSuggest()
 }
@@ -840,16 +855,20 @@ agentActivityAction?.addEventListener('click', () => {
 document.getElementById('btn-newtab')?.addEventListener('click', () => void window.aa.tabNew())
 
 tabsEl.addEventListener('keydown', (event: KeyboardEvent) => {
-  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
   const tabs = Array.from(tabsEl.querySelectorAll<HTMLElement>('[role="tab"]'))
   if (!tabs.length) return
-  const current = tabs.indexOf(document.activeElement as HTMLElement)
+  const focusedTab = (event.target as HTMLElement).closest<HTMLElement>('[role="tab"]')
+  if (!focusedTab) return
+  const current = tabs.indexOf(focusedTab)
+  if (current < 0) return
   const direction = event.key === 'ArrowRight' ? 1 : -1
-  const next = tabs[(current + direction + tabs.length) % tabs.length]
+  const index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (current + direction + tabs.length) % tabs.length
+  const next = tabs[index]
   event.preventDefault()
   next.focus()
   const id = next.dataset['tabId']
-  if (id) void window.aa.tabSelect(id)
+  if (id) void window.aa.tabSelect(id, false)
 })
 
 btnDownloads?.addEventListener('click', () => {
@@ -1192,6 +1211,7 @@ function selectSuggest(el: HTMLElement): void {
   })
   el.classList.add('selected')
   el.setAttribute('aria-selected', 'true')
+  el.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   omnibox.setAttribute('aria-activedescendant', el.id)
   const u = el.querySelector('.suggest-url')?.textContent
   if (u) {
@@ -1214,7 +1234,7 @@ window.addEventListener('keydown', (e) => {
   const modal = settingsModal
   if (modal && !modal.hidden && e.key === 'Tab') {
     const focusable = Array.from(modal.querySelectorAll<HTMLElement>('button, input, select, textarea, [tabindex]:not([tabindex="-1"])'))
-      .filter((element) => !element.hidden && element.getAttribute('aria-hidden') !== 'true' && element.offsetParent !== null)
+      .filter((element) => element.tabIndex >= 0 && !element.matches(':disabled, [aria-disabled="true"]') && !element.closest('[hidden], [inert], [aria-hidden="true"]') && element.offsetParent !== null)
     if (focusable.length) {
       const current = focusable.indexOf(document.activeElement as HTMLElement)
       const next = e.shiftKey

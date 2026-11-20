@@ -11,7 +11,7 @@ contextBridge.exposeInMainWorld('aa', {
   find: (query: string, forward = true, next = false): Promise<void> => ipcRenderer.invoke('aa:find', query, forward, next),
   findClose: (): Promise<void> => ipcRenderer.invoke('aa:find-close'),
   overlayHeight: (height: number): Promise<void> => ipcRenderer.invoke('aa:overlay-height', height),
-  tabSelect: (id: string): Promise<void> => ipcRenderer.invoke('aa:tab-select', id),
+  tabSelect: (id: string, focusPage = true): Promise<void> => ipcRenderer.invoke('aa:tab-select', id, focusPage),
   back: (): Promise<void> => ipcRenderer.invoke('aa:back'),
   forward: (): Promise<void> => ipcRenderer.invoke('aa:forward'),
   reload: (): Promise<void> => ipcRenderer.invoke('aa:reload'),

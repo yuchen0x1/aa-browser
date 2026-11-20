@@ -59,6 +59,8 @@ jobs:
           "${display[@]}" npm run smoke
           "${display[@]}" npm run test:desktop
           "${display[@]}" npm run test:update-ui
+          "${display[@]}" npm run test:ui-ux
+          "${display[@]}" npm run test:site-ui
           if [ "$RUNNER_OS" = Linux ]; then
             # Keep the 960×640 DIP window within the display at forced 2x scale.
             xvfb-run -a -s '-screen 0 2560x1600x24' npm run test:display-matrix
