@@ -33,7 +33,7 @@
 | --- | --- | --- |
 | `aa-browser-setup-0.6.11.exe` | Windows x64 | 首次安装或覆盖升级安装程序 |
 | `aa-browser-setup-0.6.11.exe.blockmap` | Windows x64 | 增量更新分块信息 |
-| `aa-browser-0.6.11.AppImage` | Linux x86_64 | 免安装运行镜像 |
+| `aa-browser-0.6.11-linux-x86_64.AppImage` | Linux x86_64 | 免安装运行镜像 |
 | `latest.yml` | Windows 自动更新元数据 | electron-updater 使用 |
 | `latest-linux.yml` | Linux 自动更新元数据 | electron-updater 使用 |
 | `sbom.cdx.json` | 软件物料清单 | CycloneDX 格式 |
@@ -43,3 +43,7 @@
 
 - 本版未做受控性能基准，不宣称性能提升百分比。
 - 客户端接入写入对无法安全解析的配置布局采取拒绝写入策略（报「Cannot safely update this TOML configuration layout」等），此时可手动编辑配置文件。
+
+**项目地址：** https://github.com/yuchen0x1/aa-browser
+**问题反馈：** https://github.com/yuchen0x1/aa-browser/issues
+**版本下载：** https://github.com/yuchen0x1/aa-browser/releases/tag/v0.6.11

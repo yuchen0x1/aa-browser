@@ -6,6 +6,7 @@
 
 | 版本 | 完整 Release 正文 |
 | --- | --- |
+| v0.6.11 | [bodies/v0.6.11.md](./bodies/v0.6.11.md) |
 | v0.6.10 | [bodies/v0.6.10.md](./bodies/v0.6.10.md) |
 | v0.6.8 | [bodies/v0.6.8.md](./bodies/v0.6.8.md) |
 | v0.6.7 | [bodies/v0.6.7.md](./bodies/v0.6.7.md) |
