@@ -2,6 +2,15 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
+## v0.6.12 — 2026-11-21
+
+- 完善批量填表、点击/输入、选择、iframe 和 HAR 的取消检查，防止异步等待结束后继续分派下一步副作用；不回滚已完成动作。
+- App/CLI 成功写配置后保留五份有效备份，固定保护本次恢复点，排除同前缀用户文件与链接；CLI 保持零依赖。
+- JSONC 仅格式化新值，保留同行兄弟配置、空格/Tab 和特殊美元序列路径；TOML 更新对 EOF 换行与空白保持幂等。
+- POSIX 只收紧自有非符号链接发现目录，保护已有自定义共享目录和路径别名；令牌文件继续 0600 原子替换。
+- 新增 20 组取消回归（17 组真中途取消）、配置字节保真与备份边界回归；量化生产快照分页和历史同步写盘成本，未擅自改策略或宣称性能提升。
+- 标签 CI 双平台、发布作业和不可变 Release 证明核验通过；MCP 仍为 42 个，无新增运行依赖或数据迁移。完整正文见 `docs/releases/bodies/v0.6.12.md`。
+
 ## v0.6.10 — 2026-11-21
 
 - 修复 MCP 桥并发建立 WebSocket 与旧连接清理的竞态：握手单飞、pending 绑定 socket，旧连接关闭不会影响新连接调用；发送失败立即回收请求状态。

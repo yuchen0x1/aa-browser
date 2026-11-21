@@ -2,6 +2,15 @@
 
 历史发布正文见 [归档索引](docs/releases/release-notes.md)。本表只记录已核实的正式版本；候选不占用正式版本记录。
 
+## v0.6.12 正式发行（2026-11-21）
+
+- 标签 `v0.6.12` 指向已确认的 `main` 提交 `580566fc15e966d192a1e5ced2175e7438ba7754`；标签 CI `44865353450` 的 Windows x64、Linux x64 与「Publish tested release」作业全部成功。
+- 正式 Release 已发布为 Latest、非草稿、非预发布，资产不可变；`gh release verify` 的 GitHub 证明核验通过。
+- 7 项公开资产（NSIS 安装包与 blockmap、AppImage、两平台更新元数据、SBOM、SHA256SUMS）均可下载，GitHub SHA-256 摘要与清单一致；SBOM 与 `latest*.yml` 版本均为 0.6.12。
+- 主线 CI `44864527704`、CodeQL `44864527642` 成功；测量脚本告警 #13 已转 fixed，发布前开放扫描告警为 0。
+- 本地 Windows 打包、实际安装→已安装程序 MCP 完整冒烟→卸载通过；原生 Linux/POSIX 权限与共享目录保护实测通过；独立复审无剩余阻断项。
+- 发布正文已去除候选声明，归档 `bodies/v0.6.12.md`，同步索引与 EXPECTED_TAGS；没有移动已发布标签或覆盖不可变资产。
+
 ## v0.6.11 正式发行（2026-11-21）
 
 - 标签 `v0.6.11` 指向 `main` / `b639787`；标签 CI `44852624681` 双平台测试与「Publish tested release」作业全部成功。
@@ -19,6 +28,7 @@
 
 | 正式版本 | 状态与证据 |
 | --- | --- |
+| [v0.6.12](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.6.12) | 已发布（2026-11-21），Latest。标签 CI `44865353450` 双平台与发布作业成功；7 项不可变资产、GitHub Release 证明、SHA-256 清单、SBOM 与更新元数据校验通过。 |
 | [v0.6.11](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.6.11) | 已发布（2026-11-21）。标签 CI `44852624681` 双平台与发布作业成功；7 项资产与版本元数据一致；CodeQL 通过、依赖审计 0 漏洞；正文归档通过 `check:release-bodies:remote`。 |
 | [v0.6.10](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.6.10) | 已发布（2026-11-21）。标签 CI 双平台与发布作业成功；7 项资产与版本元数据一致；正文归档通过 `check:release-bodies:remote`。含 v0.6.9 未发行修复。 |
 | [v0.6.8](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.6.8) | 已发布（2026-11-21）。标签 CI `44796723617` 双平台测试与发布作业全部成功；7 项资产均含 sha256 摘要，`latest.yml` / `latest-linux.yml` 版本 0.6.8 与 tag、package.json 一致；发布正文归档通过 `check:release-bodies:remote`。 |
