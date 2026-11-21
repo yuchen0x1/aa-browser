@@ -6,6 +6,7 @@
 
 | 版本 | 完整 Release 正文 |
 | --- | --- |
+| v0.7.0 | [bodies/v0.7.0.md](./bodies/v0.7.0.md) |
 | v0.6.12 | [bodies/v0.6.12.md](./bodies/v0.6.12.md) |
 | v0.6.11 | [bodies/v0.6.11.md](./bodies/v0.6.11.md) |
 | v0.6.10 | [bodies/v0.6.10.md](./bodies/v0.6.10.md) |
@@ -25,6 +26,14 @@
 | v0.0.3 | [bodies/v0.0.3.md](./bodies/v0.0.3.md) |
 | v0.0.2 | [bodies/v0.0.2.md](./bodies/v0.0.2.md) |
 | v0.0.1 | [bodies/v0.0.1.md](./bodies/v0.0.1.md) |
+
+## v0.7.0 — 2026-11-21
+
+- 新增可共享 AI 连接诊断：区分启动/认证/首调用验证与桥文件状态，复制文本只含版本、平台、状态与连接数。
+- MCP 文本快照不再跨进程回传整份元素数组；分页、引用与默认结构化输出保留，3,000 按钮夹具未压缩返回 JSON 减少 98.65%。
+- 手动 PDF/HAR、右键截图与无标记历史文件不参加自动清理；Cookie 拒绝无效操作；标签切换复用节点并保留键盘焦点。
+- Linux 桥识别安装器默认 `~/Applications/AaBrowser.AppImage`；SBOM 从锁文件取 Electron 精确版本。
+- 保持 42 个 MCP 工具与无新增运行依赖；双平台 CI/CodeQL 与 NSIS 安装→MCP→卸载通过，7 项不可变资产核验通过。
 
 ## v0.6.12 — 2026-11-21
 
