@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-globalThis.__AA_BRIDGE_VERSION__ = "0.6.9";
+globalThis.__AA_BRIDGE_VERSION__ = "0.6.10";
 // \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -5288,6 +5288,7 @@ for (const tool of TOOL_DEFS) {
 	if (!annotations || Object.keys(annotations).length !== 4 || Object.values(annotations).some((value) => typeof value !== "boolean")) throw new Error(`工具缺少完整 MCP annotations：${tool.name}`);
 }
 let ws = null;
+let connecting = null;
 let nextCallId = 1;
 const pending = /* @__PURE__ */ new Map();
 const mcpToBridge = /* @__PURE__ */ new Map();
@@ -5449,7 +5450,9 @@ async function ensureBrowserStarted() {
 	return launchPromise;
 }
 function connectWs() {
-	return new Promise((resolve, reject) => {
+	if (ws && ws.readyState === wrapper_default.OPEN) return Promise.resolve(ws);
+	if (connecting) return connecting;
+	const attempt = new Promise((resolve, reject) => {
 		const info = readConnection();
 		if (!info) {
 			reject(/* @__PURE__ */ new Error("未找到 Aa Browser：请先启动 Aa Browser 桌面应用（npm run dev 或 npm start）。"));
@@ -5460,14 +5463,21 @@ function connectWs() {
 			return;
 		}
 		const socket = new wrapper_default(`ws://127.0.0.1:${info.port}/?token=${info.token}`);
+		let settled = false;
 		const timer = setTimeout(() => {
 			try {
 				socket.terminate();
 			} catch {}
-			reject(/* @__PURE__ */ new Error("连接 Aa Browser 超时（3s）。"));
+			finish(/* @__PURE__ */ new Error("连接 Aa Browser 超时（3s）。"));
 		}, 3e3);
-		socket.on("open", () => {
+		const finish = (error) => {
+			if (settled) return;
+			settled = true;
 			clearTimeout(timer);
+			if (error) reject(error);
+			else resolve(socket);
+		};
+		socket.on("open", () => {
 			ws = socket;
 			log("connected to browser bridge", info.pid, info.port);
 			socket.on("message", (raw) => {
@@ -5478,6 +5488,7 @@ function connectWs() {
 					return;
 				}
 				if (msg?.event === "progress") {
+					if (pending.get(msg.id)?.socket !== socket) return;
 					const token = bridgeToProgressToken.get(msg.id);
 					if (token !== void 0) {
 						const params = {
@@ -5492,6 +5503,7 @@ function connectWs() {
 				}
 				if (typeof msg?.id === "number" && pending.has(msg.id)) {
 					const p = pending.get(msg.id);
+					if (p.socket !== socket) return;
 					clearTimeout(p.timer);
 					pending.delete(msg.id);
 					bridgeToProgressToken.delete(msg.id);
@@ -5501,24 +5513,27 @@ function connectWs() {
 				}
 			});
 			socket.on("close", () => {
-				ws = null;
-				for (const [, p] of pending) {
+				if (ws === socket) ws = null;
+				for (const [id, p] of pending) {
+					if (p.socket !== socket) continue;
 					clearTimeout(p.timer);
+					pending.delete(id);
+					bridgeToProgressToken.delete(id);
+					if (p.mcpId !== void 0 && mcpToBridge.get(p.mcpId) === id) mcpToBridge.delete(p.mcpId);
 					p.reject(/* @__PURE__ */ new Error("与 Aa Browser 的连接已断开。"));
 				}
-				pending.clear();
-				bridgeToProgressToken.clear();
 			});
-			socket.on("error", (err) => {
-				log("ws error:", err.message);
-			});
-			resolve(socket);
+			socket.on("error", (err) => log("ws error:", err.message));
+			finish();
 		});
-		socket.on("error", (err) => {
-			clearTimeout(timer);
-			reject(/* @__PURE__ */ new Error(`无法连接 Aa Browser: ${err.message}`));
-		});
+		socket.on("error", (err) => finish(/* @__PURE__ */ new Error(`无法连接 Aa Browser: ${err.message}`)));
+		socket.once("close", () => finish(/* @__PURE__ */ new Error("与 Aa Browser 的连接已断开。")));
 	});
+	connecting = attempt;
+	attempt.finally(() => {
+		if (connecting === attempt) connecting = null;
+	}).catch(() => {});
+	return attempt;
 }
 async function getWs() {
 	if (ws && ws.readyState === wrapper_default.OPEN) return ws;
@@ -5567,7 +5582,7 @@ async function callTool(name, args, progressToken) {
 			const p = pending.get(id);
 			pending.delete(id);
 			bridgeToProgressToken.delete(id);
-			if (p?.mcpId !== void 0) mcpToBridge.delete(p.mcpId);
+			if (p?.mcpId !== void 0 && mcpToBridge.get(p.mcpId) === id) mcpToBridge.delete(p.mcpId);
 			try {
 				socket.send(JSON.stringify({
 					id,
@@ -5580,7 +5595,8 @@ async function callTool(name, args, progressToken) {
 			resolve,
 			reject,
 			timer,
-			mcpId: args?.__mcpId
+			mcpId: args?.__mcpId,
+			socket
 		});
 		if (args?.__mcpId !== void 0) mcpToBridge.set(args.__mcpId, id);
 		if (progressToken !== void 0) bridgeToProgressToken.set(id, progressToken);
@@ -5592,7 +5608,20 @@ async function callTool(name, args, progressToken) {
 			args: cleanArgs
 		};
 		if (progressToken !== void 0) request.progressToken = progressToken;
-		socket.send(JSON.stringify(request));
+		const failSend = (error) => {
+			if (!error || pending.get(id)?.socket !== socket) return;
+			clearTimeout(timer);
+			pending.delete(id);
+			bridgeToProgressToken.delete(id);
+			if (args?.__mcpId !== void 0 && mcpToBridge.get(args.__mcpId) === id) mcpToBridge.delete(args.__mcpId);
+			reject(error);
+		};
+		try {
+			if (socket.readyState !== wrapper_default.OPEN) throw new Error("与 Aa Browser 的连接已断开。");
+			socket.send(JSON.stringify(request), failSend);
+		} catch (error) {
+			failSend(error);
+		}
 	});
 }
 function writeStdioMessage(message) {
@@ -5667,7 +5696,7 @@ function handleStdioLine(line) {
 			}
 			if (bridgeId === -1) cancelledMcpRequests.add(requestId);
 			else if (bridgeId > 0) try {
-				ws?.send(JSON.stringify({
+				if (p?.socket.readyState === wrapper_default.OPEN) p.socket.send(JSON.stringify({
 					id: bridgeId,
 					cancel: true
 				}));

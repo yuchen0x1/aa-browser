@@ -32,9 +32,9 @@
 
 <!-- github-release:start -->
 
-**[v0.6.7](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.6.7)** · 2026-11-21
+**[v0.6.10 候选说明](./release-notes-v0.6.10.md)** · 2026-11-21 · 尚未正式发布
 
-本版把新标签接入教程与后端可见诊断扩展为中英双语，新增打印快捷键与可见失败反馈，并修复新标签同步脚本可能注入外站的竞态。新增 4 项专项回归接入 CI，本地 Windows、WSLg 真实 Linux renderer 与远程 CI 双平台通过。MCP 工具集保持 42 个。
+本轮修复 MCP 桥并发重连时的请求归属竞态，并减少 iframe 元素描述的已知敏感字段值回显；同时修复冷启动回归的 Chromium profile 异步清理失败。新增三项专项回归并改进现有冷启动回归，MCP 工具集保持 42 个，用户数据无需迁移。正式版下载与跨平台发行结果请以已发布 Release 为准。
 
 [全部发行记录](https://github.com/yuchen0x1/aa-browser/releases)
 

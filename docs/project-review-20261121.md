@@ -28,7 +28,8 @@
 | P1 | 待决站点权限按全局 origin 去重，未包含隔离会话/媒体子能力 | 本轮修正会话与能力作用域，并验证导航/销毁后的审批失效 |
 | P2 | 地址栏聚焦编辑缩略文本，丢协议和 fragment；切换标签可能保留其他标签草稿 | 本轮分离编辑/显示值，补真实 Electron 红→绿回归；用户信息不进入编辑值 |
 | P1 | 证据清理未确认路径上的文件仍是原登记产物；失败删除后配额计算不准确 | 本轮增加文件身份/hash 核验、保守遗忘旧临时登记和失败删除回归；显式输出与应用管理目录拆分仍待后续，未修改的输出仍沿用原 TTL |
-| P1 | 桥连接建立未单飞，旧 socket 关闭可能影响新 socket 的 pending 请求 | 下一轮通过确定性连接竞态测试确认影响面，再做连接归属与单飞修复 |
+| P1 | 桥连接建立未单飞，旧 socket 关闭可能影响新 socket 的 pending 请求 | v0.6.10 候选已修复：连接单飞、pending 绑定 socket、旧连接只清理自身调用；延迟握手并发回归已接入 CI |
+| P1 | iframe 元素描述可能回显已填写密码、令牌或支付字段 | v0.6.10 候选已修复：生产 `frameElements()` 仅保留安全标签/类型；密码与 API key fixture 回归已接入 CI |
 | P2 | 客户端 JSONC 注释剥离与重复 Codex 接入存在幂等性/原子性欠缺 | 用临时配置覆盖 URL 字符串、注释、重复 env 段与失败写盘，禁止碰日常配置 |
 | P2 | 分页快照每页仍传整页元素元数据 | 固定大页面度量序列化字节和耗时，保留动作查找与跨页 ref；未量化前不宣称收益 |
 | P2 | 自动化策略覆盖仍不等于不可信 Agent 沙箱 | 明确能力边界、逐项增加审批与取消否定测试，勿把站点导航规则称为网络防火墙 |
@@ -54,6 +55,21 @@
 直接参考的 Min 源码（修订 `ef39979f39a6cc6b578736d951eac7f5aa31db93`）：[紧凑显示](https://github.com/minbrowser/min/blob/ef39979f39a6cc6b578736d951eac7f5aa31db93/js/navbar/tabBar.js#L164-L169)、[从存储 URL 编辑](https://github.com/minbrowser/min/blob/ef39979f39a6cc6b578736d951eac7f5aa31db93/js/navbar/tabEditor.js#L30-L38)、[切换标签关闭编辑器](https://github.com/minbrowser/min/blob/ef39979f39a6cc6b578736d951eac7f5aa31db93/js/browserUI.js#L215-L224)。Aa 独立实现相同的状态所有权原则，并非复制这些函数。
 
 Wexond 的公开源码不代表可复用开源许可，其 README 限制代码/素材使用且仓库已归档，因此未计入七项。若未来复制代码须重新检查许可证/NOTICE；MPL 文件级义务与 AGPL 义务不能视同 MIT。没有任何受控性能数据支持“优于竞品”的结论。
+
+## v0.6.10 追加研究：六个活跃同类项目
+
+本轮追加核对官方仓库、README/相关源码与许可证；以下是设计研究，不是运行竞品后的性能测评。无复制代码、素材或新增运行依赖。
+
+| 项目 / 许可证 | 本轮核对与借鉴 | 取舍与边界 |
+| --- | --- | --- |
+| [Playwright MCP](https://github.com/microsoft/playwright-mcp) · [Apache-2.0](https://github.com/microsoft/playwright-mcp/blob/main/LICENSE) | 快照/ref、能力分组、持久与隔离会话 | 延续单一工具定义和显式会话身份；origin allowlist 不是安全沙箱 |
+| [browser-use](https://github.com/browser-use/browser-use) · [MIT](https://github.com/browser-use/browser-use/blob/main/LICENSE) | CDP、持久 Python REPL、typed results、secret placeholders | 借鉴返回值与敏感描述边界；不引入 Python 执行面，不把 redaction 称为沙箱 |
+| [Stagehand](https://github.com/browserbase/stagehand) · [MIT](https://github.com/browserbase/stagehand/blob/main/LICENSE) | observe / act / schema extract 分离、确定性凭证填写 | 保持观察和副作用的区别；未来 routine 应可审查，不增加本轮工具数 |
+| [agent-browser](https://github.com/vercel-labs/agent-browser) · [Apache-2.0](https://github.com/vercel-labs/agent-browser/blob/main/LICENSE) | CLI/daemon/CDP、session、紧凑快照、action policy 与确认 | 借鉴连接状态所有权与内容边界；不为架构名称重写 Electron 桥 |
+| [BrowserOS](https://github.com/browseros-ai/BrowserOS) · [AGPL-3.0](https://github.com/browseros-ai/BrowserOS/blob/main/LICENSE) | Chromium fork、Rust 后端、并行 Agent 标签与回放时间线 | 仅学习监督 UI 思想，不移植 AGPL 代码，不迁移浏览器引擎 |
+| [Min](https://github.com/minbrowser/min) · [Apache-2.0](https://github.com/minbrowser/min/blob/master/LICENSE.txt) | Electron 任务标签、历史搜索、阅读与书签 | 保留普通浏览器体验，不用隐藏功能掩盖问题；现有架构足够承载增量改进 |
+
+本轮落地重点是桥的连接/调用归属、确定性生命周期和被动元素观察的敏感值边界；未声称竞品提供或证明了 Aa 的修复。JSONC/TOML 幂等编辑、快照客户端 baseline 归属、安装自定义目录参数与 discovery 文件私有权限作为下一轮验证候选，未冒充已复现利用链。
 
 ## 工程、兼容与安全边界
 

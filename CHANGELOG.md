@@ -2,6 +2,13 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
+## v0.6.10 — 2026-11-21
+
+- 修复 MCP 桥并发建立 WebSocket 与旧连接清理的竞态：握手单飞、pending 绑定 socket，旧连接关闭不会影响新连接调用；发送失败立即回收请求状态。
+- 修复 iframe 元素枚举可能回显已填写的密码、令牌、API key、OTP 和支付字段值；保留安全标签与控件类型。
+- 修复冷启动自动启动回归在 Chromium 异步释放 profile 锁期间过早清理导致的 Linux `ENOTEMPTY` 假失败。
+- 新增桥连接并发、确定性连接生命周期与 `frameElements()` 敏感值三项回归并接入 CI；敏感描述覆盖中文标签、关联 label、data-testid 和支付 autocomplete。MCP 工具保持 42 个，无新增运行依赖或用户数据迁移。
+
 ## v0.6.9 — 2026-11-21
 
 - 地址栏编辑与缩略显示分离，保留协议、编码参数和 hash 路由；重复 Ctrl/Cmd+L 全选、草稿取消和切换标签状态均有真实 Electron 回归。失焦只更新地址，保留停止/审批按钮的一次点击。

@@ -35,6 +35,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+      - run: npm run test:frame-elements
       - run: npm run test:tools
       - run: npm run validate:codex
       - run: npm run validate:workbuddy
@@ -78,6 +79,8 @@ jobs:
       - run: npm run test:release
       - run: npm run test:installer
       - run: npm run test:bridge
+      - run: npm run test:bridge-connection-race
+      - run: npm run test:bridge-lifecycle
       - run: npm run test:agent-cancellation
       - run: npm run test:session-permissions
       - run: npm run test:approval-parity

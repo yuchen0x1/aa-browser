@@ -137,7 +137,18 @@ const SELECTOR_HELPER = `
   const describe = (el) => {
     const tag = el.tagName.toLowerCase();
     const type = el.getAttribute && (el.getAttribute('type') || '');
-    const text = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') || el.getAttribute('title') || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
+    const aria = el.getAttribute && (el.getAttribute('aria-label') || '');
+    const placeholder = el.getAttribute && (el.getAttribute('placeholder') || '');
+    const title = el.getAttribute && (el.getAttribute('title') || '');
+    const name = el.getAttribute && (el.getAttribute('name') || '');
+    const id = el.getAttribute && (el.getAttribute('id') || '');
+    const autocomplete = el.getAttribute && (el.getAttribute('autocomplete') || '');
+    const testId = el.getAttribute && (el.getAttribute('data-testid') || '');
+    const label = el.labels ? Array.from(el.labels).map((x) => x.innerText || x.textContent || '').join(' ') : '';
+    const hint = [type, aria, placeholder, title, name, id, autocomplete, testId, label].join(' ');
+    const sensitiveAutocomplete = autocomplete.toLowerCase().split(/\\s+/).some((part) => /^(current-password|new-password|one-time-code|cc-csc|cc-number|cc-exp|cc-exp-month|cc-exp-year)$/.test(part));
+    const sensitive = type.toLowerCase() === 'password' || sensitiveAutocomplete || /(?:token|secret|api.?key|access.?key|private.?key|password|passwd|credential|验证码|密钥|令牌|密码|otp|one.?time.?code|security.?code|auth.?code|card.?number|cc.?number|cvv|cvc|expiry|expiration)/i.test(hint);
+    const text = (sensitive ? (aria || label || placeholder || title || name || type) : (el.innerText || el.value || aria || label || placeholder || title || name)).replace(/\\s+/g, ' ').trim().slice(0, 80);
     return tag + (type ? '[' + type + ']' : '') + (text ? ' "' + text + '"' : '');
   };
   const isInteractive = (el) => {

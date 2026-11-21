@@ -10,6 +10,7 @@ import path from 'node:path'
 import readline from 'node:readline'
 import { spawn, spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { setTimeout as delay } from 'node:timers/promises'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const BRIDGE = path.join(ROOT, 'cli', 'mcp.mjs')
@@ -76,12 +77,18 @@ try {
   assert.ok(fs.existsSync(connection), 'auto-launched browser should publish connection.json')
   console.log('✅ MCP bridge auto-launched Aa Browser and completed browser_tabs')
 } finally {
+  let browserPid
+  try { browserPid = JSON.parse(fs.readFileSync(connection, 'utf8')).pid } catch { /* best effort cleanup */ }
   try { child.stdin.end() } catch { /* ignore */ }
   try { child.kill() } catch { /* ignore */ }
-  try {
-    const info = JSON.parse(fs.readFileSync(connection, 'utf8'))
-    if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(info.pid), '/T', '/F'], { stdio: 'ignore' })
-    else process.kill(info.pid, 'SIGTERM')
-  } catch { /* best effort cleanup */ }
-  fs.rmSync(tmp, { recursive: true, force: true })
+  if (browserPid) {
+    if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(browserPid), '/T', '/F'], { stdio: 'ignore' })
+    else {
+      try { process.kill(browserPid, 'SIGTERM') } catch { /* process already exited */ }
+    }
+  }
+  // Electron releases Chromium profile locks asynchronously after SIGTERM. Retry the
+  // fixture cleanup instead of turning a successful browser regression into ENOTEMPTY.
+  await delay(200)
+  fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 50, retryDelay: 200 })
 }

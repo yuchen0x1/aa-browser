@@ -1,5 +1,14 @@
 # 自主开发记录
 
+## 2026-11-21 · v0.6.10 候选：桥连接归属与 iframe 敏感值边界
+
+- 从远程 `main` / `6f6aab1`（v0.6.9 候选线）建立独立主分支 worktree；原验证工作树的未提交截图没有覆盖或纳入本轮。
+- 研究 Playwright MCP、Browser Use、Stagehand、agent-browser、BrowserOS 和 Min 六个活跃开源项目及许可证；吸收连接策略、能力边界、可审查操作和会话可观测性原则，没有复制代码或新增依赖。
+- 修复 MCP 桥并发 `tools/call` 各自建 WebSocket 的竞态；连接 promise 单飞，pending 记录所属 socket，旧 socket 关闭只清理自己的调用，进度/取消/发送异常按 socket 归属处理。新增延迟握手并发与确定性生命周期回归并接入 CI。
+- 修复 `browser_frame action=elements` 的生产描述函数可能回显密码、API key、令牌、OTP、卡号等已填写值的问题；按中文提示、关联 label、data-testid 和支付 autocomplete 扩展分类，保留安全标签/类型，新增 19 个敏感 fixture 回归并接入 CI。
+- 修复冷启动自动启动回归在 Electron 异步释放 Chromium profile 锁时立即删除 fixture 造成的 Linux `ENOTEMPTY` 假失败；终止进程后使用可重试清理，Windows 本地连续两次通过。
+- 无新增运行依赖、MCP 工具、公开参数或数据迁移；版本候选为 v0.6.10，最终双平台打包、远程 CodeQL、标签和资产核验以远程 CI 为准。
+
 ## 2026-11-21 · v0.6.9 候选：地址完整性与监督边界
 
 - 从远程 `main` / `e5554cd` 建立隔离 worktree；原验证分支未提交截图不纳入本轮。核查 GitHub 当前 v0.6.8、主线成功 CI 与 0 开放安全告警后，实际阅读外壳、会话、MCP/WS、审批、证据和发布代码。
