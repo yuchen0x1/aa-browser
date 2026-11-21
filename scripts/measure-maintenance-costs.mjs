@@ -188,7 +188,7 @@ async function measureSnapshots(runDir) {
   try {
     const source = fs.readFileSync(path.join(root, 'src/snapshot/engine.js'), 'utf8')
     const { __aaSnapshot } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`)
-    const { tagNameScript, clickScript } = require(path.join(runDir, 'compiled/snapshot/scripts.js'))
+    const { tagNameScript, clickScript, jsLiteral } = require(path.join(runDir, 'compiled/snapshot/scripts.js'))
     const engine = __aaSnapshot.toString()
     win = new BrowserWindow({
       width: 1280, height: 800, useContentSize: true, show: false,
@@ -199,7 +199,7 @@ async function measureSnapshots(runDir) {
     const execute = (code) => wc.executeJavaScript(code, true)
     const capture = async (opts) => {
       const start = performance.now()
-      const result = await execute(`(() => { const start=performance.now(); const snapshot=(${engine})(${JSON.stringify(opts)}); return {snapshot,renderer_ms:performance.now()-start} })()`)
+      const result = await execute(`(() => { const start=performance.now(); const snapshot=(${engine})(${jsLiteral(opts)}); return {snapshot,renderer_ms:performance.now()-start} })()`)
       return { ...result, roundtrip_ms: performance.now() - start }
     }
     for (const count of buttonCounts) {
