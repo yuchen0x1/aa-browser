@@ -2,7 +2,7 @@
   "name": "aa-browser",
   "productName": "Aa Browser",
   "desktopName": "aa-browser.desktop",
-  "version": "0.6.10",
+  "version": "0.6.11",
   "description": "AI-native browser — browse like a human, drive like an agent (为 Agent 而生的浏览器)",
   "license": "MIT",
   "author": {
@@ -43,6 +43,7 @@
     "smoke": "node scripts/smoke.mjs",
     "test:desktop": "node scripts/test-desktop.mjs",
     "test:ui-ux": "node scripts/test-ui-ux.mjs",
+    "test:settings-safety": "node scripts/test-settings-safety.mjs",
     "test:newtab-i18n": "node scripts/test-newtab-i18n.mjs",
     "test:app-i18n": "node scripts/test-app-i18n.mjs",
     "test:main-diagnostics": "node scripts/test-main-diagnostics.mjs",
@@ -85,6 +86,8 @@
   },
   "dependencies": {
     "electron-updater": "^6.8.11",
+    "jsonc-parser": "3.3.1",
+    "smol-toml": "1.9.1",
     "ws": "^8.23.0"
   },
   "overrides": {

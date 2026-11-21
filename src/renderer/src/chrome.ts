@@ -128,6 +128,11 @@ let hasAgentInfo = false
 const settingsStatus = document.getElementById('settings-status') as HTMLSpanElement | null
 let settingsStatusTimer: ReturnType<typeof setTimeout> | undefined
 let settingsReturnFocus: HTMLElement | null = null
+let settingsRequest = 0
+let settingsReady = false
+let settingsOperation = 0
+let adoptedSettingsOperation = 0
+let clientScanRequest = 0
 const setClientList = document.getElementById('set-client-list') as HTMLDivElement | null
 const btnClientScan = document.getElementById('btn-client-scan') as HTMLButtonElement | null
 const btnClientSetup = document.getElementById('btn-client-setup') as HTMLButtonElement | null
@@ -177,6 +182,18 @@ systemThemeMedia?.addEventListener('change', () => {
   if (activeThemeSetting === 'system') applyTheme('system')
 })
 
+/** 保存基线独立于模态生命周期；迟到响应可更新基线，但不能倒退或覆盖当前预览。 */
+function adoptSavedSettings(settings: AppSettings | null | undefined, operation: number): void {
+  if (!settings || operation <= adoptedSettingsOperation) return
+  adoptedSettingsOperation = operation
+  savedLocale = resolveUiLocale(settings.locale)
+  savedThemeSetting = settings.theme || 'light'
+  if (!settingsModal || settingsModal.hidden || !settingsReady) {
+    applyTheme(savedThemeSetting)
+    applyLocale(savedLocale)
+  }
+}
+
 function setText(id: string, key: LocaleKey): void {
   const element = document.getElementById(id)
   if (element) element.textContent = t(key)
@@ -197,6 +214,15 @@ function focusIfPossible(element: HTMLElement | null | undefined): boolean {
   if (!isFocusable(element)) return false
   element.focus({ preventScroll: true })
   return true
+}
+
+/** 部分输入法的确认键不带 isComposing；按输入目标记录合成，失焦时清理。 */
+const composingTargets = new WeakSet<EventTarget>()
+document.addEventListener('compositionstart', (event) => { if (event.target) composingTargets.add(event.target) })
+document.addEventListener('compositionend', (event) => { if (event.target) composingTargets.delete(event.target) })
+document.addEventListener('focusout', (event) => { if (event.target) composingTargets.delete(event.target) })
+function isComposingKey(event: KeyboardEvent): boolean {
+  return event.isComposing || event.keyCode === 229 || !!(event.target && composingTargets.has(event.target))
 }
 
 function renderSearchPresetLabels(): void {
@@ -336,6 +362,7 @@ document.getElementById('btn-find')?.addEventListener('click', () => void openFi
 btnReopen.addEventListener('click', () => void window.aa.tabReopen())
 findQuery.addEventListener('input', () => void window.aa.find(findQuery.value))
 findQuery.addEventListener('keydown', (event) => {
+  if (isComposingKey(event)) return
   if (event.key === 'Enter') {
     event.preventDefault()
     void window.aa.find(findQuery.value, !event.shiftKey, true)
@@ -1031,8 +1058,8 @@ btnForward.addEventListener('click', () => void window.aa.forward())
 btnReload.addEventListener('click', () => void window.aa.reload())
 agentPill.addEventListener('click', () => {
   if (settingsModal?.hidden) {
-    void openSettings().then(() => {
-      setClientList?.closest('.settings-group')?.scrollIntoView({ block: 'center' })
+    void openSettings().then((ready) => {
+      if (ready && !settingsModal?.hidden) setClientList?.closest('.settings-group')?.scrollIntoView({ block: 'center' })
     })
   }
 })
@@ -1214,13 +1241,18 @@ function renderClients(clients: ClientDetectResult[], preserveSelection = false)
 }
 
 async function refreshClients(): Promise<void> {
-  if (!setClientList || !btnClientSetup) return
+  if (!setClientList || !btnClientSetup || !settingsReady) return
+  const request = settingsRequest
+  const scan = ++clientScanRequest
   setClientList.setAttribute('aria-busy', 'true')
   setClientList.textContent = t('scanningClients')
   btnClientSetup.disabled = true
   try {
-    renderClients(await window.aa.clientsDetect())
+    const clients = await window.aa.clientsDetect()
+    if (!currentSettingsRequest(request) || scan !== clientScanRequest) return
+    renderClients(clients)
   } catch (err) {
+    if (!currentSettingsRequest(request) || scan !== clientScanRequest) return
     lastClients = null
     setClientList.textContent = `${uiText('扫描失败：', 'Scan failed: ')}${err instanceof Error ? err.message : String(err)}`
     setClientList.removeAttribute('aria-busy')
@@ -1233,7 +1265,8 @@ btnClientScan?.addEventListener('click', () => {
 })
 
 btnClientSetup?.addEventListener('click', async () => {
-  if (!setClientList || !btnClientSetup || btnClientSetup.getAttribute('aria-busy') === 'true') return
+  if (!setClientList || !btnClientSetup || !settingsReady || !currentSettingsRequest(settingsRequest) || btnClientSetup.getAttribute('aria-busy') === 'true') return
+  const request = settingsRequest
   const ids = Array.from(setClientList.querySelectorAll<HTMLInputElement>('input[type=checkbox]:checked'))
     .filter((input) => !input.disabled)
     .map((input) => input.dataset['id'] ?? '')
@@ -1247,6 +1280,7 @@ btnClientSetup?.addEventListener('click', async () => {
   if (setClientResult) setClientResult.textContent = uiText('正在写入接入配置…', 'Writing connection configuration…')
   try {
     const results = await window.aa.clientsSetup(ids)
+    if (!currentSettingsRequest(request)) return
     if (setClientResult) {
       setClientResult.textContent = results.length
         ? results.map((r) => `${clientStatusBadge(r.status)} ${clientDisplayName(r.id, r.name)} — ${r.message}`).join('　')
@@ -1254,10 +1288,12 @@ btnClientSetup?.addEventListener('click', async () => {
     }
     await refreshClients()
   } catch (err) {
-    if (setClientResult) setClientResult.textContent = `${uiText('写入失败：', 'Write failed: ')}${err instanceof Error ? err.message : String(err)}`
+    if (currentSettingsRequest(request) && setClientResult) setClientResult.textContent = `${uiText('写入失败：', 'Write failed: ')}${err instanceof Error ? err.message : String(err)}`
   } finally {
-    btnClientSetup.removeAttribute('aria-busy')
-    btnClientSetup.disabled = setClientList.getAttribute('aria-busy') === 'true' || setClientList.querySelectorAll('input[type=checkbox]:not(:disabled)').length === 0
+    if (currentSettingsRequest(request)) {
+      btnClientSetup.removeAttribute('aria-busy')
+      btnClientSetup.disabled = setClientList.getAttribute('aria-busy') === 'true' || setClientList.querySelectorAll('input[type=checkbox]:not(:disabled)').length === 0
+    }
   }
 })
 
@@ -1274,7 +1310,7 @@ updateNoticeAction.addEventListener('click', () => {
 })
 document.getElementById('update-notice-dismiss')?.addEventListener('click', () => void window.aa.updateDismiss())
 updatePill.addEventListener('click', () => {
-  void openSettings().then(() => document.getElementById('software-update-settings')?.scrollIntoView({ block: 'center' }))
+  void openSettings().then((ready) => { if (ready && !settingsModal?.hidden) document.getElementById('software-update-settings')?.scrollIntoView({ block: 'center' }) })
 })
 window.addEventListener('online', () => { void window.aa.updateWake() })
 
@@ -1292,30 +1328,65 @@ function isolateSettings(open: boolean): void {
     settingsBackground.clear()
   }
 }
-async function openSettings(): Promise<void> {
-  if (!settingsModal) return
-  if (settingsModal.hidden) {
-    settingsReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : btnSettings
+function currentSettingsRequest(request: number): boolean {
+  return request === settingsRequest && !!settingsModal && !settingsModal.hidden
+}
+
+/** 先锁定再发 IPC；inert 也隔离更新/客户端按钮，不改它们自身的禁用规则。 */
+function setSettingsReady(ready: boolean): void {
+  settingsReady = ready
+  for (const control of [setEngine, setEngineUrl, setLocale, setTheme, setFullSnapshot, setOpApproval, setIsolatedSessions, setRestoreSession, setAutoUpdate, setUpdateChannel, setDownloadDir, setAllowedSites]) {
+    if (control) control.disabled = !ready
   }
+  if (settingsBody) {
+    settingsBody.inert = !ready
+    settingsBody.setAttribute('aria-busy', String(!ready))
+  }
+  const save = document.getElementById('btn-save-settings') as HTMLButtonElement | null
+  if (save) save.disabled = !ready
+}
+
+async function openSettings(): Promise<boolean> {
+  if (!settingsModal) return false
+  if (!settingsModal.hidden) return settingsReady
+  const request = ++settingsRequest
+  settingsReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : btnSettings
+  setSettingsReady(false)
+  btnClientSetup?.removeAttribute('aria-busy')
+  if (setClientResult) setClientResult.textContent = ''
+  clearTimeout(settingsStatusTimer)
   hideSuggest()
   if (dlPanel) dlPanel.hidden = true
   if (feedDrawer) feedDrawer.hidden = true
-  await window.aa.settingsOpen(true)
   settingsModal.hidden = false
   isolateSettings(true)
   document.getElementById('btn-close-settings')?.focus()
   if (settingsBody) settingsBody.scrollTop = 0
   if (settingsSections[0]) setActiveSettingsSection(settingsSections[0].id)
   if (settingsStatus) {
-    settingsStatus.textContent = ''
-    delete settingsStatus.dataset['state']
+    settingsStatus.textContent = t('loading')
+    settingsStatus.dataset['state'] = 'pending'
   }
-  const view = await window.aa.settingsGet().catch(() => null)
-  const agent = await window.aa.agentInfo().catch(() => null)
-  if (view && setEngine) {
-    savedLocale = resolveUiLocale(view.settings.locale)
-    savedThemeSetting = view.settings.theme
-    applyTheme(view.settings.theme)
+  let view: SettingsView | null
+  let agent: AgentInfo | null
+  try {
+    await window.aa.settingsOpen(true)
+    if (!currentSettingsRequest(request)) return false
+    const operation = ++settingsOperation
+    view = await window.aa.settingsGet()
+    adoptSavedSettings(view?.settings, operation)
+    if (!currentSettingsRequest(request)) return false
+    if (!view) throw new Error('Settings unavailable')
+    agent = await window.aa.agentInfo().catch(() => null)
+    if (!currentSettingsRequest(request)) return false
+  } catch {
+    if (currentSettingsRequest(request) && settingsStatus) {
+      settingsStatus.textContent = uiText('设置加载失败，请关闭后重新打开。', 'Unable to load settings. Close and reopen to retry.')
+      settingsStatus.dataset['state'] = 'error'
+    }
+    return false
+  }
+  if (setEngine) {
     setEngine.innerHTML = ''
     for (const p of view.presets) {
       const opt = document.createElement('option')
@@ -1345,17 +1416,26 @@ async function openSettings(): Promise<void> {
   }
   lastAgentInfo = agent
   hasAgentInfo = true
-  renderAgentInfo()
+  applyLocale(savedLocale)
+  setSettingsReady(true)
+  if (settingsStatus) {
+    settingsStatus.textContent = ''
+    delete settingsStatus.dataset['state']
+  }
   void refreshClients()
   renderUpdate(state.update)
+  return true
 }
 function closeSettings(): void {
-  if (!settingsModal) return
+  if (!settingsModal || settingsModal.hidden) return
+  ++settingsRequest
+  clearTimeout(settingsStatusTimer)
+  setSettingsReady(false)
   settingsModal.hidden = true
   isolateSettings(false)
   if (activeLocale !== savedLocale) applyLocale(savedLocale)
   if (activeThemeSetting !== savedThemeSetting) applyTheme(savedThemeSetting)
-  void window.aa.settingsOpen(false)
+  void window.aa.settingsOpen(false).catch(() => { /* 关闭失败不阻止下次重新打开。 */ })
   const returnFocus = settingsReturnFocus
   settingsReturnFocus = null
   if (!focusIfPossible(returnFocus)) focusIfPossible(btnSettings)
@@ -1428,7 +1508,8 @@ setTheme?.addEventListener('change', () => {
 })
 document.getElementById('btn-save-settings')?.addEventListener('click', async () => {
   const button = document.getElementById('btn-save-settings') as HTMLButtonElement
-  if (button.disabled) return
+  if (button.disabled || !settingsReady || !settingsModal || settingsModal.hidden) return
+  const request = settingsRequest
   button.disabled = true
   clearTimeout(settingsStatusTimer)
   if (settingsStatus) {
@@ -1449,33 +1530,33 @@ document.getElementById('btn-save-settings')?.addEventListener('click', async ()
   if (setDownloadDir) patch.downloadDir = setDownloadDir.value
   if (setAllowedSites) patch.allowedSites = setAllowedSites.value.split(/\r?\n/).map((site) => site.trim()).filter(Boolean)
   try {
+    const operation = ++settingsOperation
     const saved = await window.aa.settingsSet(patch)
+    adoptSavedSettings(saved, operation)
+    if (!currentSettingsRequest(request)) return
     if (!saved) throw new Error(uiText('设置未保存，请重试。', 'Settings were not saved. Please retry.'))
-    savedLocale = resolveUiLocale(saved.locale)
-    savedThemeSetting = saved.theme
-    applyTheme(saved.theme)
-    applyLocale(savedLocale)
     if (settingsStatus) {
       settingsStatus.textContent = t('saved')
       settingsStatus.dataset['state'] = 'success'
       settingsStatusTimer = setTimeout(() => {
-        if (settingsStatus) {
+        if (currentSettingsRequest(request) && settingsStatus) {
           settingsStatus.textContent = ''
           delete settingsStatus.dataset['state']
         }
       }, 1800)
     }
   } catch (error) {
-    if (settingsStatus) {
+    if (currentSettingsRequest(request) && settingsStatus) {
       settingsStatus.textContent = `${t('saveFailed')}${error instanceof Error ? error.message : String(error)}`
       settingsStatus.dataset['state'] = 'error'
     }
   } finally {
-    button.disabled = false
+    if (currentSettingsRequest(request) && settingsReady) button.disabled = false
   }
 })
 
 omnibox.addEventListener('keydown', (e) => {
+  if (isComposingKey(e)) return
   if (e.key === 'Enter') {
     const v = omnibox.value.trim()
     if (v) void window.aa.submit(v)
@@ -1544,6 +1625,7 @@ window.aa.onFocusOmnibox(() => {
 
 /* 键盘快捷键（chrome UI 焦点时） */
 window.addEventListener('keydown', (e) => {
+  if (isComposingKey(e)) return
   const ctrl = e.ctrlKey || e.metaKey
   const modal = settingsModal
   const target = e.target instanceof HTMLElement ? e.target : null
@@ -1603,11 +1685,15 @@ window.addEventListener('keydown', (e) => {
   }
 })
 
-/* 初始化拉取一次状态 */
+/* 初始化读取也参与保存基线排序，不因打开/关闭过模态而丢失有效外观。 */
+setSettingsReady(false)
+const initialSettingsOperation = ++settingsOperation
 void window.aa.settingsGet().then((view) => {
-  savedLocale = resolveUiLocale(view?.settings.locale)
-  savedThemeSetting = view?.settings.theme || 'light'
-  applyTheme(view?.settings.theme || 'light')
+  adoptSavedSettings(view?.settings, initialSettingsOperation)
+  if (!adoptedSettingsOperation) applyLocale(savedLocale)
+}).catch(() => {
+  if (adoptedSettingsOperation) return
+  applyTheme(savedThemeSetting)
   applyLocale(savedLocale)
-}).catch(() => { applyTheme('light'); applyLocale(activeLocale) })
+})
 void window.aa.getState().then(applyState)

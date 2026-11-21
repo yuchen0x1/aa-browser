@@ -6,6 +6,8 @@ import { writeFileAtomic } from './atomic-json'
 import { diagnosticMessage, errorDetail, clientNameFor } from '../shared/diagnostics'
 import type { Locale } from '../shared/locale'
 import { getMainLocale } from './locale'
+import { randomUUID } from 'node:crypto'
+import { readJsonEntry, readTomlEntry, replaceJsonEntry, replaceTomlEntry, sameEntry } from './client-config'
 
 /**
  * 一键接入：检测本机 AI 客户端并把 aa-browser 的 MCP 配置写入其配置文件。
@@ -243,34 +245,6 @@ export function bridgeEntry(): { command: string; args: string[]; env?: Record<s
   return { command: process.execPath, args: [mcp], env }
 }
 
-/** 宽松 JSON 解析：容忍 JSONC 注释与尾逗号 */
-function parseLoose(text: string): Record<string, unknown> | null {
-  try {
-    return JSON.parse(text) as Record<string, unknown>
-  } catch {
-    /* 继续尝试 JSONC */
-  }
-  try {
-    const stripped = text
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/(^|[^:])\/\/[^\n]*/g, '$1')
-      .replace(/,(\s*[}\]])/g, '$1')
-    return JSON.parse(stripped) as Record<string, unknown>
-  } catch {
-    return null
-  }
-}
-
-function getContainer(obj: Record<string, unknown>, container: string): Record<string, unknown> {
-  const keys = container.split('.')
-  let cur = obj as Record<string, unknown>
-  for (const k of keys) {
-    if (!cur[k] || typeof cur[k] !== 'object') cur[k] = {}
-    cur = cur[k] as Record<string, unknown>
-  }
-  return cur
-}
-
 /** 组装将要写入的 MCP 条目 */
 export function entryFor(def: ClientDef): Record<string, unknown> {
   if (def.manual) return {}
@@ -324,54 +298,25 @@ function codexEntryToml(): string {
   return lines.join('\n')
 }
 
-function isCodexEntryHeader(line: string): boolean {
-  const header = /^\s*\[([^\[\]]+)\]\s*(?:#.*)?$/.exec(line)?.[1]?.trim()
-  return !!header && /^mcp_servers\s*\.\s*(?:aa-browser|"aa-browser"|'aa-browser')(?:\s*\.\s*.+)?$/.test(header)
-}
-
-function codexEntryBlocks(text: string): string[] {
-  const blocks: string[] = []
-  let active = false
-  let lines: string[] = []
-  for (const line of text.split(/\r?\n/)) {
-    const isHeader = /^\s*\[[^\[\]]+\]\s*(?:#.*)?$/.test(line)
-    if (isHeader) {
-      if (active) blocks.push(lines.join('\n').trim())
-      active = isCodexEntryHeader(line)
-      lines = active ? [line.trim()] : []
-    } else if (active) {
-      lines.push(line)
-    }
-  }
-  if (active) blocks.push(lines.join('\n').trim())
-  return blocks
-}
-
-function replaceCodexEntry(text: string, entry: string): string {
-  const newline = text.includes('\r\n') ? '\r\n' : '\n'
-  const kept: string[] = []
-  let removing = false
-  for (const line of text.split(/\r?\n/)) {
-    if (/^\s*\[[^\[\]]+\]\s*(?:#.*)?$/.test(line)) {
-      removing = isCodexEntryHeader(line)
-    }
-    if (!removing) kept.push(line)
-  }
-  const base = kept.join(newline).replace(/[\r\n\t ]+$/, '')
-  return `${base}${base ? `${newline}${newline}` : ''}${entry.replace(/\n/g, newline)}${newline}`
+function writeClientConfig(file: string, value: string): void {
+  const metadata = fs.lstatSync(file, { throwIfNoEntry: false })
+  // Dotfile managers commonly symlink client configs; replace the target, not the user's link.
+  const target = metadata?.isSymbolicLink() ? fs.realpathSync(file) : file
+  writeFileAtomic(target, value)
 }
 
 function configureCodex(def: ClientDef, ts: string, locale: Locale): ClientSetupResult {
   const file = configFileFor(def)
   const entry = codexEntryToml()
   const existingText = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : ''
-  const exists = codexEntryBlocks(existingText).length > 0
-  if (exists && codexEntryBlocks(existingText).some((block) => block === entry)) {
+  const existing = readTomlEntry(existingText)
+  const exists = existing !== undefined
+  if (sameEntry(existing, readTomlEntry(entry))) {
     return { id: def.id, name: def.name, status: 'skipped', message: diagnosticMessage(locale, 'clients.configured', file) }
   }
-  if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.aa-backup-${ts}`)
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(file, replaceCodexEntry(existingText, entry), 'utf-8')
+  const output = replaceTomlEntry(existingText, entry)
+  if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.aa-backup-${ts}`, fs.constants.COPYFILE_EXCL)
+  writeClientConfig(file, output)
   return {
     id: def.id,
     name: def.name,
@@ -380,47 +325,32 @@ function configureCodex(def: ClientDef, ts: string, locale: Locale): ClientSetup
   }
 }
 
-function sameEntry(a: unknown, b: unknown): boolean {
-  return JSON.stringify(a) === JSON.stringify(b)
-}
-
 export function detectClients(): ClientDetectResult[] {
   return CLIENT_DEFS.map((def) => {
     const file = configFileFor(def)
     const installed = def.manual ? true : fs.existsSync(def.detectPath())
-    if (def.manual) {
-      return { id: def.id, name: def.name, file, installed, configured: false, outdated: false }
-    }
-    if (def.toml) {
-      const text = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : ''
-      const blocks = codexEntryBlocks(text)
-      const expected = codexEntryToml()
-      const configured = blocks.some((block) => block === expected)
-      return { id: def.id, name: def.name, file, installed, configured, outdated: blocks.length > 0 && !configured }
-    }
-    let configured = false
-    let outdated = false
-    if (installed && fs.existsSync(file)) {
-      const parsed = parseLoose(fs.readFileSync(file, 'utf-8'))
-      if (parsed) {
-        const container = getContainer(parsed, def.container)
-        const existing = container['aa-browser']
-        if (existing) {
-          if (sameEntry(existing, entryFor(def))) configured = true
-          else outdated = true
-        }
+    const result = { id: def.id, name: def.name, file, installed, configured: false, outdated: false }
+    if (def.manual || !fs.existsSync(file)) return result
+    try {
+      const text = fs.readFileSync(file, 'utf-8')
+      if (def.toml) {
+        const existing = readTomlEntry(text)
+        result.configured = sameEntry(existing, readTomlEntry(codexEntryToml()))
+        result.outdated = existing !== undefined && !result.configured
+        return result
       }
+      const existing = readJsonEntry(text, def.container)
+      result.configured = installed && sameEntry(existing, entryFor(def))
+      result.outdated = installed && existing !== undefined && !result.configured
+      const entry = existing as Record<string, unknown> | undefined
+      const bridgeArgs = Array.isArray(entry?.['args'])
+        ? entry['args']
+        : Array.isArray(entry?.['command']) ? entry['command'].slice(1) : undefined
+      result.outdated ||= !!(bridgeArgs && typeof bridgeArgs[0] === 'string' && !fs.existsSync(bridgeArgs[0]))
+    } catch {
+      // An unreadable or malformed client file must not prevent scanning the other clients.
     }
-    const entry = fs.existsSync(file) ? parseLoose(fs.readFileSync(file, 'utf-8')) : null
-    const current = entry ? (entry as Record<string, any>) : null
-    const existingEntry = current ? getContainer(current, def.container)['aa-browser'] as Record<string, any> | undefined : undefined
-    const bridgeArgs = Array.isArray(existingEntry?.args)
-      ? existingEntry.args
-      : Array.isArray(existingEntry?.command)
-        ? existingEntry.command.slice(1)
-        : undefined
-    const bridgeMissing = Array.isArray(bridgeArgs) && typeof bridgeArgs[0] === 'string' && !fs.existsSync(bridgeArgs[0])
-    return { id: def.id, name: def.name, file, installed, configured, outdated: outdated || bridgeMissing }
+    return result
   })
 }
 
@@ -431,7 +361,7 @@ export function detectClients(): ClientDetectResult[] {
 export function setupClients(ids: string[]): ClientSetupResult[] {
   const locale = getMainLocale()
   const results: ClientSetupResult[] = []
-  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+  const ts = `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`
   try {
     if (isAppImage() && !findSystemNode()) throw new Error(diagnosticMessage(locale, 'clients.nodeRequired'))
     if (CLIENT_DEFS.some((def) => ids.includes(def.id) && !def.manual)) syncAppImageBridge()
@@ -464,43 +394,35 @@ export function setupClients(ids: string[]): ClientSetupResult[] {
       // 客户端本体未安装：仍可创建配置（对 CLI 型客户端安全），但提示
       const installed = fs.existsSync(def.detectPath())
 
-      let parsed: Record<string, unknown> = {}
-      if (fs.existsSync(file)) {
-        const backup = `${file}.aa-backup-${ts}`
-        fs.copyFileSync(file, backup)
-        const text = fs.readFileSync(file, 'utf-8')
-        const p = parseLoose(text)
-        if (!p) {
-          results.push({
-            id: def.id,
-            name: def.name,
-            status: 'manual',
-            message: diagnosticMessage(locale, 'clients.unparseable', file, bridgeEntry().command, bridgeEntry().args[0])
-          })
-          continue
-        }
-        parsed = p
+      const exists = fs.existsSync(file)
+      const text = exists ? fs.readFileSync(file, 'utf-8') : '{}\n'
+      let existing: unknown
+      try {
+        existing = readJsonEntry(text, def.container)
+      } catch {
+        if (exists) fs.copyFileSync(file, `${file}.aa-backup-${ts}`, fs.constants.COPYFILE_EXCL)
+        results.push({
+          id: def.id,
+          name: def.name,
+          status: 'manual',
+          message: diagnosticMessage(locale, 'clients.unparseable', file, bridgeEntry().command, bridgeEntry().args[0])
+        })
+        continue
       }
-
-      const container = getContainer(parsed, def.container)
       const entry = entryFor(def)
-      let status: ClientSetupResult['status'] = 'added'
-      if (container['aa-browser']) {
-        if (sameEntry(container['aa-browser'], entry)) {
-          results.push({
-            id: def.id,
-            name: def.name,
-            status: 'skipped',
-            message: diagnosticMessage(locale, 'clients.configured', file)
-          })
-          continue
-        }
-        status = 'updated'
+      if (sameEntry(existing, entry)) {
+        results.push({
+          id: def.id,
+          name: def.name,
+          status: 'skipped',
+          message: diagnosticMessage(locale, 'clients.configured', file)
+        })
+        continue
       }
-
-      container['aa-browser'] = entry
-      fs.mkdirSync(path.dirname(file), { recursive: true })
-      fs.writeFileSync(file, JSON.stringify(parsed, null, 2) + '\n', 'utf-8')
+      const status = existing === undefined ? 'added' : 'updated'
+      const output = replaceJsonEntry(text, def.container, entry)
+      if (exists) fs.copyFileSync(file, `${file}.aa-backup-${ts}`, fs.constants.COPYFILE_EXCL)
+      writeClientConfig(file, output)
       const note = installed ? '' : diagnosticMessage(locale, 'clients.notDetected')
       results.push({
         id: def.id,

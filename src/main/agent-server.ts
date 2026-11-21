@@ -8,6 +8,7 @@ import type { ConnectionInfo, WsRequest, WsProgressEvent, AgentActivityState, Ag
 import type { McpToolDef } from './tools'
 import type { ApprovalManager } from './approvals'
 import { runWithProgress } from './progress'
+import { writeJsonAtomic } from './atomic-json'
 
 const CONNECT_DIR = path.join(os.homedir(), '.aabrowser')
 const DEFAULT_CONNECT_FILE = path.join(CONNECT_DIR, 'connection.json')
@@ -69,8 +70,9 @@ export class AgentServer {
       startedAt: Date.now(),
       instanceId: this.instanceId
     }
-    fs.mkdirSync(path.dirname(this.ownConnectionFile), { recursive: true })
-    fs.writeFileSync(this.ownConnectionFile, JSON.stringify(info, null, 2), 'utf-8')
+    fs.mkdirSync(path.dirname(this.ownConnectionFile), { recursive: true, mode: 0o700 })
+    // A permissive umask or an older discovery file must not expose the local bearer token.
+    writeJsonAtomic(this.ownConnectionFile, info)
   }
 
   /** 供设置面板展示：本地 Agent 服务的连接信息 */

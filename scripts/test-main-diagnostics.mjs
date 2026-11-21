@@ -6,6 +6,7 @@ import { EventEmitter } from 'node:events'
 import Module, { createRequire } from 'node:module'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+import { parse as parseJsonc } from 'jsonc-parser'
 
 const require = createRequire(import.meta.url)
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -74,7 +75,7 @@ try {
   // Every production filesystem access is guarded, including reads and PATH probes.
   const sandboxFs = { constants: fs.constants }
   const pathArguments = {
-    existsSync: [0], statSync: [0], readFileSync: [0], copyFileSync: [0, 1], mkdirSync: [0],
+    existsSync: [0], statSync: [0], lstatSync: [0], realpathSync: [0], readFileSync: [0], copyFileSync: [0, 1], mkdirSync: [0],
     writeFileSync: [0], openSync: [0], fsyncSync: [], closeSync: [], renameSync: [0, 1], unlinkSync: [0]
   }
   for (const [method, indexes] of Object.entries(pathArguments)) {
@@ -302,7 +303,7 @@ try {
       const def = fixture('cursor', original)
       const [result] = setup([def])
       assertSetup(result, def, 'added', t(`已写入 ${def.name} 配置：${def.file()}`, `Wrote ${def.name} configuration: ${def.file()}`))
-      const written = JSON.parse(fs.readFileSync(def.file(), 'utf8'))
+      const written = parseJsonc(fs.readFileSync(def.file(), 'utf8'))
       assert.equal(written.preference, '原文 Ω')
       assert.deepEqual(written.mcpServers.other, { command: 'keep' })
       assert.deepEqual(written.mcpServers['aa-browser'], clients.entryFor(def))
@@ -322,7 +323,7 @@ try {
       const [skipped] = setup([def])
       assertSetup(skipped, def, 'skipped', t(`已配置且无需更新：${def.file()}`, `Already configured; no update needed: ${def.file()}`))
       assert.equal(fs.readFileSync(def.file(), 'utf8'), written)
-      assert.equal(operations.filter(({ method }) => method === 'copyFileSync').length, 1, 'JSON still backs up before checking the entry')
+      assert.equal(operations.filter(({ method }) => method === 'copyFileSync').length, 0, 'An unchanged entry does not create another backup')
       assert.equal(operations.filter(({ method }) => method === 'writeFileSync').length, 0)
     })
     run('corrupt JSON is backed up but not overwritten, with original command and bridge in manual advice', () => {
@@ -338,7 +339,7 @@ try {
       assert.equal(fs.readFileSync(path.join(path.dirname(def.file()), backups(def.file())[0]), 'utf8'), original)
       assert.equal(operations.filter(({ method }) => method === 'writeFileSync').length, 0)
     })
-    run('Codex add then update preserves TOML, line endings and the existing repeat-write behavior', () => {
+    run('Codex add then skip preserves TOML, line endings and avoids repeat writes', () => {
       const original = '# 用户设置\r\nmodel = "keep"\r\n\r\n[mcp_servers.other]\r\ncommand = "keep"\r\n'
       const def = fixture('codex', original)
       const [added] = setup([def])
@@ -348,15 +349,13 @@ try {
       assert.ok(written.includes('[mcp_servers.aa-browser]\r\n'))
       assert.equal(fs.readFileSync(path.join(path.dirname(def.file()), backups(def.file())[0]), 'utf8'), original)
       operations.length = 0
-      // The production entry has an env subsection, so the existing parser sees two blocks
-      // and a second setup reports "updated" (not "skipped") and backs up again.
-      const [updated] = setup([def])
-      assertSetup(updated, def, 'updated', t(`已更新 Codex MCP 配置：${def.file()}`, `Updated Codex MCP configuration: ${def.file()}`))
+      const [skipped] = setup([def])
+      assertSetup(skipped, def, 'skipped', t(`已配置且无需更新：${def.file()}`, `Already configured; no update needed: ${def.file()}`))
       assert.equal(fs.readFileSync(def.file(), 'utf8'), written)
-      const repeatedBackup = operations.find(({ method }) => method === 'copyFileSync')
-      assert.ok(repeatedBackup)
-      assert.equal(fs.readFileSync(repeatedBackup.args[1], 'utf8'), written)
-      assert.equal(operations.filter(({ method }) => ['copyFileSync', 'writeFileSync'].includes(method)).length, 2)
+      assert.equal(operations.filter(({ method }) => ['copyFileSync', 'writeFileSync', 'renameSync'].includes(method)).length, 0)
+      const detected = withDefs([def], () => clients.detectClients())[0]
+      assert.equal(detected.configured, true)
+      assert.equal(detected.outdated, false)
     })
     run('Codex creation and update do not alter unrelated TOML blocks', () => {
       const fresh = fixture('codex')
@@ -372,14 +371,13 @@ try {
       assert.equal(fs.readFileSync(path.join(path.dirname(def.file()), backups(def.file())[0]), 'utf8'), original)
     })
     for (const id of ['cursor', 'codex']) {
-      for (const method of ['copyFileSync', 'readFileSync', 'mkdirSync', 'writeFileSync']) {
+      for (const method of ['copyFileSync', 'readFileSync', 'mkdirSync', 'openSync', 'writeFileSync', 'fsyncSync', 'renameSync']) {
         run(`${id} ${method} error retains the raw exception and error status`, () => {
           const original = id === 'codex' ? 'model = "keep"\n' : '{"preference":"keep"}'
           const def = fixture(id, original)
           const detail = `${rawError}\n${def.file()}`
           fsFault = (called, args) => {
-            const target = method === 'mkdirSync' ? path.dirname(def.file()) : def.file()
-            if (called === method && args[0] === target) throw new Error(detail)
+            if (called === method) throw new Error(detail)
           }
           const expected = id === 'codex'
             ? t(`写入 Codex 配置失败：${detail}`, `Failed to write Codex configuration: ${detail}`)
@@ -478,12 +476,118 @@ try {
     })
   }
 
+  test('JSONC preserves string contents, comments and unrelated formatting', () => {
+    useLocale('en-US', 'zh-TW')
+    const original = '{\r\n  // keep comment\r\n  "url": "https://example.test/a//b",\r\n  "literal": "/*not a comment*/ ,}",\r\n  "servers": { "other": { "command": "keep" }, },\r\n}\r\n'
+    const def = fixture('vscode', original)
+    assert.equal(setup([def])[0].status, 'added')
+    const written = fs.readFileSync(def.file(), 'utf8')
+    assert.ok(written.includes('  // keep comment\r\n'))
+    assert.ok(written.includes('"url": "https://example.test/a//b"'))
+    assert.ok(written.includes('"literal": "/*not a comment*/ ,}"'))
+    assert.ok(written.includes('"other": { "command": "keep" }'))
+    assert.equal(setup([def])[0].status, 'skipped')
+  })
+  test('non-object JSON roots and incompatible containers are never replaced', () => {
+    useLocale('en-US', 'zh-TW')
+    for (const original of ['[]', '[1]', 'null', '"text"', '42', '{"mcpServers":[]}', '{"mcpServers":"keep"}', '{"mcpServers":null}']) {
+      const def = fixture('cursor', original)
+      const result = setup([def])[0]
+      assert.equal(result.status, 'manual', original)
+      assert.equal(fs.readFileSync(def.file(), 'utf8'), original)
+    }
+  })
+  test('Codex replacement preserves unrelated array tables and header-looking multiline strings', () => {
+    useLocale('en-US', 'zh-TW')
+    const original = '# keep\nmodel = "keep"\nprompt = """\n[mcp_servers.aa-browser]\nThis is not a table.\n"""\n[mcp_servers.aa-browser]\ncommand = "old"\n[mcp_servers.aa-browser.env]\nOLD = "old"\n[[projects]]\nname = "keep"\n[[projects.rules]]\npattern = "keep too"\n'
+    const def = fixture('codex', original)
+    assert.equal(setup([def])[0].status, 'updated')
+    const written = fs.readFileSync(def.file(), 'utf8')
+    assert.ok(written.includes('prompt = """\n[mcp_servers.aa-browser]\nThis is not a table.\n"""'))
+    assert.ok(written.includes('[[projects]]\nname = "keep"\n[[projects.rules]]\npattern = "keep too"'))
+    assert.equal(setup([def])[0].status, 'skipped')
+  })
+  test('invalid TOML is left untouched rather than appending to a broken document', () => {
+    useLocale('en-US', 'zh-TW')
+    for (const original of ['model = "unterminated', '[mcp_servers.aa-browser]\ncommand = "first"\ncommand = "duplicate"\n']) {
+      const def = fixture('codex', original)
+      assert.equal(setup([def])[0].status, 'error')
+      assert.equal(fs.readFileSync(def.file(), 'utf8'), original)
+    }
+  })
+  test('same-millisecond downloads have unique paths and IDs even after the history cap', () => {
+    const now = Date.now
+    Date.now = () => 1234567890
+    try {
+      const tracker = new DownloadTracker()
+      tracker.setDirectoryProvider(() => path.join(home, 'downloads'))
+      const session = new EventEmitter()
+      tracker.attach(session)
+      const ids = new Set()
+      const paths = new Set()
+      for (let index = 0; index < 105; index++) {
+        const item = downloadItem()
+        session.emit('will-download', {}, item)
+        const current = tracker.list(1)[0]
+        assert.ok(!paths.has(item.savePath), 'Distinct downloads must never share an output path')
+        assert.ok(!ids.has(current.id), 'Opaque record IDs must remain unique after trimming')
+        assert.match(current.id, /^d[a-z0-9]+$/, 'Preserve the existing alphanumeric download ID shape')
+        paths.add(item.savePath)
+        ids.add(current.id)
+        item.emit('done', {}, 'completed')
+      }
+      assert.equal(tracker.list(100).length, 100)
+    } finally { Date.now = now }
+  })
+  test('unique download prefixes keep long Unicode filenames within the leaf-name budget', () => {
+    const tracker = new DownloadTracker()
+    tracker.setDirectoryProvider(() => path.join(home, 'downloads'))
+    const session = new EventEmitter()
+    tracker.attach(session)
+    for (const name of ['报告😀'.repeat(80) + '.pdf', 'x'.repeat(250) + '.txt', 'ordinary.txt']) {
+      const item = downloadItem()
+      item.getFilename = () => name
+      session.emit('will-download', {}, item)
+      const current = tracker.list(1)[0]
+      assert.equal(current.filename, name, 'Keep the original display name')
+      assert.ok(Buffer.byteLength(path.basename(item.savePath)) <= 255)
+      assert.ok(item.savePath.endsWith(path.extname(name)))
+      assert.ok(!path.basename(item.savePath).includes('\uFFFD'), 'Do not split a Unicode code point')
+      item.emit('done', {}, 'completed')
+    }
+  })
+  test('duplicate JSON keys are ambiguous and stay untouched', () => {
+    useLocale('en-US', 'zh-TW')
+    for (const original of ['{"mcpServers":{},"mcpServers":{"other":{"command":"keep"}}}', '{"preference":{"same":1,"same":2}}']) {
+      const def = fixture('cursor', original)
+      assert.equal(setup([def])[0].status, 'manual')
+      assert.equal(fs.readFileSync(def.file(), 'utf8'), original)
+    }
+  })
+  test('inline and dotted TOML entry layouts fail closed without modifying the file', () => {
+    useLocale('en-US', 'zh-TW')
+    for (const original of ['mcp_servers = { aa-browser = { command = "keep" } }\n', 'mcp_servers.aa-browser.command = "keep"\n']) {
+      const def = fixture('codex', original)
+      assert.equal(setup([def])[0].status, 'error')
+      assert.equal(fs.readFileSync(def.file(), 'utf8'), original)
+      assert.equal(backups(def.file()).length, 0)
+    }
+  })
+  test('a broken client file cannot abort discovery for healthy clients', () => {
+    const broken = fixture('cursor', 'broken JSON')
+    const codex = fixture('codex', 'model = "broken')
+    const healthy = fixture('vscode')
+    assert.equal(setup([healthy])[0].status, 'added')
+    const results = withDefs([broken, codex, healthy], () => clients.detectClients())
+    assert.equal(results.length, 3)
+    assert.deepEqual(results.map((result) => result.configured), [false, false, true])
+  })
   test('setup captures the saved locale before any write and re-resolves on the next call', () => {
     useLocale('en-US', 'en-GB')
     const defs = [fixture('cursor'), fixture('deepseek-harness'), fixture('codex')]
     let changed = false
     fsObserver = (method, args) => {
-      if (!changed && method === 'writeFileSync' && args[0] === defs[0].file()) {
+      if (!changed && method === 'renameSync' && args[1] === defs[0].file()) {
         changed = true
         store.set({ locale: 'zh-CN' })
         systemLocale = 'zh-HK'
@@ -502,7 +606,7 @@ try {
     useLocale('auto', 'en-GB')
     const defs = [fixture('cursor'), fixture('codex')]
     fsObserver = (method, args) => {
-      if (method === 'writeFileSync' && args[0] === defs[0].file()) systemLocale = 'zh-HK'
+      if (method === 'renameSync' && args[1] === defs[0].file()) systemLocale = 'zh-HK'
     }
     const results = setup(defs)
     assertSetup(results[0], defs[0], 'added', `Wrote ${defs[0].name} configuration: ${defs[0].file()}`)
@@ -522,7 +626,7 @@ try {
     useLocale('en-US', 'zh-TW')
     for (const id of ['cursor', 'codex']) {
       const def = fixture(id)
-      fsFault = (method, args) => { if (method === 'writeFileSync' && args[0] === def.file()) throw rawError }
+      fsFault = (method, args) => { if (method === 'renameSync' && args[1] === def.file()) throw rawError }
       assertSetup(setup([def])[0], def, 'error', id === 'codex'
         ? `Failed to write Codex configuration: ${rawError}` : `Failed to write ${def.name} configuration: ${rawError}`)
     }
@@ -544,7 +648,7 @@ try {
       assert.equal(updated.name, def.name)
       assert.ok(updated.message.startsWith(`Updated ${english} configuration: `), updated.message)
       const failing = fixture(id)
-      fsFault = (method, args) => { if (method === 'writeFileSync' && args[0] === failing.file()) throw rawError }
+      fsFault = (method, args) => { if (method === 'renameSync' && args[1] === failing.file()) throw rawError }
       const [failed] = setup([failing])
       assert.equal(failed.status, 'error')
       assert.equal(failed.name, failing.name)

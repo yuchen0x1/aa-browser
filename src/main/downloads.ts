@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { shell } from 'electron'
 import type { Session, DownloadItem } from 'electron'
 import { diagnosticMessage, errorDetail } from '../shared/diagnostics'
@@ -26,6 +27,26 @@ const PROGRESS_THROTTLE_MS = 1000
 
 function defaultDownloadDir(): string {
   return process.env['AA_BROWSER_DOWNLOAD_DIR'] || path.join(os.homedir(), '.aabrowser', 'downloads')
+}
+
+function truncateFilename(value: string, maxBytes: number): string {
+  let result = ''
+  let bytes = 0
+  for (const character of value) {
+    const size = Buffer.byteLength(character)
+    if (bytes + size > maxBytes) break
+    result += character
+    bytes += size
+  }
+  return result
+}
+
+/** Keep the unique prefix without exceeding common filesystem leaf-name limits. */
+function downloadBasename(prefix: string, filename: string): string {
+  const budget = 255 - Buffer.byteLength(prefix)
+  const extension = truncateFilename(path.extname(filename), Math.min(40, budget))
+  const stem = filename.slice(0, filename.length - path.extname(filename).length)
+  return prefix + truncateFilename(stem, budget - Buffer.byteLength(extension)) + extension
 }
 
 /**
@@ -75,17 +96,18 @@ export class DownloadTracker {
         /* 忽略 */
       }
       const stamp = Date.now().toString(36)
+      const downloadId = randomUUID()
       const retriedFrom = this.pendingRetries.shift()
       const rawFilename = item.getFilename() || `download-${stamp}`
       // Chromium normally supplies a basename, but a hostile server can still
       // return separators or traversal segments in Content-Disposition.
       // biome-ignore lint/suspicious/noControlCharactersInRegex: This sanitizer intentionally matches ASCII control characters in untrusted filenames.
       const filename = path.basename(rawFilename).replace(/[<>:"/\\|?*\u0000-\u001F]/g, '_').trim() || `download-${stamp}`
-      const savePath = path.join(dir, `${stamp}${retriedFrom ? '-r' : '-'}${filename}`)
+      const savePath = path.join(dir, downloadBasename(`${stamp}-${downloadId}${retriedFrom ? '-r' : '-'}`, filename))
       item.setSavePath(savePath)
 
       const record: DownloadRecord = {
-        id: `d${stamp}${this.records.length}`,
+        id: `d${downloadId.replace(/-/g, '')}`,
         filename,
         url: item.getURL(),
         savePath,

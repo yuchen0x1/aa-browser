@@ -14,14 +14,14 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const require = createRequire(import.meta.url)
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-agent-cancellation-'))
 const out = path.join(tmp, 'compiled')
-// Transpile only the two production modules; application typechecking is a separate check.
+// Transpile only the production modules under test; application typechecking is a separate check.
 // Use the installed compiler CLI rather than the removed TypeScript 7 transpileModule API.
 try {
   const tsc = path.join(path.dirname(require.resolve('typescript/package.json')), 'bin/tsc')
   const compiled = spawnSync(process.execPath, [
     tsc, '--ignoreConfig', '--noCheck', '--noResolve', '--outDir', out,
     '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--esModuleInterop',
-    path.join(root, 'src/main/agent-server.ts'), path.join(root, 'src/main/progress.ts')
+    ...['agent-server', 'progress', 'atomic-json'].map((name) => path.join(root, `src/main/${name}.ts`))
   ], { cwd: root, encoding: 'utf8' })
   assert.equal(compiled.status, 0, `Compilation failed: ${compiled.error ?? ''}\n${compiled.stdout}\n${compiled.stderr}`)
 } catch (error) {
@@ -36,7 +36,17 @@ function loadMain(name, dependencies = {}) {
   return module.exports
 }
 const progress = loadMain('progress')
-const { AgentServer } = loadMain('agent-server', { './progress': progress })
+const privateWrites = []
+const atomic = loadMain('atomic-json', { 'node:fs': {
+  ...fs,
+  openSync(file, flags, mode) {
+    const relative = path.relative(tmp, path.dirname(file))
+    assert.ok(relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative), 'Discovery writes stay in the isolated directory')
+    privateWrites.push({ flags, mode })
+    return fs.openSync(file, flags, mode)
+  }
+} })
+const { AgentServer } = loadMain('agent-server', { './progress': progress, './atomic-json': atomic })
 const previousConnectionFile = process.env.AA_BROWSER_CONNECTION_FILE
 process.env.AA_BROWSER_CONNECTION_FILE = path.join(tmp, 'connection.json')
 const running = new Map()
@@ -84,7 +94,35 @@ function clientFor(label) {
 }
 
 try {
+  const discoveryFile = process.env.AA_BROWSER_CONNECTION_FILE
+  const freshFile = path.join(tmp, 'private', 'nested', 'connection.json')
+  const fresh = new AgentServer([], () => {}, 'test')
+  process.env.AA_BROWSER_CONNECTION_FILE = freshFile
+  try {
+    await fresh.start()
+    assert.deepEqual(privateWrites, [{ flags: 'wx', mode: 0o600 }])
+    if (process.platform !== 'win32') {
+      assert.equal(fs.statSync(path.dirname(freshFile)).mode & 0o777, 0o700)
+      assert.equal(fs.statSync(freshFile).mode & 0o777, 0o600)
+    }
+  } finally {
+    fresh.stop()
+    process.env.AA_BROWSER_CONNECTION_FILE = discoveryFile
+    privateWrites.length = 0
+  }
+  fs.writeFileSync(discoveryFile, '{"token":"stale fixture"}', { mode: 0o644 })
+  if (process.platform !== 'win32') {
+    fs.chmodSync(discoveryFile, 0o644)
+    assert.equal(fs.statSync(discoveryFile).mode & 0o777, 0o644)
+  }
   await server.start()
+  assert.deepEqual(privateWrites, [{ flags: 'wx', mode: 0o600 }], 'Token publication uses an exclusive private temporary file')
+  if (process.platform !== 'win32') assert.equal(fs.statSync(discoveryFile).mode & 0o777, 0o600, 'Replace legacy permissive discovery permissions')
+  const published = JSON.parse(fs.readFileSync(discoveryFile, 'utf8'))
+  assert.equal(published.token, server.info().token)
+  assert.equal(published.port, server.info().port)
+  assert.equal(fs.readdirSync(tmp).some((name) => name.endsWith('.tmp')), false)
+  console.log('PASS: discovery publication is atomic and requests owner-only permissions, including legacy files (POSIX mode checked on POSIX only)')
   const first = await connect()
   const second = await connect()
   start(first, 1, 'first')
