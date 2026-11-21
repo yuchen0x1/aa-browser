@@ -51,10 +51,32 @@ export function replaceJsonEntry(text: string, container: string, entry: Record<
   readJsonEntry(text, container)
   const bom = text.startsWith('\uFEFF') ? '\uFEFF' : ''
   const input = text.slice(bom.length)
-  // Formatting a whole touched line can also rewrite an unrelated inline sibling.
-  const output = applyEdits(input, modify(input, [...container.split('.'), 'aa-browser'], entry, {}))
+  const keys = [...container.split('.'), 'aa-browser']
+  const indent = detectJsonIndent(input)
+  const newline = input.includes('\r\n') ? '\r\n' : '\n'
+  const compact = JSON.stringify(entry)
+  const prefix = indent.repeat(keys.length)
+  const pretty = JSON.stringify(entry, null, indent).replace(/\n/g, newline + prefix)
+  // Format only bytes supplied by the scoped edit. jsonc-parser's formattingOptions
+  // also format existing inline siblings, which belong to the user, not this entry.
+  const edits = modify(input, keys, entry, {}).map((edit) => {
+    if (!indent) return edit
+    let content = edit.content.replace(compact, () => pretty)
+    const member = '"aa-browser": '
+    if (edit.length === 0 && content.includes(member)) {
+      content = content.replace(member, newline + prefix + member)
+      if (/^[ \t]*}/.test(input.slice(edit.offset))) content += newline + indent.repeat(keys.length - 1)
+    }
+    return { ...edit, content }
+  })
+  const output = applyEdits(input, edits)
   if (!sameEntry(readJsonEntry(output, container), entry)) throw new Error('MCP configuration verification failed')
   return bom + output
+}
+
+/** Detect the member indent unit; an empty string means compact/minified. */
+function detectJsonIndent(text: string): string {
+  return /^[ \t]+(?=")/m.exec(text)?.[0] ?? ''
 }
 
 function tomlConfig(text: string): Record<string, unknown> {
@@ -132,8 +154,9 @@ export function replaceTomlEntry(text: string, entry: string): string {
     }
     if (!removing) kept.push(line)
   }
-  const base = kept.join('')
-  const output = `${base}${base && !base.endsWith('\n') ? newline : ''}${base ? newline : ''}${entry.replace(/\n/g, newline)}${newline}`
+  // Trim trailing blank lines so repeated updates do not accumulate separators.
+  const base = kept.join('').replace(/(?:\r?\n[ \t]*)+$/, '')
+  const output = `${base}${base ? newline + newline : ''}${entry.replace(/\n/g, newline)}${newline}`
   const parsed = parseToml(output)
   if (!sameEntry(entryAt(parsed, ['mcp_servers', 'aa-browser']), readTomlEntry(entry)) ||
       !sameEntry(withoutTomlEntry(original), withoutTomlEntry(parsed))) {

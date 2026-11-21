@@ -98,15 +98,20 @@ export function resolveFrame(wc: WebContents, id: string): Electron.WebFrameMain
 }
 
 /** 在指定帧内执行脚本（跨域也可用，因为走的是该帧自己的上下文） */
-export async function frameEvaluate(wc: WebContents, frameId: string, expression: string): Promise<unknown> {
+export async function frameEvaluate(wc: WebContents, frameId: string, expression: string, signal?: AbortSignal): Promise<unknown> {
   // evaluate 是显式执行表达式的工具操作；固定动作不经由这个入口。
-  return runFrameScript(wc, frameId, `(() => { return (${expression}) })()`)
+  return runFrameScript(wc, frameId, `(() => { return (${expression}) })()`, signal)
 }
 
-async function runFrameScript(wc: WebContents, frameId: string, script: string): Promise<unknown> {
+async function runFrameScript(wc: WebContents, frameId: string, script: string, signal?: AbortSignal): Promise<unknown> {
+  signal?.throwIfAborted()
   const frame = resolveFrame(wc, frameId)
   if (!frame) throw new Error(`找不到 iframe: ${frameId}（先用 browser_frame action=list 查看）`)
-  return await frame.executeJavaScript(script, true)
+  // 帧定位同步完成；每个固定动作仅派发一次脚本，派发后无法撤销。
+  signal?.throwIfAborted()
+  const result = await frame.executeJavaScript(script, true)
+  signal?.throwIfAborted()
+  return result
 }
 
 /** 生成元素选择器的页面内片段：优先 id / data-testid / name，退回结构路径 */
@@ -205,7 +210,7 @@ export async function frameText(wc: WebContents, frameId: string, maxChars = 400
 }
 
 /** 帧内点击（合成 click，跨域可用；不受顶层命中测试影响） */
-export async function frameClick(wc: WebContents, frameId: string, selector: string, index = 0): Promise<{ clicked: string }> {
+export async function frameClick(wc: WebContents, frameId: string, selector: string, index = 0, signal?: AbortSignal): Promise<{ clicked: string }> {
   const result = (await runFrameScript(
     wc,
     frameId,
@@ -219,7 +224,8 @@ export async function frameClick(wc: WebContents, frameId: string, selector: str
       try { el.scrollIntoView({ block: 'center', inline: 'center' }) } catch (e) {}
       el.click();
       return { ok: true, clicked: describe(el) };
-    })()`
+    })()`,
+    signal
   )) as { ok: boolean; reason?: string; clicked?: string }
   if (!result?.ok) {
     throw new Error(
@@ -234,7 +240,7 @@ export async function frameClick(wc: WebContents, frameId: string, selector: str
 }
 
 /** 帧内输入：原生 setter + input/change 事件，兼容 React/Vue 受控组件 */
-export async function frameType(wc: WebContents, frameId: string, selector: string, text: string): Promise<{ typed: string }> {
+export async function frameType(wc: WebContents, frameId: string, selector: string, text: string, signal?: AbortSignal): Promise<{ typed: string }> {
   const result = (await runFrameScript(
     wc,
     frameId,
@@ -251,7 +257,8 @@ export async function frameType(wc: WebContents, frameId: string, selector: stri
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
       return { ok: true, typed: describe(el) };
-    })()`
+    })()`,
+    signal
   )) as { ok: boolean; reason?: string; typed?: string }
   if (!result?.ok) throw new Error(result?.reason === 'invalid-selector' ? `选择器无效: ${selector}` : `在 ${frameId} 内找不到输入元素: ${selector}`)
   return { typed: result.typed ?? selector }
@@ -262,7 +269,8 @@ export async function frameSelect(
   wc: WebContents,
   frameId: string,
   selector: string,
-  opts: { value?: string; label?: string }
+  opts: { value?: string; label?: string },
+  signal?: AbortSignal
 ): Promise<{ selected: string }> {
   const result = (await runFrameScript(
     wc,
@@ -284,7 +292,8 @@ export async function frameSelect(
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
       return { ok: true, selected: (target.label || target.text || target.value) };
-    })()`
+    })()`,
+    signal
   )) as { ok: boolean; reason?: string; selected?: string }
   if (!result?.ok) throw new Error(result?.reason === 'option-not-found' ? `在 ${frameId} 内找不到该选项` : `在 ${frameId} 内找不到下拉框: ${selector}`)
   return { selected: result.selected ?? '' }

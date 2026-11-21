@@ -11,10 +11,7 @@ import { ISOLATED_PARTITION_PREFIX, SHARED_PARTITION } from './tabs'
  * 因此启动阶段还要扫一遍残留目录。
  */
 
-/**
- * 默认拒绝的权限。Agent 驱动的浏览器不需要摄像头/麦克风/定位等能力，
- * 而网页一旦拿到这些权限就可能静默采集环境信息；当前策略直接拒绝这些权限。
- */
+/** 默认拒绝的设备能力与剪贴板读取权限；媒体、定位和通知另走人工审批。 */
 const DENIED_PERMISSIONS = new Set([
   'clipboard-read',
   'deprecated-sync-clipboard-read',
@@ -31,7 +28,7 @@ const DENIED_PERMISSIONS = new Set([
   'openExternal'
 ])
 
-/** 需要用户明确点头的权限；其余敏感能力仍一律拒绝。 */
+/** 需要用户明确点头的权限；集合外仍沿用非拒绝即允许的兼容策略。 */
 const PROMPT_PERMISSIONS = new Set(['media', 'geolocation', 'geolocation-approximate', 'notifications'])
 
 const PERMISSION_LABELS: Record<string, string> = {

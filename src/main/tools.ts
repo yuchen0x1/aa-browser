@@ -45,7 +45,8 @@ import {
   doScreenshot,
   doConsoleLogs,
   raceAbort,
-  resolveWebContents
+  resolveWebContents,
+  throwIfAborted
 } from './actions'
 
 interface McpToolDefBase {
@@ -74,6 +75,8 @@ export interface McpToolDef extends McpToolDefBase {
 
 /** 工具结果：文本内容 */
 const text = (t: string): ToolContent => ({ type: 'text', text: t })
+const callSignal = (args: Record<string, unknown>): AbortSignal | undefined =>
+  args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
 
 interface PerformanceResourceEntry {
   name: string
@@ -184,6 +187,12 @@ export function buildTools(
     })
   }
 
+  /** 单次调用取消与全局暂停是独立的，跨 await 后执行下一步前同时检查。 */
+  function assertToolRunning(signal?: AbortSignal): void {
+    if (signal) throwIfAborted(signal)
+    approvals?.assertRunning()
+  }
+
   /** 若开启"高危操作人工确认"，请求一次人工批准；未开启直接放行。 */
   async function opGate(desc: { site: string; tabTitle: string; action: string; detail?: string }, signal?: unknown): Promise<void> {
     if (!approvals) return
@@ -212,23 +221,27 @@ export function buildTools(
     tab: ReturnType<typeof resolveWebContents>,
     ref: string,
     target: { sensitive?: boolean; label?: string },
-    signal?: unknown
+    signal?: AbortSignal
   ): Promise<void> {
+    assertToolRunning(signal)
     if (tabs.activeId !== tab.id) throw new ActionError('敏感输入审批仅支持当前活动标签；请切换到目标标签后重试。')
     const wc = tab.view.webContents
     const originalUrl = wc.getURL()
     const originalFrame = await wc.executeJavaScript(fingerprintScript(ref), false) as { fingerprint?: string; rect?: number[] } | null
+    assertToolRunning(signal)
     if (!originalFrame) throw new ActionError('敏感输入目标已失效；请刷新快照后重试。')
     const url = new URL(originalUrl)
-    const allowed = approvals ? await approvals.request({ site: url.host || url.protocol, tabTitle: tab.title, fieldLabel: target.label || '敏感输入框' }, signal instanceof AbortSignal ? signal : undefined) : false
+    const allowed = approvals ? await approvals.request({ site: url.host || url.protocol, tabTitle: tab.title, fieldLabel: target.label || '敏感输入框' }, signal) : false
+    assertToolRunning(signal)
     if (!allowed) throw new ActionError('敏感输入已取消或超时；Agent 提供的文本未写入。')
     if (wc.isDestroyed() || wc.getURL() !== originalUrl || tabs.activeId !== tab.id) throw new ActionError('页面或活动标签在等待确认期间已变化；请重新获取快照后再继续。')
     const rechecked = await inspectTypeTarget(tab, ref)
+    assertToolRunning(signal)
     if (!rechecked.ok || !rechecked.sensitive || rechecked.fingerprint !== originalFrame.fingerprint) throw new ActionError('敏感输入目标已变化；请重新获取快照后再继续。')
   }
 
   /** Inspect an iframe input without reading its value; selector is embedded as data. */
-  async function inspectFrameTypeTarget(wc: Electron.WebContents, frameId: string, selector: string): Promise<{
+  async function inspectFrameTypeTarget(wc: Electron.WebContents, frameId: string, selector: string, signal?: AbortSignal): Promise<{
     ok: boolean; sensitive?: boolean; label?: string; fingerprint?: string; url?: string
   }> {
     const source = `(() => {
@@ -244,7 +257,7 @@ export function buildTools(
       if (sensitive) el.focus();
       return { ok: true, sensitive, fingerprint, label: (label || el.getAttribute('aria-label') || el.name || el.id || type || el.tagName).slice(0, 120), url: String(location.href) };
     })()`
-    return await frameEvaluate(wc, frameId, source) as { ok: boolean; sensitive?: boolean; label?: string; fingerprint?: string; url?: string }
+    return await frameEvaluate(wc, frameId, source, signal) as { ok: boolean; sensitive?: boolean; label?: string; fingerprint?: string; url?: string }
   }
 
   /** Gate iframe sensitive input while keeping the supplied text out of page execution. */
@@ -252,11 +265,13 @@ export function buildTools(
     tab: ReturnType<typeof resolveWebContents>,
     frameId: string,
     selector: string,
-    signal?: unknown
+    signal?: AbortSignal
   ): Promise<void> {
+    assertToolRunning(signal)
     if (tabs.activeId !== tab.id) throw new ActionError('敏感输入审批仅支持当前活动标签；请切换到目标标签后重试。')
     const wc = tab.view.webContents
-    const original = await inspectFrameTypeTarget(wc, frameId, selector)
+    const original = await inspectFrameTypeTarget(wc, frameId, selector, signal)
+    assertToolRunning(signal)
     if (!original.ok || !original.sensitive) throw new ActionError('敏感输入目标已变化；请重新获取 frame 元素后再继续。')
     const originalUrl = original.url || wc.getURL()
     let site = originalUrl
@@ -269,12 +284,14 @@ export function buildTools(
     const allowed = approvals
       ? await approvals.request(
           { site, tabTitle: tab.title, fieldLabel: original.label || '敏感输入框' },
-          signal instanceof AbortSignal ? signal : undefined
+          signal
         )
       : false
+    assertToolRunning(signal)
     if (!allowed) throw new ActionError('敏感输入已取消或超时；Agent 提供的文本未写入。')
     if (wc.isDestroyed() || tabs.activeId !== tab.id) throw new ActionError('页面或活动标签在等待确认期间已变化；请重新获取 frame 元素后再继续。')
-    const rechecked = await inspectFrameTypeTarget(wc, frameId, selector)
+    const rechecked = await inspectFrameTypeTarget(wc, frameId, selector, signal)
+    assertToolRunning(signal)
     if (!rechecked.ok || !rechecked.sensitive || rechecked.fingerprint !== original.fingerprint || rechecked.url !== original.url) {
       throw new ActionError('敏感输入目标已变化；请重新获取 frame 元素后再继续。')
     }
@@ -350,7 +367,7 @@ export function buildTools(
       const want = args['snapshot'] !== false
       const button = (args['button'] as 'left' | 'right' | 'middle') || 'left'
       const clickCount = args['doubleClick'] ? 2 : 1
-      const r = await doClick(tab, String(args['ref']), want, { button, clickCount })
+      const r = await doClick(tab, String(args['ref']), want, { button, clickCount, signal: callSignal(args) })
       return { content: [text(withSnap(`已点击: ${r.clicked}`, r.snapshot, want))] }
     }
   })
@@ -375,28 +392,32 @@ export function buildTools(
   pushTool({
     name: 'browser_type',
     handler: async (args) => {
-      approvals?.assertRunning()
+      const signal = callSignal(args)
+      assertToolRunning(signal)
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const ref = String(args['ref'])
       const target = await inspectTypeTarget(tab, ref)
+      assertToolRunning(signal)
       if (!target.ok) throw new ActionError(`找不到输入目标 ${ref}；请刷新页面快照后重试。`)
       if (target.sensitive) {
         // Never write or retain an agent-supplied secret. Let the user type directly into the focused page field.
-        await approveSensitiveType(tab, ref, target, args['__aaSignal'])
+        await approveSensitiveType(tab, ref, target, signal)
         if (args['submit']) throw new ActionError('敏感字段已填写，但 Agent 不会自动提交；请由你在网页中亲自确认提交。')
         return { content: [text('已允许继续。敏感字段内容由你在网页中输入；Agent 提供的文本未写入、读取或回传。请继续后续步骤。')] }
       }
       if (args['submit']) {
         await opGate(
           { site: new URL(tab.view.webContents.getURL()).host || tab.view.webContents.getURL(), tabTitle: tab.title, action: '提交表单/输入后回车' },
-          args['__aaSignal']
+          signal
         )
+        assertToolRunning(signal)
       }
       const want = args['snapshot'] !== false
       const r = await doType(tab, ref, String(args['text'] ?? ''), {
         submit: !!args['submit'],
         clear: !!args['clear'],
-        wantSnapshot: want
+        wantSnapshot: want,
+        signal
       })
       return { content: [text(withSnap(`已输入: ${r.typed}`, r.snapshot, want))] }
     }
@@ -411,7 +432,8 @@ export function buildTools(
       const r = await doSelectOption(tab, String(args['ref']), {
         value: args['value'] as string | undefined,
         label: args['label'] as string | undefined,
-        wantSnapshot: want
+        wantSnapshot: want,
+        signal: callSignal(args)
       })
       return { content: [text(withSnap(`已选择: ${r.selected}`, r.snapshot, want))] }
     }
@@ -454,7 +476,8 @@ export function buildTools(
         throw new ActionError('请提供 text、textGone、selector、selectorGone、urlContains 或 time 之一')
       }
       if (fixed !== null && !wantText && !wantGone && !wantSelector && !wantSelectorGone && !wantUrl) {
-        await new Promise((r) => setTimeout(r, fixed))
+        const signal = args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
+        await raceAbort(new Promise((r) => setTimeout(r, fixed)), signal)
         return { content: [text(`已等待 ${fixed}ms`)] }
       }
       const timeoutMs = typeof args['timeoutMs'] === 'number' ? args['timeoutMs'] : 10000
@@ -840,6 +863,7 @@ export function buildTools(
   pushTool({
     name: 'browser_har',
     handler: async (args) => {
+      const signal = callSignal(args)
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const includeSensitive = args['includeSensitive'] === true
       if (includeSensitive) {
@@ -848,19 +872,24 @@ export function buildTools(
           tabTitle: tab.title,
           action: '导出敏感网络数据',
           detail: '将把认证头、凭据参数或其他可能包含秘密的网络数据写入本地 HAR 文件。'
-        }, args['__aaSignal'])
+        }, signal)
       }
+      assertToolRunning(signal)
       await tab.net.ensure()
-      const { app } = await import('electron')
-      const fs = await import('node:fs')
-      const path = await import('node:path')
-      const os = await import('node:os')
+      assertToolRunning(signal)
+      const [{ app }, fs, path, os] = await Promise.all([
+        import('electron'), import('node:fs'), import('node:path'), import('node:os')
+      ])
+      assertToolRunning(signal)
       const file =
         (args['path'] as string | undefined) ||
         path.join(os.homedir(), '.aabrowser', 'har', `aa-${Date.now()}.har`)
+      const data = JSON.stringify(tab.net.toHar(app.getVersion(), includeSensitive), null, 2)
+      // 创建目录也是副作用；取消时不得创建目录、写文件或登记证据。
+      assertToolRunning(signal)
       fs.mkdirSync(path.dirname(file), { recursive: true })
-        fs.writeFileSync(file, JSON.stringify(tab.net.toHar(app.getVersion(), includeSensitive), null, 2), 'utf-8')
-        getEvidenceManager().record(file, 'har')
+      fs.writeFileSync(file, data, 'utf-8')
+      getEvidenceManager().record(file, 'har')
       return { content: [text(`HAR 已导出: ${file}\n共 ${fs.statSync(file).size} 字节`)] }
     }
   })
@@ -956,16 +985,16 @@ export function buildTools(
     }
   })
 
-pushTool({
+  pushTool({
     name: 'browser_fill_form',
     handler: async (args) => {
-      approvals?.assertRunning()
+      const signal = callSignal(args)
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const fields = Array.isArray(args['fields']) ? (args['fields'] as Record<string, unknown>[]) : []
       if (!fields.length) throw new ActionError('fields 不能为空')
       const done: string[] = []
       for (const field of fields) {
-        approvals?.assertRunning()
+        assertToolRunning(signal)
         const ref = String(field['ref'] ?? '')
         if (!ref) throw new ActionError('每个字段都必须提供 ref')
         if (typeof field['checked'] === 'boolean') {
@@ -975,12 +1004,13 @@ pushTool({
             checked?: boolean
             type?: string
           }
+          assertToolRunning(signal)
           if (!state?.ok) throw new ActionError(`找不到元素 ${ref}；请刷新页面快照后重试。`)
           if (state.type !== 'checkbox' && state.type !== 'radio') {
             throw new ActionError(`元素 ${ref} 不是复选框/单选框（是 ${state.type || 'unknown'}）`)
           }
           if (state.checked !== field['checked']) {
-            await doClick(tab, ref, false)
+            await doClick(tab, ref, false, { signal })
           }
           done.push(`${ref} = ${field['checked'] ? '已勾选' : '未勾选'}`)
           continue
@@ -988,20 +1018,23 @@ pushTool({
         if (field['label'] !== undefined || (field['value'] !== undefined && !field['submit'])) {
           // <select> 走下拉选择
           const probe = (await tab.view.webContents.executeJavaScript(tagNameScript(ref), false)) as string
+          assertToolRunning(signal)
           if (probe === 'select') {
             const r = await doSelectOption(tab, ref, {
               value: field['value'] as string | undefined,
               label: field['label'] as string | undefined,
-              wantSnapshot: false
+              wantSnapshot: false,
+              signal
             })
             done.push(`${ref} → ${r.selected}`)
             continue
           }
         }
         const target = await inspectTypeTarget(tab, ref)
+        assertToolRunning(signal)
         if (!target.ok) throw new ActionError(`找不到输入目标 ${ref}；请刷新页面快照后重试。`)
         if (target.sensitive) {
-          await approveSensitiveType(tab, ref, target, args['__aaSignal'])
+          await approveSensitiveType(tab, ref, target, signal)
           if (field['submit']) throw new ActionError('敏感字段由你在网页中输入；Agent 不会自动提交。')
           done.push(`${ref} ← [敏感字段请由你输入]`)
           continue
@@ -1009,15 +1042,18 @@ pushTool({
         if (field['submit']) {
           await opGate(
             { site: siteOf(tab), tabTitle: tab.title, action: '提交表单/输入后回车' },
-            args['__aaSignal']
+            signal
           )
+          assertToolRunning(signal)
         }
         await doType(tab, ref, String(field['value'] ?? ''), {
           submit: !!field['submit'],
-          wantSnapshot: false
+          wantSnapshot: false,
+          signal
         })
         done.push(`${ref} ← [已填写]`)
       }
+      assertToolRunning(signal)
       const want = args['snapshot'] !== false
       const snapshot = want ? await captureSnapshot(tab.view.webContents) : undefined
       return {
@@ -1156,6 +1192,7 @@ pushTool({
   pushTool({
     name: 'browser_frame',
     handler: async (args) => {
+      const signal = callSignal(args)
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const wc = tab.view.webContents
       const action = String(args['action'] ?? '')
@@ -1189,12 +1226,10 @@ pushTool({
           if (!expression.trim()) throw new ActionError('expression 不能为空')
           await opGate(
             { site: siteOf(tab), tabTitle: tab.title, action: '在网页中执行 JavaScript', detail: `frame ${frameId} · ${expression.replace(/\s+/g, ' ').slice(0, 120)}` },
-            args['__aaSignal']
+            signal
           )
-          const value = await raceAbort(
-            frameEvaluate(wc, frameId, expression),
-            args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
-          )
+          assertToolRunning(signal)
+          const value = await raceAbort(frameEvaluate(wc, frameId, expression, signal), signal)
           let rendered: string
           try {
             rendered = JSON.stringify(value, null, 2)
@@ -1209,28 +1244,30 @@ pushTool({
         const selector = String(args['selector'] ?? '')
         if (!selector) throw new ActionError(`${action} 需要提供 selector`)
         if (action === 'click') {
-          const r = await frameClick(wc, frameId, selector, typeof args['index'] === 'number' ? args['index'] : 0)
+          const r = await frameClick(wc, frameId, selector, typeof args['index'] === 'number' ? args['index'] : 0, signal)
           return { content: [text(`已在 [${frameId}] 内点击: ${r.clicked}`)] }
         }
         if (action === 'type') {
-          const target = await inspectFrameTypeTarget(wc, frameId, selector)
+          const target = await inspectFrameTypeTarget(wc, frameId, selector, signal)
+          assertToolRunning(signal)
           if (!target.ok) throw new ActionError(`在 ${frameId} 内找不到输入元素: ${selector}`)
           if (target.sensitive) {
-            await approveSensitiveFrameType(tab, frameId, selector, args['__aaSignal'])
+            await approveSensitiveFrameType(tab, frameId, selector, signal)
             return { content: [text('已允许继续。敏感字段内容由你在网页中输入；Agent 提供的文本未写入、读取或回传。请继续后续步骤。')] }
           }
-          await frameType(wc, frameId, selector, String(args['text'] ?? ''))
+          await frameType(wc, frameId, selector, String(args['text'] ?? ''), signal)
           return { content: [text(`已在 [${frameId}] 内输入（内容未记录）。`)] }
         }
         if (action === 'select') {
           const r = await frameSelect(wc, frameId, selector, {
             value: args['value'] === undefined ? undefined : String(args['value']),
             label: args['label'] === undefined ? undefined : String(args['label'])
-          })
+          }, signal)
           return { content: [text(`已在 [${frameId}] 内选择: ${r.selected}`)] }
         }
         throw new ActionError(`未知 action: ${action}`)
       } catch (error) {
+        if (signal) throwIfAborted(signal)
         throw error instanceof ActionError ? error : new ActionError((error as Error).message)
       }
     }
@@ -1377,10 +1414,11 @@ pushTool({
       handler: async (args: Record<string, unknown>) => {
         approvals?.assertRunning()
         const startTime = Date.now()
+        const signal = callSignal(args)
         try {
+          if (signal) throwIfAborted(signal)
           const result = await tool.handler(args)
-          approvals?.assertRunning()
-          if (args['__aaSignal'] instanceof AbortSignal && args['__aaSignal'].aborted) throw new ActionError('工具调用已取消。')
+          assertToolRunning(signal)
           let summary = ''
           const first = result.content?.[0]
           if (first?.type === 'text' && first.text) {

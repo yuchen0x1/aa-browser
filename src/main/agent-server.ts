@@ -70,8 +70,15 @@ export class AgentServer {
       startedAt: Date.now(),
       instanceId: this.instanceId
     }
-    fs.mkdirSync(path.dirname(this.ownConnectionFile), { recursive: true, mode: 0o700 })
-    // A permissive umask or an older discovery file must not expose the local bearer token.
+    const discoveryDir = path.resolve(path.dirname(this.ownConnectionFile))
+    fs.mkdirSync(discoveryDir, { recursive: true, mode: 0o700 })
+    // Only the application's private directory is ours to tighten. An existing custom
+    // parent may be shared with other applications; the token file still uses 0600.
+    if (process.platform !== 'win32' && path.resolve(discoveryDir) === path.resolve(CONNECT_DIR)) {
+      try {
+        if (!fs.lstatSync(discoveryDir).isSymbolicLink()) fs.chmodSync(discoveryDir, 0o700)
+      } catch { /* 收紧失败不阻止令牌文件的 0600 保护。 */ }
+    }
     writeJsonAtomic(this.ownConnectionFile, info)
   }
 

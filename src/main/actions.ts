@@ -159,12 +159,14 @@ async function readClickProbe(wc: WebContents, urlBefore: string): Promise<boole
 }
 
 /** 轮询探针，等待 click 事件被页面处理 */
-async function waitClickProbe(wc: WebContents, urlBefore: string, timeoutMs = 700): Promise<boolean | null> {
-  const deadline = Date.now() + timeoutMs
+async function waitClickProbe(wc: WebContents, urlBefore: string, signal?: AbortSignal): Promise<boolean | null> {
+  const deadline = Date.now() + 700
   let last: boolean | null = null
   while (Date.now() < deadline) {
     await delay(60)
+    throwIfAborted(signal)
     last = await readClickProbe(wc, urlBefore)
+    throwIfAborted(signal)
     if (last === true) return true
     if (wc.getURL() !== urlBefore) return true
   }
@@ -212,8 +214,10 @@ export async function doClick(
   tab: Tab,
   ref: string,
   wantSnapshot: boolean,
-  opts?: { button?: 'left' | 'right' | 'middle'; clickCount?: number }
+  opts?: { button?: 'left' | 'right' | 'middle'; clickCount?: number; signal?: AbortSignal }
 ): Promise<{ clicked: string; snapshot?: PageSnapshot }> {
+  const signal = opts?.signal
+  throwIfAborted(signal)
   const wc = tab.view.webContents
   const loc = (await wc.executeJavaScript(locateScript(ref), false)) as {
     ok: boolean
@@ -226,6 +230,7 @@ export async function doClick(
     editable?: boolean
     checked?: boolean
   }
+  throwIfAborted(signal)
   if (!loc || !loc.ok) {
     const reason = loc?.reason ?? 'unknown'
     throw new ActionError(
@@ -247,6 +252,7 @@ export async function doClick(
 
   const urlBefore = wc.getURL()
   const probeArmed = button === 'left' && (await armClickProbe(wc, ref))
+  throwIfAborted(signal)
   if (loc.hitOk) {
     // 优先走真实输入事件（isTrusted=true，兼容防爬站点）
     wc.sendInputEvent({ type: 'mouseMove', x, y })
@@ -262,8 +268,10 @@ export async function doClick(
     }
   }
 
+  throwIfAborted(signal)
   if (probeArmed) {
-    const delivered = await waitClickProbe(wc, urlBefore)
+    const delivered = await waitClickProbe(wc, urlBefore, signal)
+    throwIfAborted(signal)
     if (delivered !== true) {
       // sendInputEvent 偶发静默丢失；补发页面点击，避免“调用成功但页面没动”。
       if (loc.type === 'checkbox' || loc.type === 'radio') {
@@ -274,8 +282,11 @@ export async function doClick(
     }
   }
 
+  throwIfAborted(signal)
   await settle(wc)
+  throwIfAborted(signal)
   const snapshot = wantSnapshot ? await captureSnapshot(wc) : undefined
+  throwIfAborted(signal)
   return { clicked, snapshot }
 }
 
@@ -369,8 +380,10 @@ export async function doType(
   tab: Tab,
   ref: string,
   text: string,
-  opts: { submit?: boolean; clear?: boolean; wantSnapshot?: boolean }
+  opts: { submit?: boolean; clear?: boolean; wantSnapshot?: boolean; signal?: AbortSignal }
 ): Promise<{ typed: string; snapshot?: PageSnapshot }> {
+  const { signal } = opts
+  throwIfAborted(signal)
   const wc = tab.view.webContents
   const focus = (await wc.executeJavaScript(focusScript(ref), false)) as {
     ok: boolean
@@ -379,6 +392,7 @@ export async function doType(
     type?: string
     editable?: boolean
   }
+  throwIfAborted(signal)
   if (!focus || !focus.ok) {
     const reason = focus?.reason ?? 'unknown'
     throw new ActionError(
@@ -397,39 +411,49 @@ export async function doType(
   if (opts.clear) {
     await wc.executeJavaScript(clearScript(ref), false)
   }
+  throwIfAborted(signal)
 
   // 首选 insertText（走真实输入管线），失败则用原生 setter 兜底（React 受控输入兼容）
   let inserted = false
   try {
     await wc.insertText(text)
+    throwIfAborted(signal)
     const check = (await wc.executeJavaScript(readValueScript(ref), false)) as {
       ok: boolean
       value?: string
     }
     if (check?.ok && (check.value ?? '').endsWith(text)) inserted = true
   } catch {
-    inserted = false
+    // 只有输入/回验失败才允许兜底，中断不是写入失败。
+    throwIfAborted(signal)
   }
+  throwIfAborted(signal)
   if (!inserted) {
     await wc.executeJavaScript(setValueScript(ref, text), false)
   }
   const typed = `${tag}${inserted ? '' : '（setter 兜底写入）'}`
 
+  // 提交是新的高危副作用：输入期间被取消/中断时不得再回车。
+  throwIfAborted(signal)
   if (opts.submit) {
     wc.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' })
     wc.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' })
   }
 
   await settle(wc)
+  throwIfAborted(signal)
   const snapshot = opts.wantSnapshot ? await captureSnapshot(wc) : undefined
+  throwIfAborted(signal)
   return { typed, snapshot }
 }
 
 export async function doSelectOption(
   tab: Tab,
   ref: string,
-  opts: { value?: string; label?: string; wantSnapshot?: boolean }
+  opts: { value?: string; label?: string; wantSnapshot?: boolean; signal?: AbortSignal }
 ): Promise<{ selected: string; snapshot?: PageSnapshot }> {
+  const { signal } = opts
+  throwIfAborted(signal)
   const wc = tab.view.webContents
   const result = (await wc.executeJavaScript(selectOptionScript(ref, opts.value, opts.label), false)) as {
     ok: boolean
@@ -439,6 +463,7 @@ export async function doSelectOption(
     options?: { value: string; label: string }[]
     tag?: string
   }
+  throwIfAborted(signal)
   if (!result || !result.ok) {
     if (result?.reason === 'no-ref') {
       throw new ActionError(`找不到元素 ${ref}：页面可能已变化，请先重新调用 browser_snapshot`)
@@ -450,7 +475,9 @@ export async function doSelectOption(
     throw new ActionError(`下拉框中找不到匹配项（value=${opts.value ?? ''}, label=${opts.label ?? ''}）。可选：${list}`)
   }
   await settle(wc)
+  throwIfAborted(signal)
   const snapshot = opts.wantSnapshot ? await captureSnapshot(wc) : undefined
+  throwIfAborted(signal)
   return { selected: `${result.value}${result.label !== result.value ? ` (${result.label})` : ''}`, snapshot }
 }
 

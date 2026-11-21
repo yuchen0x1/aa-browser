@@ -123,6 +123,65 @@ try {
   assert.equal(published.port, server.info().port)
   assert.equal(fs.readdirSync(tmp).some((name) => name.endsWith('.tmp')), false)
   console.log('PASS: discovery publication is atomic and requests owner-only permissions, including legacy files (POSIX mode checked on POSIX only)')
+  if (process.platform !== 'win32') {
+    const managedHome = path.join(tmp, 'managed-home')
+    const { AgentServer: ManagedAgentServer } = loadMain('agent-server', {
+      './progress': progress, './atomic-json': atomic, 'node:os': { ...os, homedir: () => managedHome }
+    })
+    const legacyDir = path.join(managedHome, '.aabrowser')
+    const legacyFile = path.join(legacyDir, 'connection.json')
+    fs.mkdirSync(legacyDir, { recursive: true, mode: 0o777 })
+    fs.writeFileSync(legacyFile, '{"token":"legacy"}', { mode: 0o644 })
+    fs.chmodSync(legacyDir, 0o755)
+    assert.equal(fs.statSync(legacyDir).mode & 0o777, 0o755)
+    const legacy = new ManagedAgentServer([], () => {}, 'test')
+    const previousFile = process.env.AA_BROWSER_CONNECTION_FILE
+    process.env.AA_BROWSER_CONNECTION_FILE = legacyFile
+    try {
+      await legacy.start()
+      assert.equal(fs.statSync(legacyDir).mode & 0o777, 0o700, 'Existing permissive discovery directory is tightened at startup')
+      assert.equal(fs.statSync(legacyFile).mode & 0o777, 0o600, 'Legacy file stays protected')
+    } finally {
+      legacy.stop()
+      process.env.AA_BROWSER_CONNECTION_FILE = previousFile
+    }
+    console.log('PASS: startup tightens the managed pre-existing 0755 discovery directory to 0700')
+    const customDir = path.join(tmp, 'shared-custom')
+    fs.mkdirSync(customDir)
+    fs.chmodSync(customDir, 0o2770)
+    const customMode = fs.statSync(customDir).mode & 0o7777
+    const customFile = path.join(customDir, 'connection.json')
+    const custom = new ManagedAgentServer([], () => {}, 'test')
+    process.env.AA_BROWSER_CONNECTION_FILE = customFile
+    try {
+      await custom.start()
+      assert.equal(fs.statSync(customDir).mode & 0o7777, customMode, 'Custom shared directory permissions are not ours to change')
+      assert.equal(fs.statSync(customFile).mode & 0o777, 0o600, 'Custom discovery file remains private')
+    } finally {
+      custom.stop()
+      process.env.AA_BROWSER_CONNECTION_FILE = previousFile
+    }
+    console.log('PASS: startup preserves permissions of an existing custom shared directory')
+    const linkedHome = path.join(tmp, 'linked-home')
+    fs.mkdirSync(linkedHome)
+    fs.symlinkSync(customDir, path.join(linkedHome, '.aabrowser'), 'dir')
+    const { AgentServer: LinkedAgentServer } = loadMain('agent-server', {
+      './progress': progress, './atomic-json': atomic, 'node:os': { ...os, homedir: () => linkedHome }
+    })
+    for (const suffix of ['/connection.json', '/./connection.json', '//connection.json']) {
+      const linked = new LinkedAgentServer([], () => {}, 'test')
+      process.env.AA_BROWSER_CONNECTION_FILE = path.join(linkedHome, '.aabrowser') + suffix
+      try {
+        await linked.start()
+        assert.equal(fs.statSync(customDir).mode & 0o7777, customMode, 'Managed-name symlink and its path aliases must not authorize chmod of a shared target')
+        assert.equal(fs.statSync(customFile).mode & 0o777, 0o600)
+      } finally {
+        linked.stop()
+        process.env.AA_BROWSER_CONNECTION_FILE = previousFile
+      }
+    }
+    console.log('PASS: a symlink at the managed directory preserves its shared target permissions')
+  }
   const first = await connect()
   const second = await connect()
   start(first, 1, 'first')

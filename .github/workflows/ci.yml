@@ -38,6 +38,7 @@ jobs:
       - run: npm run test:frame-elements
       - run: npm run test:tools
       - run: npm run validate:codex
+      - run: npm run validate:opencode
       - run: npm run validate:workbuddy
       - run: npm run build
       - name: Generate software bill of materials
@@ -62,6 +63,7 @@ jobs:
           "${display[@]}" npm run test:update-ui
           "${display[@]}" npm run test:ui-ux
           "${display[@]}" npm run test:settings-safety
+          "${display[@]}" npm run test:cancel-side-effects
           "${display[@]}" npm run test:newtab-i18n
           "${display[@]}" npm run test:app-i18n
           "${display[@]}" npm run test:site-ui
@@ -74,6 +76,7 @@ jobs:
           fi
       - run: npm run test:stores
       - run: npm run test:main-diagnostics
+      - run: npm run test:client-config
       - run: npm run test:printing
       - run: npm run test:security
       - run: npm run test:updater

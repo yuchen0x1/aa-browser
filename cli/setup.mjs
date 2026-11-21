@@ -12,6 +12,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import readline from 'node:readline'
@@ -91,6 +92,55 @@ const CLIENTS = [
 ]
 
 const log = (...a) => console.log(...a)
+
+// 与 App 内 clients.ts 一致：兼容旧版秒级命名和当前的毫秒 + UUID v4 命名。
+const BACKUP_KEEP = 5
+const BACKUP_TIMESTAMP = /^(\d{4}-\d{2}-\d{2}T\d{2})-(\d{2})-(\d{2})(?:-(\d{3})Z-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})?$/
+
+function isBackupTimestamp(suffix) {
+  const match = BACKUP_TIMESTAMP.exec(suffix)
+  if (!match || match[0] !== suffix) return false
+  const [, hour, minute, second, millis = '000'] = match
+  const iso = `${hour}:${minute}:${second}.${millis}Z`
+  const date = new Date(iso)
+  return Number.isFinite(date.getTime()) && date.toISOString() === iso
+}
+
+function backupConfig(file) {
+  const ts = `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`
+  const backup = `${file}.aa-backup-${ts}`
+  fs.copyFileSync(file, backup, fs.constants.COPYFILE_EXCL)
+  return backup
+}
+
+function pruneBackups(file, freshBackup) {
+  try {
+    const dir = path.dirname(file)
+    const prefix = `${path.basename(file)}.aa-backup-`
+    const freshName = path.basename(freshBackup)
+    // 时钟回拨时也保留本次恢复点，只对其他备份排序。
+    const stale = fs.readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name !== freshName && entry.name.startsWith(prefix) &&
+        isBackupTimestamp(entry.name.slice(prefix.length)))
+      .map((entry) => entry.name)
+      .sort()
+      .reverse()
+      .slice(BACKUP_KEEP - 1)
+    for (const name of stale) {
+      const candidate = path.join(dir, name)
+      if (fs.lstatSync(candidate, { throwIfNoEntry: false })?.isFile()) fs.unlinkSync(candidate)
+    }
+  } catch {
+    // 保留清理是 best-effort；新备份已生成。
+  }
+}
+
+function writeClientConfig(file, value) {
+  const backup = fs.existsSync(file) ? backupConfig(file) : undefined
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  fs.writeFileSync(file, value, 'utf-8')
+  if (backup) pruneBackups(file, backup)
+}
 
 /** MCP 条目：本 CLI 无论被 node 还是 electron(RUN_AS_NODE) 执行都成立 */
 function bridgeEntry() {
@@ -240,7 +290,7 @@ function detectOne(def) {
   return { def, file, installed: installed || def.id === 'workbuddy', configured, outdated }
 }
 
-function setupOne(def, ts) {
+function setupOne(def) {
   if (def.manual) {
     log(`  ⚠️  ${def.name}: 请在 DeepSeek Harness 插件市场安装并启用 Aa Browser 插件；本脚本不会修改 .dsh 配置或内部状态。启用后让 Agent 实际调用 mcp__aa-browser__browser_tabs 验证。`)
     return
@@ -254,9 +304,7 @@ function setupOne(def, ts) {
       log(`  ℹ️  ${def.name}: 已配置，无需变更（${file}）`)
       return
     }
-    if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.aa-backup-${ts}`)
-    fs.mkdirSync(path.dirname(file), { recursive: true })
-    fs.writeFileSync(file, replaceCodexEntry(existingText, entry), 'utf-8')
+    writeClientConfig(file, replaceCodexEntry(existingText, entry))
     log(`  ✅ ${def.name} ${exists ? '已更新' : '已写入'}（${file}）`)
     return
   }
@@ -264,10 +312,9 @@ function setupOne(def, ts) {
   const installed = fs.existsSync(def.detect)
   let parsed = {}
   if (fs.existsSync(file)) {
-    const backup = `${file}.aa-backup-${ts}`
-    fs.copyFileSync(file, backup)
     const p = parseLoose(fs.readFileSync(file, 'utf-8'))
     if (!p) {
+      backupConfig(file)
       log(`  ⚠️  ${def.name}: 配置文件无法解析（${file}），请手动添加`)
       return
     }
@@ -284,8 +331,7 @@ function setupOne(def, ts) {
     verb = '已更新'
   }
   container['aa-browser'] = entry
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(file, JSON.stringify(parsed, null, 2) + '\n', 'utf-8')
+  writeClientConfig(file, JSON.stringify(parsed, null, 2) + '\n')
   log(`  ✅ ${def.name} ${verb}（${file}${installed ? '' : '，客户端目录未检测到，已创建新配置'}）`)
 }
 
@@ -362,11 +408,10 @@ async function main() {
     }
   }
 
-  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
   log('')
   for (const d of targets) {
     if (d.def.id !== 'workbuddy') {
-      setupOne(d.def, ts)
+      setupOne(d.def)
       continue
     }
     const installDir = path.resolve(HERE, '..', '..', '..')

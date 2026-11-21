@@ -76,7 +76,7 @@ try {
   const sandboxFs = { constants: fs.constants }
   const pathArguments = {
     existsSync: [0], statSync: [0], lstatSync: [0], realpathSync: [0], readFileSync: [0], copyFileSync: [0, 1], mkdirSync: [0],
-    writeFileSync: [0], openSync: [0], fsyncSync: [], closeSync: [], renameSync: [0, 1], unlinkSync: [0]
+    writeFileSync: [0], openSync: [0], fsyncSync: [], closeSync: [], renameSync: [0, 1], unlinkSync: [0], readdirSync: [0], rmSync: [0]
   }
   for (const [method, indexes] of Object.entries(pathArguments)) {
     sandboxFs[method] = (...args) => {
@@ -310,6 +310,28 @@ try {
       assert.equal(backups(def.file()).length, 1)
       assert.equal(fs.readFileSync(path.join(path.dirname(def.file()), backups(def.file())[0]), 'utf8'), original)
     })
+    run('JSONC insertion honors the file indent unit; minified files stay compact', () => {
+      const { replaceJsonEntry } = require(path.join(runDir, 'compiled/main/client-config.js'))
+      const pretty = '{\n  "preference": "keep",\n  "mcpServers": {\n    "other": { "command": "x" }\n  }\n}\n'
+      const prettyOut = replaceJsonEntry(pretty, 'mcpServers', { command: 'node', args: ['b.cjs'] })
+      assert.ok(prettyOut.split('\n').length > pretty.split('\n').length, 'pretty files gain real lines')
+      assert.ok(prettyOut.includes('\n    "aa-browser"'), 'inserted entry uses the file indent unit')
+      assert.equal(JSON.parse(prettyOut).preference, 'keep')
+      const miniOut = replaceJsonEntry('{"a":1}', 'mcpServers', { command: 'n' })
+      assert.ok(!miniOut.includes('\n  '), 'minified files stay minified')
+      assert.deepEqual(JSON.parse(miniOut).mcpServers['aa-browser'], { command: 'n' })
+    })
+    run('TOML repeated updates do not accumulate blank lines and stay parseable', () => {
+      const { replaceTomlEntry } = require(path.join(runDir, 'compiled/main/client-config.js'))
+      const { parse: parseToml } = require('smol-toml')
+      let text = '[other]\nkey = "v"\n\n[mcp_servers.other]\nc = "x"\n'
+      for (const command of ['node1', 'node2', 'node3']) {
+        text = replaceTomlEntry(text, `[mcp_servers."aa-browser"]\ncommand = "${command}"\n`)
+      }
+      assert.ok(!/\n{3,}/.test(text), 'No triple+ newline runs after repeated updates')
+      assert.equal(parseToml(text).mcp_servers['aa-browser'].command, 'node3')
+      assert.equal(parseToml(text).other.key, 'v')
+    })
     run('JSON update and skip retain statuses, unrelated keys and existing backup behavior', () => {
       const original = JSON.stringify({ preference: '保留', mcpServers: { other: { command: 'keep' }, 'aa-browser': { command: 'old' } } })
       const def = fixture('cursor', original)
@@ -475,6 +497,67 @@ try {
       }
     })
   }
+
+  for (const id of ['cursor', 'codex', 'workbuddy']) {
+    test(`${id} keeps the current recovery point plus four historical backups, ignoring lookalikes`, () => {
+      useLocale('en-US', 'zh-TW')
+      const original = id === 'codex' ? 'model = "keep"\r\n' : '{"preference":"keep"}\r\n'
+      const def = fixture(id, original)
+      const dir = path.dirname(def.file())
+      const prefix = `${path.basename(def.file())}.aa-backup-`
+      const uuid = '00000000-0000-4000-8000-000000000001'
+      const old = [`${prefix}2000-01-01T00-00-00`, `${prefix}2000-01-02T00-00-00-001Z-${uuid}`]
+      const future = Array.from({ length: 5 }, (_, i) => `${prefix}2099-01-01T00-00-0${i}${i % 2 ? `-001Z-${uuid}` : ''}`)
+      if (id === 'workbuddy') future[4] += '-001Z' // Also produced by the standalone WorkBuddy installer.
+      for (const name of [...old, ...future]) fs.writeFileSync(path.join(dir, name), name)
+
+      const notes = [`${prefix}notes`, `${prefix}1999-01-01T00-00-00-000Z-${uuid}.notes`, `${prefix}1999-02-30T00-00-00`]
+      if (id !== 'workbuddy') notes.push(`${prefix}1999-01-01T00-00-00-000Z`)
+      const otherConfig = 'other.json.aa-backup-1999-01-01T00-00-00'
+      for (const name of [...notes, otherConfig]) fs.writeFileSync(path.join(dir, name), 'user data')
+      const directory = `${prefix}1999-01-02T00-00-00`
+      fs.mkdirSync(path.join(dir, directory))
+      const target = path.join(dir, directory, 'user.txt')
+      fs.writeFileSync(target, 'keep target')
+      const link = `${prefix}1999-01-03T00-00-00`
+      const linkPath = path.join(dir, link)
+      try {
+        fs.symlinkSync(target, linkPath, 'file')
+      } catch (error) {
+        if (process.platform !== 'win32' || !['EPERM', 'EACCES'].includes(error.code)) throw error
+        fs.symlinkSync(path.dirname(target), linkPath, 'junction')
+      }
+      const linkTarget = fs.readlinkSync(linkPath)
+
+      assert.equal(setup([def])[0].status, 'added')
+      const kept = backups(def.file()).filter((name) => ![...notes, directory, link].includes(name))
+      const fresh = kept.filter((name) => !future.includes(name))
+      assert.equal(fresh.length, 1)
+      assert.deepEqual(kept.sort(), [...future.slice(1), fresh[0]].sort(), 'Keep the current backup and the four newest historical backups')
+      assert.equal(fs.readFileSync(path.join(dir, fresh[0]), 'utf8'), original)
+      for (const name of future.slice(1)) assert.equal(fs.readFileSync(path.join(dir, name), 'utf8'), name)
+      for (const name of [...notes, otherConfig]) assert.equal(fs.readFileSync(path.join(dir, name), 'utf8'), 'user data')
+      assert.ok(fs.lstatSync(path.join(dir, directory)).isDirectory())
+      assert.equal(fs.readlinkSync(linkPath), linkTarget)
+      assert.equal(fs.readFileSync(target, 'utf8'), 'keep target')
+    })
+  }
+  test('write failures preserve all historical backups as well as the pre-write copy', () => {
+    useLocale('en-US', 'zh-TW')
+    for (const [id, original] of [['cursor', '{}\n'], ['codex', 'model = "keep"\n']]) {
+      const def = fixture(id, original)
+      const dir = path.dirname(def.file())
+      const old = Array.from({ length: 5 }, (_, i) => `${path.basename(def.file())}.aa-backup-2000-01-01T00-00-0${i}`)
+      for (const name of old) fs.writeFileSync(path.join(dir, name), name)
+      fsFault = (method, args) => { if (method === 'renameSync' && args[1] === def.file()) throw new Error('fixture write failure') }
+      assert.equal(setup([def])[0].status, 'error')
+      assert.equal(fs.readFileSync(def.file(), 'utf8'), original)
+      for (const name of old) assert.equal(fs.readFileSync(path.join(dir, name), 'utf8'), name)
+      const fresh = backups(def.file()).filter((name) => !old.includes(name))
+      assert.equal(fresh.length, 1)
+      assert.equal(fs.readFileSync(path.join(dir, fresh[0]), 'utf8'), original)
+    }
+  })
 
   test('JSONC preserves string contents, comments and unrelated formatting', () => {
     useLocale('en-US', 'zh-TW')

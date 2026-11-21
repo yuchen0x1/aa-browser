@@ -298,14 +298,60 @@ function codexEntryToml(): string {
   return lines.join('\n')
 }
 
-function writeClientConfig(file: string, value: string): void {
+const BACKUP_KEEP = 5
+// Legacy App/CLI: seconds; current App/CLI: milliseconds + UUID v4. WorkBuddy's separate CLI also uses plain milliseconds.
+const BACKUP_TIMESTAMP = /^(\d{4}-\d{2}-\d{2}T\d{2})-(\d{2})-(\d{2})(?:-(\d{3})Z(-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})?)?$/
+
+function isBackupTimestamp(suffix: string, workBuddy: boolean): boolean {
+  const match = BACKUP_TIMESTAMP.exec(suffix)
+  if (!match || match[0] !== suffix) return false
+  const [, hour, minute, second, millis, uuid] = match
+  if (millis !== undefined && !uuid && !workBuddy) return false
+  // Reject impossible dates that happen to match the shape (including dates JS rolls over).
+  const iso = `${hour}:${minute}:${second}.${millis ?? '000'}Z`
+  const date = new Date(iso)
+  return Number.isFinite(date.getTime()) && date.toISOString() === iso
+}
+
+function backupConfig(file: string): string {
+  const ts = `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`
+  const backup = `${file}.aa-backup-${ts}`
+  fs.copyFileSync(file, backup, fs.constants.COPYFILE_EXCL)
+  return backup
+}
+
+function pruneBackups(file: string, freshBackup: string, workBuddy: boolean): void {
+  try {
+    const dir = path.dirname(file)
+    const prefix = `${path.basename(file)}.aa-backup-`
+    const freshName = path.basename(freshBackup)
+    // The current restore point is not subject to timestamp ordering (e.g. after clock rollback).
+    const stale = fs.readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && entry.name !== freshName && entry.name.startsWith(prefix) &&
+        isBackupTimestamp(entry.name.slice(prefix.length), workBuddy))
+      .map((entry) => entry.name)
+      .sort()
+      .reverse()
+      .slice(BACKUP_KEEP - 1)
+    for (const name of stale) {
+      const candidate = path.join(dir, name)
+      if (fs.lstatSync(candidate, { throwIfNoEntry: false })?.isFile()) fs.unlinkSync(candidate)
+    }
+  } catch {
+    // Retention is best-effort; the fresh backup already exists.
+  }
+}
+
+function writeClientConfig(file: string, value: string, workBuddy = false): void {
   const metadata = fs.lstatSync(file, { throwIfNoEntry: false })
   // Dotfile managers commonly symlink client configs; replace the target, not the user's link.
   const target = metadata?.isSymbolicLink() ? fs.realpathSync(file) : file
+  const backup = metadata ? backupConfig(file) : undefined
   writeFileAtomic(target, value)
+  if (backup) pruneBackups(file, backup, workBuddy)
 }
 
-function configureCodex(def: ClientDef, ts: string, locale: Locale): ClientSetupResult {
+function configureCodex(def: ClientDef, locale: Locale): ClientSetupResult {
   const file = configFileFor(def)
   const entry = codexEntryToml()
   const existingText = fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : ''
@@ -315,7 +361,6 @@ function configureCodex(def: ClientDef, ts: string, locale: Locale): ClientSetup
     return { id: def.id, name: def.name, status: 'skipped', message: diagnosticMessage(locale, 'clients.configured', file) }
   }
   const output = replaceTomlEntry(existingText, entry)
-  if (fs.existsSync(file)) fs.copyFileSync(file, `${file}.aa-backup-${ts}`, fs.constants.COPYFILE_EXCL)
   writeClientConfig(file, output)
   return {
     id: def.id,
@@ -361,7 +406,6 @@ export function detectClients(): ClientDetectResult[] {
 export function setupClients(ids: string[]): ClientSetupResult[] {
   const locale = getMainLocale()
   const results: ClientSetupResult[] = []
-  const ts = `${new Date().toISOString().replace(/[:.]/g, '-')}-${randomUUID()}`
   try {
     if (isAppImage() && !findSystemNode()) throw new Error(diagnosticMessage(locale, 'clients.nodeRequired'))
     if (CLIENT_DEFS.some((def) => ids.includes(def.id) && !def.manual)) syncAppImageBridge()
@@ -383,7 +427,7 @@ export function setupClients(ids: string[]): ClientSetupResult[] {
     }
     if (def.toml) {
       try {
-        results.push(configureCodex(def, ts, locale))
+        results.push(configureCodex(def, locale))
       } catch (err) {
         results.push({ id: def.id, name: def.name, status: 'error', message: diagnosticMessage(locale, 'clients.codexWriteFailed', errorDetail(err)) })
       }
@@ -400,7 +444,7 @@ export function setupClients(ids: string[]): ClientSetupResult[] {
       try {
         existing = readJsonEntry(text, def.container)
       } catch {
-        if (exists) fs.copyFileSync(file, `${file}.aa-backup-${ts}`, fs.constants.COPYFILE_EXCL)
+        if (exists) backupConfig(file)
         results.push({
           id: def.id,
           name: def.name,
@@ -421,8 +465,7 @@ export function setupClients(ids: string[]): ClientSetupResult[] {
       }
       const status = existing === undefined ? 'added' : 'updated'
       const output = replaceJsonEntry(text, def.container, entry)
-      if (exists) fs.copyFileSync(file, `${file}.aa-backup-${ts}`, fs.constants.COPYFILE_EXCL)
-      writeClientConfig(file, output)
+      writeClientConfig(file, output, def.id === 'workbuddy')
       const note = installed ? '' : diagnosticMessage(locale, 'clients.notDetected')
       results.push({
         id: def.id,
