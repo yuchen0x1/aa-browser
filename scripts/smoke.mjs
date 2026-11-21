@@ -357,7 +357,9 @@ async function main() {
       }
       const serialRoute = /^\/serial-([ab])\?case=(same|parallel)$/.exec(req.url ?? '')
       if (serialRoute) {
-        const [, tag, name] = serialRoute
+        const name = serialRoute[2]
+        // 响应只使用固定标记，不把请求捕获值直接拼进 HTML / script。
+        const tag = serialRoute[1] === 'a' ? 'a' : 'b'
         const fixture = serialFixtures.get(name)
         fixture.requests.push(tag)
         res.setHeader('Content-Type', 'text/html; charset=utf-8')
