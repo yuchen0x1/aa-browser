@@ -3,6 +3,7 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import crypto from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -33,6 +34,7 @@ function load(name, deps) {
     filename,
     importModuleDynamically: constants.USE_MAIN_CONTEXT_DEFAULT_LOADER
   })((name) => {
+    if (name === 'node:async_hooks') return { AsyncLocalStorage }
     assert.ok(Object.hasOwn(deps, name), `Unexpected production dependency: ${name}`)
     return deps[name]
   }, module, module.exports)

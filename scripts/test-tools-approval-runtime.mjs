@@ -24,7 +24,25 @@ function deferred() {
 
 const { TOOL_DEFS, TOOL_ANNOTATIONS } = await import(pathToFileURL(path.join(root, 'src/shared/tool-defs.mjs')).href)
 
+function loadMain(name, deps) {
+  const filename = path.join(out, `${name}.js`)
+  const module = { exports: {} }
+  compileFunction(fs.readFileSync(filename, 'utf8'), ['require', 'module', 'exports'], { filename })(
+    (specifier) => {
+      if (specifier.startsWith('node:')) return require(specifier)
+      assert.ok(Object.hasOwn(deps, specifier), `Unexpected production dependency: ${specifier}`)
+      return deps[specifier]
+    }, module, module.exports
+  )
+  return module.exports
+}
+
 function createFixture({ requireOperationApproval = false } = {}) {
+  // Keep the actual queue/abort contract as it evolves; only page I/O is stubbed.
+  const { ActionError, withTabLock, raceAbort, throwIfAborted } = loadMain('actions', {
+    electron: {}, '@snapshot/scripts': {}, '@snapshot/engine': { __aaSnapshot() {} },
+    './progress': {}, './evidence': {}
+  })
   const calls = { type: [], frameType: [], frameEvaluate: [], pageEvaluate: [], sensitive: [], operation: [], actions: [], cookies: [] }
   const pending = []
   const tab = {
@@ -72,14 +90,14 @@ function createFixture({ requireOperationApproval = false } = {}) {
     './tabs': { TabManager: class {}, normalizeUrl: (url) => url },
     './network': { clipBody: (x) => x, safeNetworkHeaders: (x) => x, safeNetworkUrl: (x) => x },
     './actions': {
-      ActionError: class ActionError extends Error {},
+      ActionError, withTabLock, throwIfAborted,
       captureSnapshot: async () => ({ tree: 'snapshot', elements: [], url: 'https://merchant.example/page', title: 'Fixture page' }),
       snapshotText: (snap) => snap.tree,
       doNavigate: forbidden, doReload: forbidden, doClick: forbidden, doDrag: forbidden,
       doType: async (_tab, ref, value, opts) => { calls.type.push({ ref, value, opts }); return { typed: 'INPUT' } },
       doSelectOption: async () => ({ selected: 'choice' }), doScroll: forbidden, doExtract: forbidden,
       doWaitForText: forbidden, doWaitForCondition: forbidden, doWaitForDom: forbidden,
-      doPressKey: forbidden, doScreenshot: forbidden, doConsoleLogs: forbidden, raceAbort: (p) => p,
+      doPressKey: forbidden, doScreenshot: forbidden, doConsoleLogs: forbidden, raceAbort,
       doCookies: async (_tab, { action }) => { calls.cookies.push(action); return { content: action } },
       resolveWebContents: (manager, id) => {
         const result = id ? manager.get(id) : manager.active()
@@ -115,15 +133,8 @@ function createFixture({ requireOperationApproval = false } = {}) {
     './downloads': {}
   }
 
-  const filename = path.join(out, 'tools.js')
-  const module = { exports: {} }
-  compileFunction(fs.readFileSync(filename, 'utf8'), ['require', 'module', 'exports'], { filename })(
-    (name) => {
-      assert.ok(Object.hasOwn(deps, name), `Unexpected production dependency: ${name}`)
-      return deps[name]
-    }, module, module.exports
-  )
-  const tools = module.exports.buildTools(
+  const { buildTools } = loadMain('tools', deps)
+  const tools = buildTools(
     tabs, 'about:blank', 'https://search.example/?q=', { resize: forbidden }, {}, approvals,
     (item) => calls.actions.push(item), () => ({ requireOperationApproval })
   )
@@ -139,7 +150,7 @@ try {
   const compiled = spawnSync(process.execPath, [
     tsc, '--ignoreConfig', '--noCheck', '--noResolve', '--outDir', out,
     '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--esModuleInterop',
-    path.join(root, 'src/main/tools.ts')
+    ...['tools', 'actions'].map((name) => path.join(root, `src/main/${name}.ts`))
   ], { cwd: root, encoding: 'utf8' })
   assert.equal(compiled.status, 0, `Compilation failed: ${compiled.error ?? ''}\n${compiled.stdout}\n${compiled.stderr}`)
 

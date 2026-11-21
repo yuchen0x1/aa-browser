@@ -141,7 +141,7 @@ function handleBeforeInput(wc: Electron.WebContents): void {
     if (input.type !== 'keyDown') return
     // 模态设置不允许浏览器快捷键改变背后的网页或夺走表单焦点。
     const key = input.key.toLowerCase()
-    if (settingsOpen && ((ctrl && ['t', 'w', 'l', 'f', 'r', 'p'].includes(key)) || (ctrl && input.shift && key === 'i') || key === 'f5' || (input.alt && ['arrowleft', 'arrowright'].includes(key)))) {
+    if (settingsOpen && ((ctrl && ['t', 'w', 'l', 'f', 'r', 'p'].includes(key)) || (ctrl && input.shift && key === 'i') || key === 'f5' || key === 'f12' || (input.alt && ['arrowleft', 'arrowright'].includes(key)))) {
       event.preventDefault()
       return
     }
@@ -203,15 +203,29 @@ function handleBeforeInput(wc: Electron.WebContents): void {
       if (active) tabManager?.goForward(active)
       return
     }
-    if (ctrl && input.shift && input.key.toLowerCase() === 'i') {
+    if ((ctrl && input.shift && key === 'i') || key === 'f12') {
       event.preventDefault()
-      // DevTools 与抓包共用调试通道：打开前先释放抓包
-      const t = tabManager?.tabs.find((x) => x.view.webContents === wc)
-      t?.net.releaseDebugger()
-      wc.openDevTools({ mode: 'detach' })
+      togglePageDevTools(wc)
       return
     }
   })
+}
+
+/** F12 / Ctrl+Shift+I：切换 DevTools。外壳上按下时针对当前活动网页，与主流浏览器一致。 */
+function togglePageDevTools(origin: Electron.WebContents): void {
+  if (settingsOpen) return
+  // DevTools 与抓包共用调试通道：打开前先释放抓包
+  const target = origin === chromeView?.webContents
+    ? tabManager?.active()?.view.webContents
+    : origin
+  if (!target || target.isDestroyed()) return
+  const t = tabManager?.tabs.find((x) => x.view.webContents === target)
+  t?.net.releaseDebugger()
+  if (target.isDevToolsOpened()) {
+    target.closeDevTools()
+    return
+  }
+  target.openDevTools({ mode: 'detach' })
 }
 
 /** 为单个页面 WebContents 注册右键菜单（普通网页浏览器基本操作） */
@@ -503,9 +517,7 @@ function registerIpc(): void {
   })
   ipcMain.handle('aa:devtools', (event) => {
     return guard(event, undefined, () => {
-      const active = tabManager?.active()
-      active?.net.releaseDebugger() // DevTools 与 debugger/对话框守卫互斥
-      active?.view.webContents.openDevTools({ mode: 'detach' })
+      togglePageDevTools(chromeView?.webContents ?? event.sender)
     })
   })
   ipcMain.handle('aa:approval-decide', (event, id: string, allowed: boolean) => {

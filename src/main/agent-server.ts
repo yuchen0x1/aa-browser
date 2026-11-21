@@ -292,9 +292,11 @@ export class AgentServer {
       this.reply(ws, { id: req.id, ok: false, error: msg })
     } finally {
       calls.delete(req.id)
-      if (!calls.size) this.active.delete(ws)
+      // pause/disconnect may detach these maps while an abort-ignoring handler is
+      // still running. Only remove the socket entry if it still owns this map.
+      if (!calls.size && this.active.get(ws) === calls) this.active.delete(ws)
       activityCalls.delete(req.id)
-      if (!activityCalls.size) this.activeTools.delete(ws)
+      if (!activityCalls.size && this.activeTools.get(ws) === activityCalls) this.activeTools.delete(ws)
       this.refreshActivity()
     }
   }

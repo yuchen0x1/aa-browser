@@ -52,12 +52,21 @@ process.env.AA_BROWSER_CONNECTION_FILE = path.join(tmp, 'connection.json')
 const running = new Map()
 const peers = []
 const activityEvents = []
+function deferred() {
+  let resolve
+  const promise = new Promise((yes) => { resolve = yes })
+  return { promise, resolve }
+}
 const server = new AgentServer([{
   name: 'test_wait',
-  handler: ({ label, __aaSignal: signal }) => new Promise((resolve, reject) => {
-    const call = { signal, finish: () => resolve({ label }) }
+  handler: ({ label, ignoreAbort = false, __aaSignal: signal }) => new Promise((resolve, reject) => {
+    const nextProgress = deferred()
+    // Register in the handler's async context so externally releasing the gate
+    // reports progress for this call, not for the test runner.
+    void nextProgress.promise.then(() => progress.reportProgress(2, 10, `${label}-after-old`))
+    const call = { signal, finish: () => resolve({ label }), reportNext: nextProgress.resolve }
     running.set(label, call)
-    signal.addEventListener('abort', () => reject(new Error(`cancelled ${label}`)), { once: true })
+    if (!ignoreAbort) signal.addEventListener('abort', () => reject(new Error(`cancelled ${label}`)), { once: true })
     progress.reportProgress(1, 10, label)
   })
 }], () => {}, 'test', undefined, (state) => activityEvents.push(state))
@@ -81,8 +90,8 @@ async function connect() {
   })
   return peer
 }
-function start(peer, id, label) {
-  peer.socket.send(JSON.stringify({ id, tool: 'test_wait', args: { label } }))
+function start(peer, id, label, options = {}) {
+  peer.socket.send(JSON.stringify({ id, tool: 'test_wait', args: { label, ...options } }))
 }
 function response(peer, id) {
   return peer.messages.find((message) => message.id === id && typeof message.ok === 'boolean')
@@ -268,6 +277,40 @@ try {
     assert.equal(server.activity().active, false, 'original request cleans up once; completed ID can be reused')
   }
   console.log('PASS: duplicate pending IDs execute nothing and emit no competing reply; original completion/cancellation and ID reuse remain intact')
+
+  first.messages.length = 0
+  start(first, 20, 'before-pause', { ignoreAbort: true })
+  await waitFor(() => running.has('before-pause'), 'abort-ignoring old handler reaches its deferred gate')
+  server.pause()
+  assert.equal(running.get('before-pause').signal.aborted, true)
+  assert.equal(response(first, 20), undefined, 'old handler stays pending despite abort')
+  assert.deepEqual(server.activity().calls, [])
+  server.resume()
+  start(first, 21, 'after-resume')
+  start(first, 22, 'after-resume-sibling')
+  await waitFor(() => running.has('after-resume') && running.has('after-resume-sibling'), 'new calls register before old finally')
+  assert.equal(clientFor('after-resume'), firstClient)
+  running.get('before-pause').finish()
+  await waitFor(() => response(first, 20), 'old deferred handler finishes and runs cleanup')
+  assert.equal(response(first, 20).ok, false, 'ignoring abort cannot turn the old call into success')
+  assert.equal(server.activity().active, true, 'old cleanup must preserve the replacement activity map')
+  assert.deepEqual(server.activity().calls.map((call) => call.id).sort(), [21, 22])
+  running.get('after-resume').reportNext()
+  await waitFor(() => first.messages.some((message) => message.id === 21 && message.progress === 2), 'new progress is still routed after old cleanup')
+  assert.deepEqual(first.messages.find((message) => message.id === 21 && message.progress === 2), {
+    id: 21, event: 'progress', progress: 2, total: 10, message: 'after-resume-after-old'
+  })
+  assert.equal(server.activity().calls.find((call) => call.id === 21).progress, 2)
+  assert.equal(server.cancelCall(21, firstClient), true, 'resumed call remains individually cancellable')
+  await waitFor(() => response(first, 21), 'resumed call receives cancellation')
+  assert.match(response(first, 21).error, /cancelled after-resume/)
+  assert.equal(running.get('after-resume-sibling').signal.aborted, false, 'individual cancellation leaves the resumed sibling alone')
+  assert.deepEqual(server.activity().calls.map((call) => call.id), [22])
+  running.get('after-resume-sibling').finish()
+  await waitFor(() => response(first, 22), 'resumed sibling completes normally')
+  assert.equal(response(first, 22).ok, true)
+  assert.equal(server.activity().active, false)
+  console.log('PASS: deferred pre-pause cleanup cannot erase resumed activity/progress or individual cancellation routing')
 
   first.messages.length = 0
   second.messages.length = 0

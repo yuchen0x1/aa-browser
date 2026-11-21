@@ -46,7 +46,8 @@ import {
   doConsoleLogs,
   raceAbort,
   resolveWebContents,
-  throwIfAborted
+  throwIfAborted,
+  withTabLock
 } from './actions'
 
 interface McpToolDefBase {
@@ -193,6 +194,20 @@ export function buildTools(
     approvals?.assertRunning()
   }
 
+  /** 受保护的页面操作按标签排队；不提供项目所有权或跨调用事务。
+   * 标签管理、窗口及会话级资源不由这把锁隔离。 */
+  function onTab<T>(
+    tab: ReturnType<typeof resolveWebContents>,
+    signal: unknown,
+    run: () => Promise<T>
+  ): Promise<T> {
+    const sig = signal instanceof AbortSignal ? signal : undefined
+    return withTabLock(tab, sig, async () => {
+      assertToolRunning(sig)
+      return run()
+    })
+  }
+
   /** 若开启"高危操作人工确认"，请求一次人工批准；未开启直接放行。 */
   async function opGate(desc: { site: string; tabTitle: string; action: string; detail?: string }, signal?: unknown): Promise<void> {
     if (!approvals) return
@@ -304,24 +319,26 @@ export function buildTools(
       const url = String(args['url'] ?? '')
       if (!url) throw new ActionError('url 不能为空')
       const target = normalizeUrl(url, getSettings?.().searchEngine || searchUrl, newtabUrl)
+      const signal = callSignal(args)
+      let snapshot = ''
       const r = await doNavigate(tabs, target, {
         newTab: !!args['newTab'],
         tabId: args['tabId'] as string | undefined,
-        signal: args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
-      })
-      let body = `已导航: ${r.url}\ntitle: ${r.title}`
-      if (args['snapshot'] !== false) {
-        const tab = tabs.get(r.tabId)
-        if (tab) {
+        signal,
+        onComplete: async (tab) => {
+          assertToolRunning(signal)
+          if (args['snapshot'] === false) return
           try {
             const snap = await captureSnapshot(tab.view.webContents)
-            body += '\n\n' + snapshotText(snap)
+            assertToolRunning(signal)
+            snapshot = '\n\n' + snapshotText(snap)
           } catch {
-            body += '\n\n（快照获取失败：页面可能仍在跳转，请单独调用 browser_snapshot）'
+            assertToolRunning(signal)
+            snapshot = '\n\n（快照获取失败：页面可能仍在跳转，请单独调用 browser_snapshot）'
           }
         }
-      }
-      return { content: [text(body)] }
+      })
+      return { content: [text(`已导航: ${r.url}\ntitle: ${r.title}${snapshot}`)] }
     }
   })
 
@@ -330,15 +347,19 @@ export function buildTools(
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const want = args['snapshot'] !== false
-      const r = await doReload(tab, args['hard'] === true, args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined)
-      let body = `已刷新: ${r.url}\ntitle: ${r.title}`
-      if (want) {
-        try {
-          body += '\n\n' + snapshotText(await captureSnapshot(tab.view.webContents))
-        } catch {
-          body += '\n\n（刷新完成但快照获取失败，请单独调用 browser_snapshot）'
+      const signal = args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
+      const body = await onTab(tab, signal, async () => {
+        const r = await doReload(tab, args['hard'] === true, signal)
+        let out = `已刷新: ${r.url}\ntitle: ${r.title}`
+        if (want) {
+          try {
+            out += '\n\n' + snapshotText(await captureSnapshot(tab.view.webContents))
+          } catch {
+            out += '\n\n（刷新完成但快照获取失败，请单独调用 browser_snapshot）'
+          }
         }
-      }
+        return out
+      })
       return { content: [text(body)] }
     }
   })
@@ -350,11 +371,12 @@ export function buildTools(
       const forceFull = args['full'] === true || (args['full'] === undefined && getSettings?.().fullSnapshot === true)
       const maxNodes = typeof args['maxNodes'] === 'number' ? args['maxNodes'] : undefined
       const cursor = typeof args['cursor'] === 'number' ? args['cursor'] : undefined
-      const snap = await captureSnapshot(tab.view.webContents, {
+      // 快照与页面操作同队列，保证读到的树不会落在其他客户端导航的中间状态。
+      const snap = await onTab(tab, callSignal(args), () => captureSnapshot(tab.view.webContents, {
         ...(forceFull ? { mode: 'full' as const } : {}),
         ...(maxNodes !== undefined ? { maxNodes } : {}),
         ...(cursor !== undefined ? { cursor } : {})
-      })
+      }))
       return { content: [text(snapshotText(snap))] }
     }
   })
@@ -367,7 +389,8 @@ export function buildTools(
       const want = args['snapshot'] !== false
       const button = (args['button'] as 'left' | 'right' | 'middle') || 'left'
       const clickCount = args['doubleClick'] ? 2 : 1
-      const r = await doClick(tab, String(args['ref']), want, { button, clickCount, signal: callSignal(args) })
+      const signal = callSignal(args)
+      const r = await onTab(tab, signal, () => doClick(tab, String(args['ref']), want, { button, clickCount, signal }))
       return { content: [text(withSnap(`已点击: ${r.clicked}`, r.snapshot, want))] }
     }
   })
@@ -378,13 +401,14 @@ export function buildTools(
       approvals?.assertRunning()
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const want = args['snapshot'] !== false
-      const r = await doDrag(tab, String(args['ref']), {
+      const signal = args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
+      const r = await onTab(tab, signal, () => doDrag(tab, String(args['ref']), {
         toRef: args['toRef'] as string | undefined,
         dx: args['dx'] as number | undefined,
         dy: args['dy'] as number | undefined,
         wantSnapshot: want,
-        signal: args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
-      })
+        signal
+      }))
       return { content: [text(withSnap(`已拖拽: ${r.dragged}`, r.snapshot, want))] }
     }
   })
@@ -395,31 +419,34 @@ export function buildTools(
       const signal = callSignal(args)
       assertToolRunning(signal)
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
-      const ref = String(args['ref'])
-      const target = await inspectTypeTarget(tab, ref)
-      assertToolRunning(signal)
-      if (!target.ok) throw new ActionError(`找不到输入目标 ${ref}；请刷新页面快照后重试。`)
-      if (target.sensitive) {
-        // Never write or retain an agent-supplied secret. Let the user type directly into the focused page field.
-        await approveSensitiveType(tab, ref, target, signal)
-        if (args['submit']) throw new ActionError('敏感字段已填写，但 Agent 不会自动提交；请由你在网页中亲自确认提交。')
-        return { content: [text('已允许继续。敏感字段内容由你在网页中输入；Agent 提供的文本未写入、读取或回传。请继续后续步骤。')] }
-      }
-      if (args['submit']) {
-        await opGate(
-          { site: new URL(tab.view.webContents.getURL()).host || tab.view.webContents.getURL(), tabTitle: tab.title, action: '提交表单/输入后回车' },
-          signal
-        )
+      // 检查、审批与实际输入在同一把标签页锁内完成，避免并发客户端改写目标元素。
+      return onTab(tab, signal, async (): Promise<{ content: ToolContent[] }> => {
+        const ref = String(args['ref'])
+        const target = await inspectTypeTarget(tab, ref)
         assertToolRunning(signal)
-      }
-      const want = args['snapshot'] !== false
-      const r = await doType(tab, ref, String(args['text'] ?? ''), {
-        submit: !!args['submit'],
-        clear: !!args['clear'],
-        wantSnapshot: want,
-        signal
+        if (!target.ok) throw new ActionError(`找不到输入目标 ${ref}；请刷新页面快照后重试。`)
+        if (target.sensitive) {
+          // Never write or retain an agent-supplied secret. Let the user type directly into the focused page field.
+          await approveSensitiveType(tab, ref, target, signal)
+          if (args['submit']) throw new ActionError('敏感字段已填写，但 Agent 不会自动提交；请由你在网页中亲自确认提交。')
+          return { content: [text('已允许继续。敏感字段内容由你在网页中输入；Agent 提供的文本未写入、读取或回传。请继续后续步骤。')] }
+        }
+        if (args['submit']) {
+          await opGate(
+            { site: new URL(tab.view.webContents.getURL()).host || tab.view.webContents.getURL(), tabTitle: tab.title, action: '提交表单/输入后回车' },
+            signal
+          )
+          assertToolRunning(signal)
+        }
+        const want = args['snapshot'] !== false
+        const r = await doType(tab, ref, String(args['text'] ?? ''), {
+          submit: !!args['submit'],
+          clear: !!args['clear'],
+          wantSnapshot: want,
+          signal
+        })
+        return { content: [text(withSnap(`已输入: ${r.typed}`, r.snapshot, want))] }
       })
-      return { content: [text(withSnap(`已输入: ${r.typed}`, r.snapshot, want))] }
     }
   })
 
@@ -429,12 +456,13 @@ export function buildTools(
       approvals?.assertRunning()
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const want = args['snapshot'] !== false
-      const r = await doSelectOption(tab, String(args['ref']), {
+      const signal = callSignal(args)
+      const r = await onTab(tab, signal, () => doSelectOption(tab, String(args['ref']), {
         value: args['value'] as string | undefined,
         label: args['label'] as string | undefined,
         wantSnapshot: want,
-        signal: callSignal(args)
-      })
+        signal
+      }))
       return { content: [text(withSnap(`已选择: ${r.selected}`, r.snapshot, want))] }
     }
   })
@@ -447,7 +475,7 @@ export function buildTools(
       const dir = String(args['direction'] ?? 'down')
       if (!['up', 'down', 'left', 'right'].includes(dir)) throw new ActionError('direction 必须是 up/down/left/right')
       const amount = typeof args['amount'] === 'number' ? args['amount'] : 700
-      const r = await doScroll(tab, dir, amount, want)
+      const r = await onTab(tab, callSignal(args), () => doScroll(tab, dir, amount, want))
       return { content: [text(withSnap(`已滚动: ${dir} ${amount}px（作用区域: ${r.where}）`, r.snapshot, want))] }
     }
   })
@@ -456,7 +484,7 @@ export function buildTools(
     name: 'browser_extract',
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
-      const r = await doExtract(tab, args['ref'] as string | undefined)
+      const r = await onTab(tab, callSignal(args), () => doExtract(tab, args['ref'] as string | undefined))
       const head = r.title ? `title: ${r.title}\n\n` : ''
       return { content: [text(head + r.text)] }
     }
@@ -487,44 +515,47 @@ export function buildTools(
       if (wantSelector) wants.push(`${args['selector']} 出现`)
       if (wantSelectorGone) wants.push(`${args['selectorGone']} 消失`)
       if (wantUrl) wants.push(`URL 含 "${args['urlContains']}"`)
-      if (wantText || wantGone) {
-        const r = await doWaitForCondition(tab, {
-          text: wantText ? String(args['text']) : undefined,
-          textGone: wantGone ? String(args['textGone']) : undefined,
+      // 条件等待期间持有标签页队列：等待不会与其他客户端对同一标签的导航/点击穿插。
+      return onTab(tab, args['__aaSignal'], async (): Promise<{ content: ToolContent[]; isError?: boolean }> => {
+        if (wantText || wantGone) {
+          const r = await doWaitForCondition(tab, {
+            text: wantText ? String(args['text']) : undefined,
+            textGone: wantGone ? String(args['textGone']) : undefined,
+            timeoutMs,
+            signal: args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
+          })
+          if (r.found) {
+            const what = r.which === 'gone' ? `"${args['textGone']}" 已消失` : `"${args['text']}" 已出现`
+            return { content: [text(`${what}（等待 ${r.elapsedMs}ms）`)] }
+          }
+          if (!wantSelector && !wantSelectorGone && !wantUrl) {
+            return {
+              content: [text(`超时 ${r.elapsedMs}ms，未等到 ${wants.join(' 或 ')}。可调用 browser_snapshot 查看当前页面。`)],
+              isError: true
+            }
+          }
+        }
+        const dom = await doWaitForDom(tab, {
+          selector: wantSelector ? String(args['selector']) : undefined,
+          selectorGone: wantSelectorGone ? String(args['selectorGone']) : undefined,
+          urlContains: wantUrl ? String(args['urlContains']) : undefined,
           timeoutMs,
           signal: args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
         })
-        if (r.found) {
-          const what = r.which === 'gone' ? `"${args['textGone']}" 已消失` : `"${args['text']}" 已出现`
-          return { content: [text(`${what}（等待 ${r.elapsedMs}ms）`)] }
-        }
-        if (!wantSelector && !wantSelectorGone && !wantUrl) {
+        if (!dom.found) {
           return {
-            content: [text(`超时 ${r.elapsedMs}ms，未等到 ${wants.join(' 或 ')}。可调用 browser_snapshot 查看当前页面。`)],
+            content: [text(`超时 ${dom.elapsedMs}ms，未等到 ${wants.join(' 或 ')}。可调用 browser_snapshot 查看当前页面。`)],
             isError: true
           }
         }
-      }
-      const dom = await doWaitForDom(tab, {
-        selector: wantSelector ? String(args['selector']) : undefined,
-        selectorGone: wantSelectorGone ? String(args['selectorGone']) : undefined,
-        urlContains: wantUrl ? String(args['urlContains']) : undefined,
-        timeoutMs,
-        signal: args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
+        const label =
+          dom.which === 'selector'
+            ? `${args['selector']} 已出现`
+            : dom.which === 'selectorGone'
+              ? `${args['selectorGone']} 已消失`
+              : `URL 已包含 "${args['urlContains']}"`
+        return { content: [text(`${label}（等待 ${dom.elapsedMs}ms）`)] }
       })
-      if (!dom.found) {
-        return {
-          content: [text(`超时 ${dom.elapsedMs}ms，未等到 ${wants.join(' 或 ')}。可调用 browser_snapshot 查看当前页面。`)],
-          isError: true
-        }
-      }
-      const label =
-        dom.which === 'selector'
-          ? `${args['selector']} 已出现`
-          : dom.which === 'selectorGone'
-            ? `${args['selectorGone']} 已消失`
-            : `URL 已包含 "${args['urlContains']}"`
-      return { content: [text(`${label}（等待 ${dom.elapsedMs}ms）`)] }
     }
   })
 
@@ -532,7 +563,7 @@ export function buildTools(
     name: 'browser_press_key',
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
-      const r = await doPressKey(tab, String(args['key'] ?? ''), Array.isArray(args['modifiers']) ? args['modifiers'].map(String) : [])
+      const r = await onTab(tab, callSignal(args), () => doPressKey(tab, String(args['key'] ?? ''), Array.isArray(args['modifiers']) ? args['modifiers'].map(String) : []))
       const suffix = r.modifiers.length ? ` + ${r.modifiers.join('+')}` : ''
       return { content: [text(`已按下: ${r.pressed}${suffix}`)] }
     }
@@ -543,14 +574,18 @@ export function buildTools(
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const signal = args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
-      const image = args['ref']
-        ? await doElementScreenshot(tab, String(args['ref']))
-        : await doScreenshot(tab, signal, { fullPage: args['fullPage'] === true })
+      const image = await onTab(tab, signal, () =>
+        args['ref']
+          ? doElementScreenshot(tab, String(args['ref']))
+          : doScreenshot(tab, signal, { fullPage: args['fullPage'] === true })
+      )
+      assertToolRunning(signal)
       const { app } = await import('electron')
-        const dir = process.env['AA_BROWSER_SCREENSHOT_DIR'] || `${app.getPath('home')}/.aabrowser/screenshots`
+      const dir = process.env['AA_BROWSER_SCREENSHOT_DIR'] || `${app.getPath('home')}/.aabrowser/screenshots`
       try {
         const fs = await import('node:fs')
         const path = await import('node:path')
+        assertToolRunning(signal)
         fs.mkdirSync(dir, { recursive: true })
         const file = path.join(dir, `aa-${Date.now()}.png`)
         fs.writeFileSync(file, Buffer.from(image.data ?? '', 'base64'))
@@ -573,7 +608,7 @@ export function buildTools(
     name: 'browser_hover',
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
-      const r = await doHover(tab, String(args['ref']))
+      const r = await onTab(tab, callSignal(args), () => doHover(tab, String(args['ref'])))
       return { content: [text(`已悬停: ${r.hovered}`)] }
     }
   })
@@ -583,7 +618,7 @@ export function buildTools(
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const want = args['snapshot'] !== false
-      const r = await doNavigateHistory(tab, 'back', want, (t) => tabs.goBack(t), (t) => tabs.canBack(t))
+      const r = await onTab(tab, callSignal(args), () => doNavigateHistory(tab, 'back', want, (t) => tabs.goBack(t), (t) => tabs.canBack(t)))
       return { content: [text(withSnap('已后退', r.snapshot, want))] }
     }
   })
@@ -593,7 +628,7 @@ export function buildTools(
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const want = args['snapshot'] !== false
-      const r = await doNavigateHistory(tab, 'forward', want, (t) => tabs.goForward(t), (t) => tabs.canForward(t))
+      const r = await onTab(tab, callSignal(args), () => doNavigateHistory(tab, 'forward', want, (t) => tabs.goForward(t), (t) => tabs.canForward(t)))
       return { content: [text(withSnap('已前进', r.snapshot, want))] }
     }
   })
@@ -614,7 +649,7 @@ export function buildTools(
     name: 'browser_get_selector',
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
-      const r = await doGetSelector(tab, String(args['ref']))
+      const r = await onTab(tab, callSignal(args), () => doGetSelector(tab, String(args['ref'])))
       const badge = r.verified ? '✅ 已回验' : '⚠️ 未能回验（元素可能在 iframe 内或动态生成）'
       return { content: [text(`${badge}\nselector: ${r.selector}\n元素文本: ${r.text || '（无）'}`)] }
     }
@@ -624,7 +659,7 @@ export function buildTools(
     name: 'browser_find',
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
-      const r = await doFind(tab, String(args['text'] ?? ''))
+      const r = await onTab(tab, callSignal(args), () => doFind(tab, String(args['text'] ?? '')))
       return {
         content: [text(`页面共 ${r.matches} 处匹配"${args['text']}"，已高亮并定位到第 ${r.activeOrdinal ?? 1} 处`)]
       }
@@ -671,22 +706,25 @@ export function buildTools(
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const action = String(args['action'])
-      if (action === 'set' || action === 'remove' || action === 'clear') {
-        await opGate(
-          {
-            site: siteOf(tab),
-            tabTitle: tab.title,
-            action: action === 'set' ? '写入页面存储' : action === 'remove' ? '删除页面存储' : '清空页面存储',
-            detail: `${(args['kind'] as string) === 'session' ? 'sessionStorage' : 'localStorage'} · 键: ${String(args['key'] ?? '全部')}`
-          },
-          args['__aaSignal']
-        )
-      }
-      const r = await doStorage(tab, {
-        action: action as 'get' | 'set' | 'remove' | 'clear',
-        kind: (args['kind'] as 'local' | 'session') ?? 'local',
-        key: args['key'] as string | undefined,
-        value: args['value'] as string | undefined
+      const r = await onTab(tab, args['__aaSignal'], async () => {
+        if (action === 'set' || action === 'remove' || action === 'clear') {
+          await opGate(
+            {
+              site: siteOf(tab),
+              tabTitle: tab.title,
+              action: action === 'set' ? '写入页面存储' : action === 'remove' ? '删除页面存储' : '清空页面存储',
+              detail: `${(args['kind'] as string) === 'session' ? 'sessionStorage' : 'localStorage'} · 键: ${String(args['key'] ?? '全部')}`
+            },
+            args['__aaSignal']
+          )
+        }
+        assertToolRunning(callSignal(args))
+        return await doStorage(tab, {
+          action: action as 'get' | 'set' | 'remove' | 'clear',
+          kind: (args['kind'] as 'local' | 'session') ?? 'local',
+          key: args['key'] as string | undefined,
+          value: args['value'] as string | undefined
+        })
       })
       return { content: [text(r.content)] }
     }
@@ -724,7 +762,7 @@ export function buildTools(
     name: 'browser_pdf',
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
-      const r = await doPdf(tab, args['path'] as string | undefined, !!args['landscape'])
+      const r = await onTab(tab, callSignal(args), () => doPdf(tab, args['path'] as string | undefined, !!args['landscape'], callSignal(args)))
       return { content: [text(`PDF 已保存: ${r.savedPath}`)] }
     }
   })
@@ -735,16 +773,19 @@ export function buildTools(
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const paths = (args['paths'] as unknown[]).map(String)
       if (!paths.length) throw new ActionError('paths 不能为空')
-      await opGate(
-        {
-          site: siteOf(tab),
-          tabTitle: tab.title,
-          action: '把本机文件上传到网页',
-          detail: paths.map((p) => p.slice(-90)).join('、')
-        },
-        args['__aaSignal']
-      )
-      const r = await doUploadFile(tab, String(args['ref']), paths)
+      const r = await onTab(tab, args['__aaSignal'], async () => {
+        await opGate(
+          {
+            site: siteOf(tab),
+            tabTitle: tab.title,
+            action: '把本机文件上传到网页',
+            detail: paths.map((p) => p.slice(-90)).join('、')
+          },
+          args['__aaSignal']
+        )
+        assertToolRunning(callSignal(args))
+        return await doUploadFile(tab, String(args['ref']), paths)
+      })
       return { content: [text(r.content)] }
     }
   })
@@ -772,7 +813,7 @@ export function buildTools(
       const wc = tab.view.webContents
       if (wc.isDestroyed()) throw new ActionError('页面已关闭')
       const limit = Math.min(20, Math.max(1, Math.floor(Number(args['slowest'] ?? 5)) || 5))
-      const summary = (await wc.executeJavaScript(PERFORMANCE_SCRIPT, true)) as PerformanceSummary
+      const summary = (await onTab(tab, callSignal(args), () => wc.executeJavaScript(PERFORMANCE_SCRIPT, true))) as PerformanceSummary
       const lines: string[] = ['页面性能摘要', `url: ${String(summary?.url ?? tab.url)}`]
       if (summary?.title) lines.push(`title: ${summary.title}`)
       lines.push(`文档状态: ${summary?.readyState ?? '未知'}`)
@@ -903,20 +944,22 @@ export function buildTools(
     name: 'browser_mock_requests',
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
-      const id = tab.net.setMock({
-        urlContains: String(args['urlContains'] ?? ''),
-        method: args['method'] as string | undefined,
-        status: args['status'] as number | undefined,
-        headers: (args['headers'] as Record<string, string> | undefined) ?? {},
-        body: args['body'] as string | undefined,
-        action: (args['action'] as 'respond' | 'continue') ?? 'respond'
+      return onTab(tab, callSignal(args), async () => {
+        const id = tab.net.setMock({
+          urlContains: String(args['urlContains'] ?? ''),
+          method: args['method'] as string | undefined,
+          status: args['status'] as number | undefined,
+          headers: (args['headers'] as Record<string, string> | undefined) ?? {},
+          body: args['body'] as string | undefined,
+          action: (args['action'] as 'respond' | 'continue') ?? 'respond'
+        })
+        await tab.net.ensureMockInterception()
+        const list = tab.net.listMocks()
+        const lines = list.map(
+          (m) => `[${m.id}] ${m.method ?? '*'}: ${m.urlContains} → ${m.status} (${m.action}, 命中${m.hits}次)`
+        )
+        return { content: [text(`已拦截规则 ${id}\n当前 ${lines.length} 条：\n${lines.join('\n') || '（无）'}`)] }
       })
-      await tab.net.ensureMockInterception()
-      const list = tab.net.listMocks()
-      const lines = list.map(
-        (m) => `[${m.id}] ${m.method ?? '*'}: ${m.urlContains} → ${m.status} (${m.action}, 命中${m.hits}次)`
-      )
-      return { content: [text(`已拦截规则 ${id}\n当前 ${lines.length} 条：\n${lines.join('\n') || '（无）'}`)] }
     }
   })
 
@@ -937,16 +980,18 @@ export function buildTools(
     name: 'browser_clear_mocks',
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
-      const id = args['id'] as string | undefined
-      if (id) {
-        const ok = tab.net.removeMock(String(id))
-        if (!ok) throw new ActionError(`找不到规则 ${id}`)
+      return onTab(tab, callSignal(args), async () => {
+        const id = args['id'] as string | undefined
+        if (id) {
+          const ok = tab.net.removeMock(String(id))
+          if (!ok) throw new ActionError(`找不到规则 ${id}`)
+          await tab.net.ensureMockInterception()
+          return { content: [text(`已删除规则 ${id}`)] }
+        }
+        const n = tab.net.clearMocks()
         await tab.net.ensureMockInterception()
-        return { content: [text(`已删除规则 ${id}`)] }
-      }
-      const n = tab.net.clearMocks()
-      await tab.net.ensureMockInterception()
-      return { content: [text(`已清空 ${n} 条 mock 规则`)] }
+        return { content: [text(`已清空 ${n} 条 mock 规则`)] }
+      })
     }
   })
 
@@ -995,73 +1040,76 @@ export function buildTools(
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const fields = Array.isArray(args['fields']) ? (args['fields'] as Record<string, unknown>[]) : []
       if (!fields.length) throw new ActionError('fields 不能为空')
-      const done: string[] = []
-      for (const field of fields) {
-        assertToolRunning(signal)
-        const ref = String(field['ref'] ?? '')
-        if (!ref) throw new ActionError('每个字段都必须提供 ref')
-        if (typeof field['checked'] === 'boolean') {
-          // 复选框/单选框：仅在状态不一致时点击，避免把已勾选的又取消
-          const state = (await tab.view.webContents.executeJavaScript(checkedStateScript(ref), false)) as {
-            ok: boolean
-            checked?: boolean
-            type?: string
-          }
+      // 整张表单在一次标签页锁内完成：并发客户端不能在逐字段填写之间穿插其他操作。
+      return onTab(tab, signal, async (): Promise<{ content: ToolContent[] }> => {
+        const done: string[] = []
+        for (const field of fields) {
           assertToolRunning(signal)
-          if (!state?.ok) throw new ActionError(`找不到元素 ${ref}；请刷新页面快照后重试。`)
-          if (state.type !== 'checkbox' && state.type !== 'radio') {
-            throw new ActionError(`元素 ${ref} 不是复选框/单选框（是 ${state.type || 'unknown'}）`)
-          }
-          if (state.checked !== field['checked']) {
-            await doClick(tab, ref, false, { signal })
-          }
-          done.push(`${ref} = ${field['checked'] ? '已勾选' : '未勾选'}`)
-          continue
-        }
-        if (field['label'] !== undefined || (field['value'] !== undefined && !field['submit'])) {
-          // <select> 走下拉选择
-          const probe = (await tab.view.webContents.executeJavaScript(tagNameScript(ref), false)) as string
-          assertToolRunning(signal)
-          if (probe === 'select') {
-            const r = await doSelectOption(tab, ref, {
-              value: field['value'] as string | undefined,
-              label: field['label'] as string | undefined,
-              wantSnapshot: false,
-              signal
-            })
-            done.push(`${ref} → ${r.selected}`)
+          const ref = String(field['ref'] ?? '')
+          if (!ref) throw new ActionError('每个字段都必须提供 ref')
+          if (typeof field['checked'] === 'boolean') {
+            // 复选框/单选框：仅在状态不一致时点击，避免把已勾选的又取消
+            const state = (await tab.view.webContents.executeJavaScript(checkedStateScript(ref), false)) as {
+              ok: boolean
+              checked?: boolean
+              type?: string
+            }
+            assertToolRunning(signal)
+            if (!state?.ok) throw new ActionError(`找不到元素 ${ref}；请刷新页面快照后重试。`)
+            if (state.type !== 'checkbox' && state.type !== 'radio') {
+              throw new ActionError(`元素 ${ref} 不是复选框/单选框（是 ${state.type || 'unknown'}）`)
+            }
+            if (state.checked !== field['checked']) {
+              await doClick(tab, ref, false, { signal })
+            }
+            done.push(`${ref} = ${field['checked'] ? '已勾选' : '未勾选'}`)
             continue
           }
-        }
-        const target = await inspectTypeTarget(tab, ref)
-        assertToolRunning(signal)
-        if (!target.ok) throw new ActionError(`找不到输入目标 ${ref}；请刷新页面快照后重试。`)
-        if (target.sensitive) {
-          await approveSensitiveType(tab, ref, target, signal)
-          if (field['submit']) throw new ActionError('敏感字段由你在网页中输入；Agent 不会自动提交。')
-          done.push(`${ref} ← [敏感字段请由你输入]`)
-          continue
-        }
-        if (field['submit']) {
-          await opGate(
-            { site: siteOf(tab), tabTitle: tab.title, action: '提交表单/输入后回车' },
-            signal
-          )
+          if (field['label'] !== undefined || (field['value'] !== undefined && !field['submit'])) {
+            // <select> 走下拉选择
+            const probe = (await tab.view.webContents.executeJavaScript(tagNameScript(ref), false)) as string
+            assertToolRunning(signal)
+            if (probe === 'select') {
+              const r = await doSelectOption(tab, ref, {
+                value: field['value'] as string | undefined,
+                label: field['label'] as string | undefined,
+                wantSnapshot: false,
+                signal
+              })
+              done.push(`${ref} → ${r.selected}`)
+              continue
+            }
+          }
+          const target = await inspectTypeTarget(tab, ref)
           assertToolRunning(signal)
+          if (!target.ok) throw new ActionError(`找不到输入目标 ${ref}；请刷新页面快照后重试。`)
+          if (target.sensitive) {
+            await approveSensitiveType(tab, ref, target, signal)
+            if (field['submit']) throw new ActionError('敏感字段由你在网页中输入；Agent 不会自动提交。')
+            done.push(`${ref} ← [敏感字段请由你输入]`)
+            continue
+          }
+          if (field['submit']) {
+            await opGate(
+              { site: siteOf(tab), tabTitle: tab.title, action: '提交表单/输入后回车' },
+              signal
+            )
+            assertToolRunning(signal)
+          }
+          await doType(tab, ref, String(field['value'] ?? ''), {
+            submit: !!field['submit'],
+            wantSnapshot: false,
+            signal
+          })
+          done.push(`${ref} ← [已填写]`)
         }
-        await doType(tab, ref, String(field['value'] ?? ''), {
-          submit: !!field['submit'],
-          wantSnapshot: false,
-          signal
-        })
-        done.push(`${ref} ← [已填写]`)
-      }
-      assertToolRunning(signal)
-      const want = args['snapshot'] !== false
-      const snapshot = want ? await captureSnapshot(tab.view.webContents) : undefined
-      return {
-        content: [text(withSnap(`已填写 ${done.length} 个字段：\n${done.join('\n')}`, snapshot, want))]
-      }
+        assertToolRunning(signal)
+        const want = args['snapshot'] !== false
+        const snapshot = want ? await captureSnapshot(tab.view.webContents) : undefined
+        return {
+          content: [text(withSnap(`已填写 ${done.length} 个字段：\n${done.join('\n')}`, snapshot, want))]
+        }
+      })
     }
   })
 
@@ -1069,8 +1117,12 @@ export function buildTools(
     name: 'browser_dialogs',
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
-      const list = await readDialogs(tab.view.webContents)
-      if (args['clear'] === true) await clearDialogs(tab.view.webContents)
+      const list = await onTab(tab, callSignal(args), async () => {
+        const records = await readDialogs(tab.view.webContents)
+        assertToolRunning(callSignal(args))
+        if (args['clear'] === true) await clearDialogs(tab.view.webContents)
+        return records
+      })
       if (!list.length) return { content: [text('（页面未弹出任何对话框）')] }
       const lines = list.map((d, i) => {
         const def = d.type === 'prompt' && d.defaultValue != null ? ` [默认值: ${d.defaultValue}]` : ''
@@ -1093,7 +1145,7 @@ export function buildTools(
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const wc = tab.view.webContents
       if (args['reset'] === true) {
-        await clearDialogPolicy(wc)
+        await onTab(tab, callSignal(args), () => clearDialogPolicy(wc))
         return { content: [text('已清除对话框策略：confirm→false，prompt→null。')] }
       }
       const policy: { confirm?: boolean; prompt?: string; once?: boolean } = { once: args['once'] !== false }
@@ -1102,8 +1154,11 @@ export function buildTools(
       if (policy.confirm === undefined && policy.prompt === undefined) {
         throw new ActionError('至少提供 confirm、prompt 或 reset:true 之一')
       }
-      const ok = await setDialogPolicy(wc, policy)
-      const ready = ok || (await dialogGuardReady(wc))
+      const ready = await onTab(tab, callSignal(args), async () => {
+        const ok = await setDialogPolicy(wc, policy)
+        assertToolRunning(callSignal(args))
+        return ok || (await dialogGuardReady(wc))
+      })
       const parts: string[] = []
       if (policy.confirm !== undefined) parts.push(`confirm→${policy.confirm}`)
       if (policy.prompt !== undefined) parts.push(`prompt→${JSON.stringify(policy.prompt)}`)
@@ -1123,44 +1178,47 @@ export function buildTools(
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const expression = String(args['expression'] ?? '')
       if (!expression.trim()) throw new ActionError('expression 不能为空')
-      await opGate(
-        {
-          site: siteOf(tab),
-          tabTitle: tab.title,
-          action: '在网页中执行 JavaScript',
-          detail: expression.replace(/\s+/g, ' ').slice(0, 120)
-        },
-        args['__aaSignal']
-      )
-      const ref = args['ref'] ? String(args['ref']) : ''
-      // expression 是 browser_evaluate 的语义本身（在页面内求值的代码），刻意不转义；
-      // 数据部分（ref 与错误文案）一律走白名单字面量，避免 ref 破坏注入脚本的结构。
-      const refKey = ref ? refLiteral(ref) : ''
-      const source = ref
-        ? `(() => { const element = (window.__aaRefs || {})[${refKey}]; if (!element) return { __aaError: '找不到元素 ' + ${refKey} }; return (${expression}) })()`
-        : `(() => { return (${expression}) })()`
-      let value: unknown
-      try {
-        value = await raceAbort(
-          tab.view.webContents.executeJavaScript(source, false),
-          args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
+      return onTab(tab, args['__aaSignal'], async (): Promise<{ content: ToolContent[] }> => {
+        await opGate(
+          {
+            site: siteOf(tab),
+            tabTitle: tab.title,
+            action: '在网页中执行 JavaScript',
+            detail: expression.replace(/\s+/g, ' ').slice(0, 120)
+          },
+          args['__aaSignal']
         )
-      } catch (err) {
-        throw new ActionError(`执行失败：${(err as Error).message}`)
-      }
-      if (value && typeof value === 'object' && '__aaError' in (value as Record<string, unknown>)) {
-        throw new ActionError(String((value as Record<string, unknown>)['__aaError']))
-      }
-      let rendered: string
-      try {
-        rendered = JSON.stringify(value, null, 2)
-      } catch {
-        rendered = String(value)
-      }
-      if (rendered === undefined) rendered = String(value)
-      const MAX = 20000
-      if (rendered.length > MAX) rendered = rendered.slice(0, MAX) + '\n…（结果过长已截断）'
-      return { content: [text(rendered)] }
+        const ref = args['ref'] ? String(args['ref']) : ''
+        // expression 是 browser_evaluate 的语义本身（在页面内求值的代码），刻意不转义；
+        // 数据部分（ref 与错误文案）一律走白名单字面量，避免 ref 破坏注入脚本的结构。
+        const refKey = ref ? refLiteral(ref) : ''
+        const source = ref
+          ? `(() => { const element = (window.__aaRefs || {})[${refKey}]; if (!element) return { __aaError: '找不到元素 ' + ${refKey} }; return (${expression}) })()`
+          : `(() => { return (${expression}) })()`
+        assertToolRunning(callSignal(args))
+        let value: unknown
+        try {
+          value = await raceAbort(
+            tab.view.webContents.executeJavaScript(source, false),
+            args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
+          )
+        } catch (err) {
+          throw new ActionError(`执行失败：${(err as Error).message}`)
+        }
+        if (value && typeof value === 'object' && '__aaError' in (value as Record<string, unknown>)) {
+          throw new ActionError(String((value as Record<string, unknown>)['__aaError']))
+        }
+        let rendered: string
+        try {
+          rendered = JSON.stringify(value, null, 2)
+        } catch {
+          rendered = String(value)
+        }
+        if (rendered === undefined) rendered = String(value)
+        const MAX = 20000
+        if (rendered.length > MAX) rendered = rendered.slice(0, MAX) + '\n…（结果过长已截断）'
+        return { content: [text(rendered)] }
+      })
     }
   })
 
@@ -1186,7 +1244,7 @@ export function buildTools(
         statusMin: typeof item['statusMin'] === 'number' ? item['statusMin'] : undefined,
         statusMax: typeof item['statusMax'] === 'number' ? item['statusMax'] : undefined
       }))
-      const outcome = await runAssertions(tab, checks)
+      const outcome = await onTab(tab, callSignal(args), () => runAssertions(tab, checks))
       const body = formatAssertions(outcome)
       return { content: [text(body)], ...(outcome.failed > 0 ? { isError: true } : {}) }
     }
@@ -1212,67 +1270,70 @@ export function buildTools(
       }
       const frameId = String(args['frameId'] ?? '')
       if (!frameId) throw new ActionError('缺少 frameId；先调用 action=list 查看可用 frame')
-      try {
-        if (action === 'text') {
-          const r = await frameText(wc, frameId, typeof args['maxChars'] === 'number' ? args['maxChars'] : 4000)
-          if (!r.text) return { content: [text(`[${frameId}] 内没有可见文本（${r.url}）`)] }
-          return { content: [text(`[${frameId}] ${r.url}\n${r.text}${r.truncated ? '\n…（文本已截断）' : ''}`)] }
-        }
-        if (action === 'elements') {
-          const items = await frameElements(wc, frameId, typeof args['limit'] === 'number' ? args['limit'] : 80)
-          if (!items.length) return { content: [text(`[${frameId}] 内没有可见的可交互元素`) ] }
-          const lines = items.map((item, i) => `${i + 1}. ${item.description}\n   选择器: ${item.selector}`)
-          return { content: [text(`[${frameId}] 共 ${items.length} 个可交互元素：\n${lines.join('\n')}`)] }
-        }
-        if (action === 'evaluate') {
-          const expression = String(args['expression'] ?? '')
-          if (!expression.trim()) throw new ActionError('expression 不能为空')
-          await opGate(
-            { site: siteOf(tab), tabTitle: tab.title, action: '在网页中执行 JavaScript', detail: `frame ${frameId} · ${expression.replace(/\s+/g, ' ').slice(0, 120)}` },
-            signal
-          )
-          assertToolRunning(signal)
-          const value = await raceAbort(frameEvaluate(wc, frameId, expression, signal), signal)
-          let rendered: string
-          try {
-            rendered = JSON.stringify(value, null, 2)
-          } catch {
-            rendered = String(value)
+      // frame 内的读写与主文档操作同队列，避免并发客户端在 frame 操作之间穿插导航。
+      return onTab(tab, signal, async (): Promise<{ content: ToolContent[] }> => {
+        try {
+          if (action === 'text') {
+            const r = await frameText(wc, frameId, typeof args['maxChars'] === 'number' ? args['maxChars'] : 4000)
+            if (!r.text) return { content: [text(`[${frameId}] 内没有可见文本（${r.url}）`)] }
+            return { content: [text(`[${frameId}] ${r.url}\n${r.text}${r.truncated ? '\n…（文本已截断）' : ''}`)] }
           }
-          if (rendered === undefined) rendered = String(value)
-          const MAX = 20000
-          if (rendered.length > MAX) rendered = rendered.slice(0, MAX) + '\n…（结果过长已截断）'
-          return { content: [text(rendered)] }
-        }
-        const selector = String(args['selector'] ?? '')
-        if (!selector) throw new ActionError(`${action} 需要提供 selector`)
-        if (action === 'click') {
-          const r = await frameClick(wc, frameId, selector, typeof args['index'] === 'number' ? args['index'] : 0, signal)
-          return { content: [text(`已在 [${frameId}] 内点击: ${r.clicked}`)] }
-        }
-        if (action === 'type') {
-          const target = await inspectFrameTypeTarget(wc, frameId, selector, signal)
-          assertToolRunning(signal)
-          if (!target.ok) throw new ActionError(`在 ${frameId} 内找不到输入元素: ${selector}`)
-          if (target.sensitive) {
-            await approveSensitiveFrameType(tab, frameId, selector, signal)
-            return { content: [text('已允许继续。敏感字段内容由你在网页中输入；Agent 提供的文本未写入、读取或回传。请继续后续步骤。')] }
+          if (action === 'elements') {
+            const items = await frameElements(wc, frameId, typeof args['limit'] === 'number' ? args['limit'] : 80)
+            if (!items.length) return { content: [text(`[${frameId}] 内没有可见的可交互元素`) ] }
+            const lines = items.map((item, i) => `${i + 1}. ${item.description}\n   选择器: ${item.selector}`)
+            return { content: [text(`[${frameId}] 共 ${items.length} 个可交互元素：\n${lines.join('\n')}`)] }
           }
-          await frameType(wc, frameId, selector, String(args['text'] ?? ''), signal)
-          return { content: [text(`已在 [${frameId}] 内输入（内容未记录）。`)] }
+          if (action === 'evaluate') {
+            const expression = String(args['expression'] ?? '')
+            if (!expression.trim()) throw new ActionError('expression 不能为空')
+            await opGate(
+              { site: siteOf(tab), tabTitle: tab.title, action: '在网页中执行 JavaScript', detail: `frame ${frameId} · ${expression.replace(/\s+/g, ' ').slice(0, 120)}` },
+              signal
+            )
+            assertToolRunning(signal)
+            const value = await raceAbort(frameEvaluate(wc, frameId, expression, signal), signal)
+            let rendered: string
+            try {
+              rendered = JSON.stringify(value, null, 2)
+            } catch {
+              rendered = String(value)
+            }
+            if (rendered === undefined) rendered = String(value)
+            const MAX = 20000
+            if (rendered.length > MAX) rendered = rendered.slice(0, MAX) + '\n…（结果过长已截断）'
+            return { content: [text(rendered)] }
+          }
+          const selector = String(args['selector'] ?? '')
+          if (!selector) throw new ActionError(`${action} 需要提供 selector`)
+          if (action === 'click') {
+            const r = await frameClick(wc, frameId, selector, typeof args['index'] === 'number' ? args['index'] : 0, signal)
+            return { content: [text(`已在 [${frameId}] 内点击: ${r.clicked}`)] }
+          }
+          if (action === 'type') {
+            const target = await inspectFrameTypeTarget(wc, frameId, selector, signal)
+            assertToolRunning(signal)
+            if (!target.ok) throw new ActionError(`在 ${frameId} 内找不到输入元素: ${selector}`)
+            if (target.sensitive) {
+              await approveSensitiveFrameType(tab, frameId, selector, signal)
+              return { content: [text('已允许继续。敏感字段内容由你在网页中输入；Agent 提供的文本未写入、读取或回传。请继续后续步骤。')] }
+            }
+            await frameType(wc, frameId, selector, String(args['text'] ?? ''), signal)
+            return { content: [text(`已在 [${frameId}] 内输入（内容未记录）。`)] }
+          }
+          if (action === 'select') {
+            const r = await frameSelect(wc, frameId, selector, {
+              value: args['value'] === undefined ? undefined : String(args['value']),
+              label: args['label'] === undefined ? undefined : String(args['label'])
+            }, signal)
+            return { content: [text(`已在 [${frameId}] 内选择: ${r.selected}`)] }
+          }
+          throw new ActionError(`未知 action: ${action}`)
+        } catch (error) {
+          if (signal) throwIfAborted(signal)
+          throw error instanceof ActionError ? error : new ActionError((error as Error).message)
         }
-        if (action === 'select') {
-          const r = await frameSelect(wc, frameId, selector, {
-            value: args['value'] === undefined ? undefined : String(args['value']),
-            label: args['label'] === undefined ? undefined : String(args['label'])
-          }, signal)
-          return { content: [text(`已在 [${frameId}] 内选择: ${r.selected}`)] }
-        }
-        throw new ActionError(`未知 action: ${action}`)
-      } catch (error) {
-        if (signal) throwIfAborted(signal)
-        throw error instanceof ActionError ? error : new ActionError((error as Error).message)
-      }
+      })
     }
   })
 
@@ -1300,16 +1361,16 @@ export function buildTools(
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const fullPage = args['fullPage'] === true
       if (action === 'save') {
-        const meta = await visualSave(tab, name, { fullPage })
+        const meta = await onTab(tab, callSignal(args), () => visualSave(tab, name, { fullPage }))
         return { content: [text(`已保存视觉基线 [${name}]：${meta.width}×${meta.height}${fullPage ? '（整页）' : ''}\n页面: ${meta.url}\n文件: ${meta.file}\n\n之后用 action=compare 对比当前页面。`)] }
       }
       if (action === 'compare') {
-        const r = await visualCompare(tab, name, {
+        const r = await onTab(tab, callSignal(args), () => visualCompare(tab, name, {
           fullPage,
           pixelThreshold: typeof args['pixelThreshold'] === 'number' ? args['pixelThreshold'] : undefined,
           maxDiffPercent: typeof args['maxDiffPercent'] === 'number' ? args['maxDiffPercent'] : undefined,
           writeDiff: args['writeDiff'] !== false
-        })
+        }))
         return { content: [text(formatDiff(r))], ...(r.ok ? {} : { isError: true }) }
       }
       throw new ActionError(`未知 action: ${action}（支持 save/compare/list/delete）`)
@@ -1321,11 +1382,11 @@ export function buildTools(
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const level = (args['level'] === 'AAA' ? 'AAA' : 'AA') as 'AA' | 'AAA'
-      const report = await auditContrast(tab, {
+      const report = await onTab(tab, callSignal(args), () => auditContrast(tab, {
         level,
         maxResults: typeof args['maxResults'] === 'number' ? args['maxResults'] : undefined,
-        signal: args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
-      })
+        signal: callSignal(args)
+      }))
       const ok = report.violations.length === 0
       const failOnViolation = args['failOnViolation'] !== false
       return { content: [text(formatContrast(report, ok))], ...(failOnViolation && !ok ? { isError: true } : {}) }
@@ -1349,9 +1410,9 @@ export function buildTools(
         const preset = String(args['preset'] ?? 'all')
         specs = VIEWPORT_PRESETS[preset] ?? VIEWPORT_PRESETS['all'] ?? []
       }
-      const results = await captureViewportMatrix(tab, specs, {
-        signal: args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
-      })
+      const results = await onTab(tab, callSignal(args), () => captureViewportMatrix(tab, specs, {
+        signal: callSignal(args)
+      }))
       const content: import('@shared/types').ToolContent[] = [text(formatViewportMatrix(results))]
       if (args['includeImages'] === true) {
         try {

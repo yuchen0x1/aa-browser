@@ -26,6 +26,7 @@ function load(file, deps) {
     filename,
     importModuleDynamically: constants.USE_MAIN_CONTEXT_DEFAULT_LOADER
   })((name) => {
+    if (name.startsWith('node:')) return require(name)
     assert.ok(Object.hasOwn(deps, name), `Unexpected production dependency: ${name}`)
     return deps[name]
   }, module, module.exports)
@@ -101,6 +102,7 @@ try {
         if (pageSteps.has(script)) return step(...pageSteps.get(script))
         if (script.includes('window.__aaClickProbe =')) return step('armProbe', true)
         if (script.includes('const p = window.__aaClickProbe')) return step('readProbe', false)
+        if (script.includes('window.__fixtureEvaluate')) return step('evaluateDispatch', 1)
         if (script.includes('function __aaSnapshot') || script.includes('__aaSnapshot()')) return step('snapshot', { tree: 'fixture snapshot' })
         assert.fail(`Unexpected page script: ${script}`)
       },
@@ -124,31 +126,44 @@ try {
       }
     }
     const tabs = { activeId: tab.id, active: () => tab }
+    let onApprovalReturn
     const approvals = {
       // Single-call cancellation does not pause the approval manager.
       assertRunning() {},
-      opRequest: () => step('operationApproval', true)
+      opRequest: () => {
+        const approved = step('operationApproval', true)
+        // Register before opGate's await reaction: approval has resolved true,
+        // but the caller has not yet been allowed to dispatch the next action.
+        if (onApprovalReturn) void approved.then(onApprovalReturn, () => {})
+        return approved
+      }
     }
     const { buildTools } = load('main/tools.js', {
       '@shared/tool-defs.mjs': { TOOL_DEFS, TOOL_ANNOTATIONS },
       '@snapshot/scripts': scripts,
-      './actions': actions, './frames': frames, './evidence': evidence,
+      './actions': {
+        ...actions,
+        doStorage: (...args) => { calls.push('storageDispatch'); return actions.doStorage(...args) },
+        doUploadFile: (...args) => { calls.push('uploadDispatch'); return actions.doUploadFile(...args) }
+      }, './frames': frames, './evidence': evidence,
       './tabs': {}, './network': {}, './dialogs': {}, './assertions': {}, './visual': {}, './contrast': {}, './viewport': {}
     })
     const tools = buildTools(tabs, 'about:blank', '', {}, {}, approvals, (entry) => logs.push(entry),
       () => ({ requireOperationApproval: approval }))
     const call = (name, args) => tools.find((tool) => tool.name === name).handler(args)
-    async function abortDuring(name, args) {
+    async function abortDuring(name, args, { afterApproval = false } = {}) {
       const ctrl = new AbortController()
+      if (afterApproval) onApprovalReturn = () => ctrl.abort()
       const work = call(name, { ...args, __aaSignal: ctrl.signal })
       try {
         await Promise.race([entered.promise, work.then(() => assert.fail(`Tool completed before ${at}`))])
         assert.equal(ctrl.signal.aborted, false, 'The tool must reach the pending step while still live')
-        ctrl.abort()
+        if (!afterApproval) ctrl.abort()
       } finally {
         release.resolve()
       }
       await assert.rejects(work, cancelled)
+      assert.equal(ctrl.signal.aborted, true)
       assert.equal(logs.at(-1)?.isError, true)
     }
     return { calls, call, abortDuring }
@@ -180,6 +195,18 @@ try {
       const f = fixture(options)
       await f.abortDuring(tool, args)
       assert.deepEqual(f.calls, calls)
+    })
+  }
+
+  for (const { tool, args } of [
+    ...['set', 'remove', 'clear'].map((action) => ({ tool: 'browser_storage', args: { action, key: 'fixture', value: text } })),
+    { tool: 'browser_upload_file', args: { ref: 'e1', paths: [path.join(tmp, 'never-upload.txt')] } },
+    { tool: 'browser_evaluate', args: { expression: 'window.__fixtureEvaluate = 1' } }
+  ]) {
+    await test(`approval-return cancellation: ${tool} ${args.action ?? ''} never dispatches the approved operation`, { timeout: 3000 }, async () => {
+      const f = fixture({ at: 'operationApproval', approval: true })
+      await f.abortDuring(tool, args, { afterApproval: true })
+      assert.deepEqual(f.calls, ['operationApproval'], 'Approval resolves true before cancellation; storage/upload/evaluation must not dispatch')
     })
   }
 

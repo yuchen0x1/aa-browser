@@ -1,4 +1,5 @@
 import { WebContents, webContents, nativeImage } from 'electron'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type { SnapshotSummary, ToolContent } from '@shared/types'
 import { __aaSnapshot } from '@snapshot/engine'
 import {
@@ -36,12 +37,133 @@ export function throwIfAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw new ActionError('工具调用已被用户中断。')
 }
 
+// 队列只以 Tab 对象为键；不修改 Tab，也不把不同标签页串成全局锁。
+const tabQueues = new WeakMap<Tab, Promise<void>>()
+const tabQueueContext = new AsyncLocalStorage<{ inFlight: Set<Promise<unknown>> }>()
+
+function trackTabOperation<T>(work: Promise<T>): void {
+  const context = tabQueueContext.getStore()
+  if (!context) return
+  context.inFlight.add(work)
+  // 仅用于移除已完成任务；同时处理拒绝，避免派生未处理拒绝。
+  void work.then(
+    () => context.inFlight.delete(work),
+    () => context.inFlight.delete(work)
+  )
+}
+
+async function drainTabOperations(context: { inFlight: Set<Promise<unknown>> }): Promise<void> {
+  while (context.inFlight.size) {
+    await Promise.allSettled([...context.inFlight])
+  }
+}
+
+async function awaitWithAbort<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return await work
+  if (signal.aborted) throw new ActionError('工具调用已被用户中断。')
+  return await new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => {
+      signal.removeEventListener('abort', onAbort)
+      reject(new ActionError('工具调用已被用户中断。'))
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    work.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort)
+        resolve(value)
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort)
+        reject(error)
+      }
+    )
+  })
+}
+
+/**
+ * 同一标签页的 MCP 页面操作按到达顺序执行；不同标签页并行。
+ * 排队取消立即返回，但取消节点仍须等前驱完成才能向后交棒。
+ * 运行中取消会立即返回给调用者；锁槽则等待 run 和在锁上下文中经 raceAbort
+ * 登记的原始操作 Promise 全部结束后才释放，避免取消回调抢跑后重叠页面操作。
+ * 未 await 且未登记、或脱离此异步上下文启动的工作不在此接口保证范围内。
+ */
+export async function withTabLock<T>(
+  tab: Tab,
+  signal: AbortSignal | undefined,
+  run: () => Promise<T>
+): Promise<T> {
+  throwIfAborted(signal)
+  if (tab.view.webContents.isDestroyed()) throw new ActionError('页面已关闭')
+  const prev = tabQueues.get(tab) ?? Promise.resolve()
+  let release!: () => void
+  const slot = new Promise<void>((resolve) => { release = resolve })
+  // 即使本调用在等待时取消并 release，后继仍必须等 prev；队尾永不拒绝。
+  const tail = prev.then(() => slot)
+  tabQueues.set(tab, tail)
+  void tail.then(() => {
+    if (tabQueues.get(tab) === tail) tabQueues.delete(tab)
+  })
+  let started = false
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const onAbort = (): void => {
+        signal?.removeEventListener('abort', onAbort)
+        reject(new ActionError('工具调用已被用户中断。'))
+      }
+      if (signal?.aborted) {
+        onAbort()
+        return
+      }
+      signal?.addEventListener('abort', onAbort, { once: true })
+      void prev.then(() => {
+        signal?.removeEventListener('abort', onAbort)
+        resolve()
+      })
+    })
+    throwIfAborted(signal)
+    // 排队期间页面可能已被关闭，不能只在入队时检查。
+    if (tab.view.webContents.isDestroyed()) throw new ActionError('页面已关闭')
+
+    const context = { inFlight: new Set<Promise<unknown>>() }
+    const runPromise = tabQueueContext.run(context, () => Promise.resolve().then(() => {
+      throwIfAborted(signal)
+      return run()
+    }))
+    started = true
+    const finished = runPromise.then(
+      async (value) => {
+        try {
+          await drainTabOperations(context)
+        } finally {
+          release()
+        }
+        return { ok: true as const, value }
+      },
+      async (error: unknown) => {
+        try {
+          await drainTabOperations(context)
+        } finally {
+          release()
+        }
+        return { ok: false as const, error }
+      }
+    )
+    const result = await awaitWithAbort(finished, signal)
+    if (!result.ok) throw result.error
+    return result.value
+  } finally {
+    // 尚未启动 run 的取消/关闭路径不持有正在执行的工作。
+    if (!started) release()
+  }
+}
+
 /** 把可能很长的 Promise 与中断信号竞速；中断时执行 onAbort（如停止页面加载）后立即失败 */
 export async function raceAbort<T>(
   work: Promise<T>,
   signal?: AbortSignal,
   onAbort?: () => void
 ): Promise<T> {
+  trackTabOperation(work)
   if (!signal) return work
   if (signal.aborted) {
     throw new ActionError('工具调用已被用户中断。')
@@ -181,19 +303,38 @@ async function waitClickProbe(wc: WebContents, urlBefore: string, signal?: Abort
 export async function doNavigate(
   tabs: TabManager,
   url: string,
-  opts: { newTab?: boolean; tabId?: string; signal?: AbortSignal }
+  opts: {
+    newTab?: boolean
+    tabId?: string
+    signal?: AbortSignal
+    onComplete?: (tab: Tab, signal?: AbortSignal) => Promise<void>
+  }
 ): Promise<{ tabId: string; url: string; title: string }> {
   reportProgress(0, 1, '正在导航')
+  throwIfAborted(opts.signal)
   tabs.assertUrlAllowed(url)
   const existing = opts.tabId ? tabs.get(opts.tabId) : opts.newTab ? null : tabs.active()
   if (opts.tabId && !existing) throw new ActionError(`标签不存在: ${opts.tabId}`)
-  const tab = existing ?? tabs.createTab(url)
+  const tab = existing ?? tabs.createTab(url, true, undefined, true)
+  return await withTabLock(tab, opts.signal, async () => {
+    const load = tabs.navigate(tab, url, true, opts.signal)
+    const result = await navigateInTab(tab, load, opts.signal)
+    throwIfAborted(opts.signal)
+    if (opts.onComplete) await opts.onComplete(tab, opts.signal)
+    throwIfAborted(opts.signal)
+    return result
+  })
+}
+
+async function navigateInTab(
+  tab: Tab,
+  load: Promise<void>,
+  signal: AbortSignal | undefined
+): Promise<{ tabId: string; url: string; title: string }> {
   const wc = tab.view.webContents
   try {
-    // 新标签的首个加载由 TabManager 发起，避免两个 loadURL 互相打断。
-    const load = existing ? tabs.navigate(tab, url, true) : tab.initialNavigation
     // 中断时停止加载，避免“用户已中断但页面继续跳转”的副作用
-    await raceAbort(load, opts.signal, () => {
+    await raceAbort(load, signal, () => {
       try {
         wc.stop()
       } catch {
@@ -303,6 +444,7 @@ export async function doDrag(
     y?: number
     tag?: string
   }
+  throwIfAborted(opts.signal)
   if (!loc1 || !loc1.ok) {
     throw new ActionError(`找不到拖拽起始元素 ${ref}`)
   }
@@ -319,6 +461,7 @@ export async function doDrag(
       x?: number
       y?: number
     }
+    throwIfAborted(opts.signal)
     if (!loc2 || !loc2.ok) throw new ActionError(`找不到拖拽目标元素 ${opts.toRef}`)
     x2 = Math.max(0, loc2.x ?? 0)
     y2 = Math.max(0, loc2.y ?? 0)
@@ -329,6 +472,7 @@ export async function doDrag(
     throw new ActionError('拖拽操作必须指定 toRef 目标元素或 dx/dy 偏移像素')
   }
 
+  throwIfAborted(opts.signal)
   // 播放起始与终点光标
   void wc.executeJavaScript(laserCursorScript(x1, y1, 'drag'), false).catch(() => {})
   void wc.executeJavaScript(laserCursorScript(x2, y2, 'drag'), false).catch(() => {})
@@ -336,7 +480,9 @@ export async function doDrag(
   // 模拟真实轨迹平滑拖动（5 步插值）
   let mouseDown = false
   try {
+    throwIfAborted(opts.signal)
     wc.sendInputEvent({ type: 'mouseMove', x: x1, y: y1 })
+    throwIfAborted(opts.signal)
     wc.sendInputEvent({ type: 'mouseDown', x: x1, y: y1, button: 'left', clickCount: 1 })
     mouseDown = true
     await delay(50)
@@ -662,34 +808,54 @@ function normalizePressKey(key: string, modifiers: string[] = []): { key: string
 export async function doReload(tab: Tab, hard = false, signal?: AbortSignal): Promise<{ url: string; title: string }> {
   throwIfAborted(signal)
   const wc = tab.view.webContents
+  let cancelReload = (): void => {}
   await raceAbort(new Promise<void>((resolve, reject) => {
     let settled = false
+    let aborted = false
+    const cleanup = (): void => {
+      wc.removeListener('did-finish-load', finish)
+      wc.removeListener('did-fail-load', fail)
+      wc.removeListener('did-stop-loading', stopped)
+      wc.removeListener('destroyed', destroyed)
+    }
     const finish = (): void => {
       if (settled) return
       settled = true
-      wc.removeListener('did-finish-load', finish)
-      wc.removeListener('did-fail-load', fail)
+      cleanup()
       resolve()
     }
-    const fail = (_event: Electron.Event, errorCode: number, errorDescription: string, _validatedURL: string, isMainFrame: boolean): void => {
-      if (isMainFrame && errorCode !== -3 && !settled) {
-        settled = true
-        wc.removeListener('did-finish-load', finish)
-        wc.removeListener('did-fail-load', fail)
-        reject(new ActionError(`刷新失败：${errorDescription || errorCode}`))
-      }
+    const failWith = (error: Error): void => {
+      if (settled) return
+      settled = true
+      cleanup()
+      reject(error)
     }
+    const fail = (_event: Electron.Event, errorCode: number, errorDescription: string, _validatedURL: string, isMainFrame: boolean): void => {
+      if (!isMainFrame || settled) return
+      if (errorCode === -3 && aborted) finish()
+      else failWith(new ActionError(`刷新失败：${errorDescription || errorCode}`))
+    }
+    const stopped = (): void => {
+      if (aborted) finish()
+    }
+    const destroyed = (): void => failWith(new ActionError('页面已关闭'))
     wc.once('did-finish-load', finish)
     wc.on('did-fail-load', fail)
+    wc.on('did-stop-loading', stopped)
+    wc.once('destroyed', destroyed)
+    cancelReload = (): void => {
+      aborted = true
+      try {
+        wc.stop()
+      } catch {
+        /* 已销毁 */
+      }
+      if (wc.isDestroyed()) destroyed()
+      else if (!wc.isLoading()) finish()
+    }
     if (hard) wc.reloadIgnoringCache()
     else wc.reload()
-  }), signal, () => {
-    try {
-      wc.stop()
-    } catch {
-      /* 已销毁 */
-    }
-  })
+  }), signal, () => cancelReload())
   return { url: wc.getURL(), title: wc.getTitle() }
 }
 
@@ -1119,15 +1285,25 @@ export async function doUploadFile(tab: Tab, ref: string, paths: string[]): Prom
 }
 
 /** 页面存 PDF */
-export async function doPdf(tab: Tab, filePath?: string, landscape = false): Promise<{ savedPath: string }> {
+export async function doPdf(
+  tab: Tab,
+  filePath?: string,
+  landscape = false,
+  signal?: AbortSignal
+): Promise<{ savedPath: string }> {
+  throwIfAborted(signal)
   const wc = tab.view.webContents
-  const pdf = await wc.printToPDF({ printBackground: true, landscape, pageSize: 'A4' } as never)
+  const pdf = await raceAbort(wc.printToPDF({ printBackground: true, landscape, pageSize: 'A4' } as never), signal)
+  throwIfAborted(signal)
   const osMod = await import('node:os')
   const pathMod = await import('node:path')
   const fsMod = await import('node:fs')
   const file = filePath || pathMod.join(process.env['AA_BROWSER_DOWNLOAD_DIR'] || pathMod.join(osMod.homedir(), '.aabrowser', 'downloads'), `aa-page-${Date.now()}.pdf`)
+  throwIfAborted(signal)
   fsMod.mkdirSync(pathMod.dirname(file), { recursive: true })
   fsMod.writeFileSync(file, pdf)
+  // Printing may be non-cancellable; do not register a PDF after its caller has cancelled.
+  throwIfAborted(signal)
   getEvidenceManager().record(file, 'pdf', { managed: !filePath })
   return { savedPath: file }
 }

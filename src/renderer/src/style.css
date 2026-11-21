@@ -378,6 +378,14 @@ textarea:focus-visible,
   box-shadow: 0 0 10px var(--accent-glow-soft);
 }
 
+/* 始终保留可拖动的空白区；标签再多也不占用它，原生窗口按钮另行留位。 */
+#window-drag-region {
+  width: 72px;
+  align-self: stretch;
+  flex: none;
+  -webkit-app-region: drag;
+}
+
 .win-spacer {
   width: 140px;
   flex: none;

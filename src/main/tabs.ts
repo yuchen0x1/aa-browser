@@ -98,13 +98,16 @@ let idSeq = 0
 const genId = (): string => `t${Date.now().toString(36)}${(idSeq++).toString(36)}`
 const NAVIGATION_TIMEOUT_MS = 20_000
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string, onTimeout?: () => void): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined
   try {
     return await Promise.race([
       promise,
       new Promise<never>((_, reject) => {
-        timeout = setTimeout(() => reject(new Error(`${label} 超时（${timeoutMs}ms）`)), timeoutMs)
+        timeout = setTimeout(() => {
+          onTimeout?.()
+          reject(new Error(`${label} 超时（${timeoutMs}ms）`))
+        }, timeoutMs)
       })
     ])
   } finally {
@@ -181,7 +184,7 @@ export class TabManager {
    * @param isolated 使用独立会话分区（不共享登录态），关闭时自动清理。
    *                 省略时取设置里的「默认隔离」开关。
    */
-  createTab(url?: string, activate = true, isolated?: boolean): Tab {
+  createTab(url?: string, activate = true, isolated?: boolean, deferInitialNavigation = false): Tab {
     const target = url || this.newtabUrl
     this.assertUrlAllowed(target)
     const id = genId()
@@ -213,7 +216,8 @@ export class TabManager {
       consoleBuf: [],
       net,
       ready,
-      initialNavigation: ready.then(() => this.loadPage(wc, target))
+      // MCP 导航可先发布 Tab 再在 tab 锁内显式 navigate；其它创建入口保持既有自动首载。
+      initialNavigation: deferInitialNavigation ? ready : ready.then(() => this.loadPage(wc, target))
     }
     this.attachEvents(tab)
     this.tabs.push(tab)
@@ -268,18 +272,37 @@ export class TabManager {
     }
   }
 
-  private loadPage(wc: WebContents, url: string): Promise<void> {
+  private async loadPage(wc: WebContents, url: string): Promise<void> {
     if (wc.isDestroyed()) throw new Error('页面已关闭')
     this.assertUrlAllowed(url)
-    return withTimeout(wc.loadURL(url), NAVIGATION_TIMEOUT_MS, '目标页面导航')
+    const loading = wc.loadURL(url)
+    let timedOut = false
+    try {
+      await withTimeout(loading, NAVIGATION_TIMEOUT_MS, '目标页面导航', () => { timedOut = true })
+    } catch (error) {
+      // 超时包装结束不等于 Chromium 已停止；交还标签队列前等原始加载终结。
+      // 其他失败可能来自手动发起的替代导航，不能停止那次新导航。
+      if (timedOut) {
+        try { if (!wc.isDestroyed()) wc.stop() } catch { /* 页面可能同时关闭 */ }
+      }
+      await loading.catch(() => {})
+      throw error
+    }
   }
 
-  async navigate(tab: Tab, url: string, capture = false): Promise<void> {
+  async navigate(tab: Tab, url: string, capture = false, signal?: AbortSignal): Promise<void> {
+    if (signal?.aborted) throw new Error('工具调用已被用户中断。')
     await tab.ready
+    if (signal?.aborted) throw new Error('工具调用已被用户中断。')
     const wc = tab.view.webContents
-    if (capture && !wc.isDestroyed()) {
+    if (wc.isDestroyed()) throw new Error('页面已关闭')
+    if (capture) {
       await withTimeout(tab.net.ensure(), 3000, 'Network.enable').catch(() => {})
+      if (signal?.aborted) throw new Error('工具调用已被用户中断。')
+      if (wc.isDestroyed()) throw new Error('页面已关闭')
     }
+    // 等 ready / Network.enable 期间 signal 可能变化；必须在 loadURL 之前再检查。
+    if (signal?.aborted) throw new Error('工具调用已被用户中断。')
     await this.loadPage(wc, url)
   }
 

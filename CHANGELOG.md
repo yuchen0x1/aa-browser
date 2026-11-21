@@ -2,6 +2,13 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
+## v0.8.0
+
+- **同标签并发协调**：为受保护的 MCP 页面操作增加独立标签队列，补充排队取消边界与多项目接入说明。队列不是项目身份隔离或跨调用事务；各项目应始终显式使用自己的 `tabId`，不同登录态使用隔离标签，窗口和普通会话级资源仍共享。
+- **标题栏拖动区**：保留系统原生拖动，新增不会被标签挤占的 72px 固定空白区域，不增加窗口移动 IPC。
+- **开发者工具**：新增 F12，并统一 Ctrl+Shift+I 对当前网页 DevTools 的切换；焦点在地址栏或标签条时作用于活动网页，设置模态期间不打开。
+- 保持 42 个 MCP 工具与既有客户端入口；没有新增运行依赖。
+
 ## v0.7.0
 
 - 新增可共享的 AI 连接诊断，区分未连接、已认证及首调用已验证；本机详情保留端口和发现路径，复制文本不包含它们或令牌。

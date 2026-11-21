@@ -263,7 +263,7 @@ if (!process.versions.electron) {
     await ui(`document.querySelector('[data-tab-id="${tabs[0].id}"]').focus(); window.__nextTabProbe = document.querySelector('[data-tab-id="${tabs[1].id}"]')`)
     await key('Right')
     try {
-      await until(async () => (await ui(`window.aa.getState().then(s=>s.activeId === ${literal(tabs[1].id)})`)) && webContents.getFocusedWebContents() === chrome, 'arrow-selected tab and native shell focus')
+      await until(async () => (await ui(`window.aa.getState().then(s=>s.activeId === ${literal(tabs[1].id)})`)) && (await ui(`document.querySelector('[data-tab-id="${tabs[1].id}"]')?.getAttribute('aria-selected') === 'true'`)) && webContents.getFocusedWebContents() === chrome, 'arrow-selected tab, rendered selection and native shell focus')
     } catch (error) {
       // Dump the exact keyboard-relevant state so runner-specific focus races
       // are diagnosable from CI logs instead of a bare timeout.

@@ -18,6 +18,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 import readline from 'node:readline'
+import { WebSocket } from 'ws'
 
 const require = createRequire(import.meta.url)
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -319,6 +320,32 @@ async function main() {
     }
 
     console.log('\n[2] 导航到本地 HTTP 测试页（内嵌完整快照）')
+    // HTTP 到达信号是导航已经开始的证据；B 的主文档响应由测试显式放行。
+    const signal = () => {
+      let resolve
+      const promise = new Promise((r) => { resolve = r })
+      return { promise, resolve }
+    }
+    const serialFixtures = new Map(['same', 'parallel'].map((name) => [name, {
+      requests: [], arrived: { a: signal(), b: signal() }, held: null, sendB: null, released: false
+    }]))
+    const releaseB = (fixture) => {
+      fixture.released = true
+      fixture.sendB?.()
+    }
+    const isHoldingB = (fixture) => !!fixture.held && !fixture.released &&
+      !fixture.held.destroyed && !fixture.held.writableEnded
+    const waitFor = async (promise, label) => {
+      let timer
+      try {
+        return await Promise.race([
+          promise,
+          new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`${label}超时（20s）`)), 20000) })
+        ])
+      } finally {
+        clearTimeout(timer)
+      }
+    }
     testPageServer = http.createServer((req, res) => {
       if (req.url === '/disconnect') {
         req.socket.destroy()
@@ -326,6 +353,31 @@ async function main() {
       }
       if (req.url === '/redirect') {
         res.writeHead(302, { Location: '/test-page.html' }).end()
+        return
+      }
+      const serialRoute = /^\/serial-([ab])\?case=(same|parallel)$/.exec(req.url ?? '')
+      if (serialRoute) {
+        const [, tag, name] = serialRoute
+        const fixture = serialFixtures.get(name)
+        fixture.requests.push(tag)
+        res.setHeader('Content-Type', 'text/html; charset=utf-8')
+        res.setHeader('Cache-Control', 'no-store')
+        // B 先到、A 后到；同一标签页完整加载两个文档后应留下 'ba'。
+        const send = () => {
+          if (!res.destroyed && !res.writableEnded) res.end(
+            `<!doctype html><html><head><title>串行导航 ${tag}</title></head><body>` +
+            `<script>sessionStorage.setItem('serial-order',(sessionStorage.getItem('serial-order')||'')+'${tag}')</script>` +
+            `<p>serial-${tag}</p></body></html>`
+          )
+        }
+        if (tag === 'b') {
+          fixture.held = res
+          fixture.sendB = send
+          if (fixture.released) send()
+        } else {
+          send()
+        }
+        fixture.arrived[tag].resolve()
         return
       }
       if (req.url === '/test-page.html' || req.url === '/') {
@@ -342,6 +394,184 @@ async function main() {
     const disconnected = await mcp.call('browser_navigate', { url: `${testOrigin}/disconnect` })
     const disconnectedText = mcp.text(disconnected)
     check('主文档连接中断返回导航失败', disconnected.isError && disconnectedText.includes('ERR_EMPTY_RESPONSE') && !disconnectedText.includes('已导航'), disconnectedText.slice(0, 200))
+
+    console.log('\n[2b] WS 双客户端：同标签串行、不同标签并行（并发协调回归）')
+    const connectPeer = async () => {
+      let socket
+      try {
+        socket = new WebSocket(`ws://127.0.0.1:${info.port}/?token=${info.token}`, { handshakeTimeout: 10000 })
+      } catch {
+        // 不透传 ws 的原始错误：它可能含有带认证 token 的连接 URL。
+        throw new Error('WS 测试客户端创建失败')
+      }
+      return await new Promise((resolve, reject) => {
+        const pending = new Map()
+        let nextId = 1
+        let stopped = false
+        const fail = (error) => {
+          if (stopped) return
+          stopped = true
+          clearTimeout(connectTimer)
+          reject(error)
+          for (const entry of pending.values()) entry.finish(error)
+          pending.clear()
+          socket.off('message', onMessage)
+          socket.off('open', onOpen)
+          socket.terminate()
+        }
+        const call = (tool, args) => {
+          const id = nextId++
+          const result = Promise.withResolvers()
+          const progress = Promise.withResolvers()
+          let settled = false
+          const timer = setTimeout(() => fail(new Error(`WS 测试调用超时（20s）: ${tool}`)), 20000)
+          const entry = {
+            progress: progress.resolve,
+            finish: (error, value) => {
+              settled = true
+              clearTimeout(timer)
+              pending.delete(id)
+              // 已收到进度时此 reject 无效；无进度的工具/失败则不会遗留 waiter。
+              progress.reject(error ?? new Error(`WS 调用结束前未收到 progress: ${tool}`))
+              if (error) result.reject(error)
+              else result.resolve(value)
+            }
+          }
+          // barrier 等待期间调用也可能失败；保留原 promise 的拒绝供 await 检查，
+          // 同时避免尚未 await 的 done / 不需要的 firstProgress 成为未处理拒绝。
+          result.promise.catch(() => {})
+          progress.promise.catch(() => {})
+          pending.set(id, entry)
+          if (stopped || socket.readyState !== WebSocket.OPEN) {
+            entry.finish(new Error('WS 测试客户端已关闭'))
+          } else {
+            try {
+              socket.send(JSON.stringify({ id, tool, args }), (error) => {
+                if (error) fail(new Error('WS 测试客户端发送失败'))
+              })
+            } catch {
+              fail(new Error('WS 测试客户端发送失败'))
+            }
+          }
+          return { done: result.promise, firstProgress: progress.promise, get settled() { return settled } }
+        }
+        const onMessage = (raw) => {
+          let msg
+          try { msg = JSON.parse(raw.toString()) } catch {
+            fail(new Error('WS 测试客户端收到无效 JSON'))
+            return
+          }
+          const entry = pending.get(msg?.id)
+          if (!entry) return
+          // progress 只说明分派进入了 handler；不说明已拿到标签页锁。
+          if (msg.event === 'progress') entry.progress()
+          else if (typeof msg.ok === 'boolean') entry.finish(
+            msg.ok ? null : new Error('WS 测试工具调用失败'), msg.result
+          )
+        }
+        const onError = () => fail(new Error('WS 测试客户端连接错误'))
+        const onOpen = () => {
+          clearTimeout(connectTimer)
+          resolve({ call, stop: () => fail(new Error('WS 测试客户端已停止')) })
+        }
+        const connectTimer = setTimeout(() => fail(new Error('WS 测试客户端连接超时（10s）')), 10000)
+        socket.on('message', onMessage)
+        socket.once('open', onOpen)
+        socket.on('error', onError)
+        socket.once('close', () => {
+          fail(new Error('WS 测试客户端连接已关闭'))
+          socket.off('error', onError)
+        })
+      })
+    }
+    const peers = []
+    let sameTabId
+    let otherTabId
+    const navigationOK = (result, url) => !result?.isError && mcp.text(result).startsWith(`已导航: ${url}\n`)
+    const tabAt = (list, id, url) => list.split(/\n(?=\d+\. \[)/).some(
+      (row) => row.includes(`[${id}]`) && row.trimEnd().endsWith(`\n   ${url}`)
+    )
+    try {
+      const clientA = await connectPeer()
+      peers.push(clientA)
+      const clientB = await connectPeer()
+      peers.push(clientB)
+      const initialList = mcp.text(await clientA.call('browser_tabs', { action: 'list' }).done)
+      sameTabId = /^\d+\. \[([^\]]+)\] ★活动/m.exec(initialList)?.[1]
+      if (!sameTabId) throw new Error('并发测试无法确定固定 tabId')
+      const ready = await clientA.call('browser_navigate', { tabId: sameTabId, url: testPageUrl, snapshot: false }).done
+      if (!navigationOK(ready, testPageUrl)) throw new Error('并发测试标签初始化失败')
+      const reset = await clientA.call('browser_evaluate', {
+        tabId: sameTabId, expression: "(sessionStorage.removeItem('serial-order'), true)"
+      }).done
+      if (reset.isError) throw new Error('并发测试 sessionStorage 初始化失败')
+
+      const same = serialFixtures.get('same')
+      const sameAUrl = `${testOrigin}/serial-a?case=same`
+      const sameBUrl = `${testOrigin}/serial-b?case=same`
+      const navB = clientB.call('browser_navigate', { tabId: sameTabId, url: sameBUrl, snapshot: false })
+      await waitFor(same.arrived.b.promise, '同标签 B 到达 HTTP barrier')
+      check('同标签 B 已到服务端且主文档仍 pending', isHoldingB(same) && !navB.settled)
+      const navA = clientA.call('browser_navigate', { tabId: sameTabId, url: sameAUrl, snapshot: false })
+      await navA.firstProgress
+      // 再走一次不持标签锁的 WS 往返，不以固定 sleep 猜测分派时机。
+      // barrier 的 pending 状态、服务端请求记录及最终两个结果共同验证串行性。
+      await clientA.call('browser_tabs', { action: 'list' }).done
+      check('A 已分派但 B 放行前 A 尚未到服务端',
+        same.requests.join('') === 'b' && isHoldingB(same) && !navA.settled && !navB.settled)
+      releaseB(same)
+      const [sameA, sameB] = await Promise.all([navA.done, navB.done])
+      check('同标签并发导航两个调用均完整成功', navigationOK(sameA, sameAUrl) && navigationOK(sameB, sameBUrl))
+      check('同标签 HTTP 请求按 b、a 顺序到达', same.requests.join('') === 'ba', same.requests.join(''))
+      const order = await clientA.call('browser_evaluate', {
+        tabId: sameTabId, expression: "sessionStorage.getItem('serial-order') === 'ba'"
+      }).done
+      check('固定同一 tabId 的 sessionStorage 最终为 ba', !order.isError && mcp.text(order).trim() === 'true')
+      const sameList = mcp.text(await clientA.call('browser_tabs', { action: 'list' }).done)
+      check('固定同一 tabId 最终停在后到的 A 页面', tabAt(sameList, sameTabId, sameAUrl))
+
+      // 独立 tabId 的 A 必须在 B 仍持有 HTTP barrier 时到达并完成；
+      // 不能用 Promise.all 最终都成功来代替真正发生并行的证据。
+      const newTab = await clientB.call('browser_tabs', { action: 'new', url: testPageUrl }).done
+      otherTabId = /已新建标签页: \[([^\]]+)\]/.exec(mcp.text(newTab))?.[1]
+      if (newTab.isError || !otherTabId || otherTabId === sameTabId) throw new Error('并行测试无法创建独立 tabId')
+      const otherReady = await clientB.call('browser_navigate', { tabId: otherTabId, url: testPageUrl, snapshot: false }).done
+      if (!navigationOK(otherReady, testPageUrl)) throw new Error('并行测试标签初始化失败')
+      for (const tabId of [sameTabId, otherTabId]) {
+        const cleared = await clientA.call('browser_evaluate', {
+          tabId, expression: "(sessionStorage.removeItem('serial-order'), true)"
+        }).done
+        if (cleared.isError) throw new Error('并行测试 sessionStorage 初始化失败')
+      }
+      const parallel = serialFixtures.get('parallel')
+      const parallelAUrl = `${testOrigin}/serial-a?case=parallel`
+      const parallelBUrl = `${testOrigin}/serial-b?case=parallel`
+      const parallelB = clientB.call('browser_navigate', { tabId: otherTabId, url: parallelBUrl, snapshot: false })
+      await waitFor(parallel.arrived.b.promise, '不同标签 B 到达 HTTP barrier')
+      check('不同 tabId 的 B 已到服务端且仍 pending', isHoldingB(parallel) && !parallelB.settled)
+      const parallelA = clientA.call('browser_navigate', { tabId: sameTabId, url: parallelAUrl, snapshot: false })
+      await waitFor(parallel.arrived.a.promise, '不同标签 A 在 B 放行前到达 HTTP 服务端')
+      const parallelAResult = await parallelA.done
+      check('B 仍持 barrier 时独立 tabId 的 A 已到达并完整成功',
+        navigationOK(parallelAResult, parallelAUrl) && isHoldingB(parallel) && !parallelB.settled)
+      releaseB(parallel)
+      const parallelBResult = await parallelB.done
+      check('放行 barrier 后不同 tabId 的 B 完整成功', navigationOK(parallelBResult, parallelBUrl))
+      check('不同标签 HTTP 请求确实先 B 后 A', parallel.requests.join('') === 'ba', parallel.requests.join(''))
+      const storage = await Promise.all([sameTabId, otherTabId].map((tabId, i) => clientA.call('browser_evaluate', {
+        tabId, expression: `sessionStorage.getItem('serial-order') === '${i === 0 ? 'a' : 'b'}'`
+      }).done))
+      check('不同 tabId 各自只记录自己的导航', storage.every((r) => !r.isError && mcp.text(r).trim() === 'true'))
+      const parallelList = mcp.text(await clientA.call('browser_tabs', { action: 'list' }).done)
+      check('并行导航后两个固定 tabId 的目标均正确',
+        tabAt(parallelList, sameTabId, parallelAUrl) && tabAt(parallelList, otherTabId, parallelBUrl))
+    } finally {
+      // 失败路径也放行所有 HTTP 响应，并清理调用定时器、waiter 和连接。
+      for (const fixture of serialFixtures.values()) releaseB(fixture)
+      for (const peer of peers) peer.stop()
+      if (otherTabId) await mcp.call('browser_tabs', { action: 'close', tabId: otherTabId }).catch(() => {})
+      if (sameTabId) await mcp.call('browser_tabs', { action: 'select', tabId: sameTabId }).catch(() => {})
+    }
     const nav = await mcp.call('browser_navigate', { url: `${testOrigin}/redirect` })
     const navText = mcp.text(nav)
     check('302 导航成功并返回最终地址', !nav.isError && navText.startsWith(`已导航: ${testPageUrl}\n`), navText.slice(0, 200))

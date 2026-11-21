@@ -491,6 +491,80 @@ if (!process.versions.electron) {
     await assertSelectedView(restoredB, pageB, chrome)
     pass('MCP tab selection attaches only the requested native page below the shell and retains shell focus')
 
+    // Native non-client dragging requires OS input, not DOM MouseEvent dispatch.
+    // Check layout here; actual dragging/maximize is a separate desktop acceptance.
+    const dragRegion = await ui(`(() => {
+      const el = document.querySelector('#window-drag-region')
+      const r = el.getBoundingClientRect()
+      const controls = Array.from(document.querySelectorAll('#tabstrip button, #tabstrip .tab')).map((node) => node.getBoundingClientRect())
+      return { width: r.width, height: r.height, appRegion: getComputedStyle(el).getPropertyValue('-webkit-app-region'), overlaps: controls.some((b) => r.left < b.right && r.right > b.left && r.top < b.bottom && r.bottom > b.top) }
+    })()`)
+    assert.ok(dragRegion.width >= 64 && dragRegion.height >= 24)
+    assert.equal(dragRegion.appRegion, 'drag')
+    assert.equal(dragRegion.overlaps, false)
+    pass('title bar reserves a native drag region separate from tabs and buttons (layout only)')
+
+    const beforeTabPress = browserWindow.getBounds()
+    await click(`[data-tab-id="${restoredA.id}"]`)
+    await until(() => webContents.getFocusedWebContents() === pageA, 'reselecting restored-a focuses its page')
+    await assertSelectedView(restoredA, pageA, pageA)
+    assert.deepEqual(browserWindow.getBounds(), beforeTabPress)
+    assert.equal(await ui(`getComputedStyle(document.querySelector('.tab')).getPropertyValue('-webkit-app-region')`), 'no-drag')
+    pass('clicking a tab selects its page without moving the window')
+
+    // ── F12 / Ctrl+Shift+I：当前网页 DevTools（v0.8.0）──
+    const activePageNow = await until(async () => {
+      const s = await state()
+      const tab = s.tabs.find((t) => t.active)
+      return webContents.getAllWebContents().find((wc) => wc !== chrome && wc.getURL() === tab?.url) ?? null
+    }, 'active webpage webContents')
+    activePageNow.focus()
+    activePageNow.sendInputEvent({ type: 'keyDown', keyCode: 'F12' })
+    activePageNow.sendInputEvent({ type: 'keyUp', keyCode: 'F12' })
+    await until(() => activePageNow.isDevToolsOpened(), 'F12 opens the current webpage DevTools')
+    pass('F12 opens DevTools for the current webpage')
+    activePageNow.sendInputEvent({ type: 'keyDown', keyCode: 'F12' })
+    activePageNow.sendInputEvent({ type: 'keyUp', keyCode: 'F12' })
+    await until(() => !activePageNow.isDevToolsOpened(), 'F12 closes the DevTools again')
+    pass('F12 received by the webpage toggles its DevTools closed')
+
+    chrome.focus()
+    chrome.sendInputEvent({ type: 'keyDown', keyCode: 'I', modifiers: ['control', 'shift'] })
+    chrome.sendInputEvent({ type: 'keyUp', keyCode: 'I', modifiers: ['control', 'shift'] })
+    await until(() => activePageNow.isDevToolsOpened(), 'shell Ctrl+Shift+I opens the active webpage DevTools')
+    pass('Ctrl+Shift+I from the shell targets the active webpage')
+    chrome.sendInputEvent({ type: 'keyDown', keyCode: 'I', modifiers: ['control', 'shift'] })
+    chrome.sendInputEvent({ type: 'keyUp', keyCode: 'I', modifiers: ['control', 'shift'] })
+    await until(() => !activePageNow.isDevToolsOpened(), 'shell Ctrl+Shift+I closes the DevTools again')
+    pass('Ctrl+Shift+I from the shell toggles DevTools closed')
+    assert.equal(chrome.isDevToolsOpened(), false)
+    await click('#btn-settings')
+    await until(() => ui('document.activeElement?.id === "btn-close-settings"'), 'settings focus before DevTools guard')
+    let modalDevToolsOpened = 0
+    const onModalDevToolsOpened = () => { modalDevToolsOpened++ }
+    activePageNow.on('devtools-opened', onModalDevToolsOpened)
+    chrome.on('devtools-opened', onModalDevToolsOpened)
+    try {
+      chrome.sendInputEvent({ type: 'keyDown', keyCode: 'F12' })
+      chrome.sendInputEvent({ type: 'keyUp', keyCode: 'F12' })
+      await pause(100)
+      assert.equal(modalDevToolsOpened, 0, 'modal F12 must never open DevTools')
+      assert.equal(activePageNow.isDevToolsOpened(), false)
+      assert.equal(webContents.getFocusedWebContents()?.id, chrome.id)
+      await ui('window.aa.devtools()')
+      await pause(100)
+      assert.equal(modalDevToolsOpened, 0, 'modal IPC must never open DevTools')
+      assert.equal(activePageNow.isDevToolsOpened(), false)
+      assert.equal(chrome.isDevToolsOpened(), false)
+      assert.equal(webContents.getFocusedWebContents()?.id, chrome.id)
+      assert.equal(await ui('document.activeElement?.id'), 'btn-close-settings')
+    } finally {
+      activePageNow.removeListener('devtools-opened', onModalDevToolsOpened)
+      chrome.removeListener('devtools-opened', onModalDevToolsOpened)
+    }
+    await click('#btn-close-settings')
+    pass('settings modal blocks both F12 and shell DevTools IPC without moving focus')
+
     await ui(`window.aa.tabNew(${jsLiteral(base + '/normal')})`)
     await until(async () => (await state()).tabs.some((t) => t.active && t.url === base + '/normal' && !t.loading), 'normal page')
     const normalId = (await state()).activeId
