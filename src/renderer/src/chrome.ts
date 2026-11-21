@@ -66,6 +66,7 @@ declare global {
       settingsSet: (patch: Partial<AppSettings>) => Promise<AppSettings | null>
       settingsOpen: (open: boolean) => Promise<void>
       agentInfo: () => Promise<AgentInfo | null>
+      copyConnectionDiagnostics: () => Promise<boolean>
       clientsDetect: () => Promise<ClientDetectResult[]>
       clientsSetup: (ids: string[]) => Promise<ClientSetupResult[]>
       updateCheck: () => Promise<UpdateState>
@@ -121,7 +122,14 @@ const setIsolatedSessions = document.getElementById('set-isolated-sessions') as 
 const setRestoreSession = document.getElementById('set-restore-session') as HTMLInputElement | null
 const setDownloadDir = document.getElementById('set-download-dir') as HTMLInputElement | null
 const setAllowedSites = document.getElementById('set-allowed-sites') as HTMLTextAreaElement | null
-const setAgentInfo = document.getElementById('set-agent-info') as HTMLDivElement | null
+const setAgentInfo = document.getElementById('set-agent-info')
+const setAgentStatus = document.getElementById('set-agent-status')
+const setAgentGuidance = document.getElementById('set-agent-guidance')
+const copyDiagnostics = document.querySelector<HTMLButtonElement>('#btn-copy-connection-diagnostics')
+const diagnosticsResult = document.getElementById('connection-diagnostics-result')
+let diagnosticsCopying = false
+let diagnosticsFeedback: 'copied' | 'failed' | null = null
+let agentInfoRequest = 0
 let lastClients: ClientDetectResult[] | null = null
 let lastAgentInfo: AgentInfo | null = null
 let hasAgentInfo = false
@@ -296,6 +304,9 @@ function applyLocale(locale: Locale): void {
   setText('btn-client-setup', 'writeClients')
   setText('settings-client-hint', 'clientSetupHint')
   setText('settings-agent-label', 'agentService')
+  setText('set-agent-details-label', 'connectionDetails')
+  setText('btn-copy-connection-diagnostics', 'copyConnectionDiagnostics')
+  setText('connection-diagnostics-hint', 'connectionDiagnosticsHint')
   setText('btn-save-settings', 'save')
   setAttr('find-bar', 'aria-label', 'findInPage')
   const findLabel = document.querySelector<HTMLLabelElement>('#find-bar label'); if (findLabel) findLabel.textContent = t('findLabel')
@@ -478,10 +489,34 @@ function focusOmnibox(): void {
   omnibox.select()
 }
 
-/** 渲染标签条 */
+let renderedTabs: readonly TabInfo[] = []
+let renderedTabLocale: Locale | undefined
+
+/** 活动状态和 Agent 进度不替换标签节点，保留正在使用的键盘焦点。 */
 function renderTabs(): void {
+  const next = state.tabs
+  const sameTabs = renderedTabLocale === activeLocale && renderedTabs.length === next.length && next.every((tab, i) => {
+    const previous = renderedTabs[i]
+    return previous.id === tab.id && previous.title === tab.title && previous.url === tab.url &&
+      previous.favicon === tab.favicon && previous.loading === tab.loading && previous.isolated === tab.isolated
+  })
+  const previous = renderedTabs
+  renderedTabs = next
+  renderedTabLocale = activeLocale
+  if (sameTabs) {
+    for (const [i, tab] of next.entries()) {
+      if (tab.active === previous[i].active) continue
+      const el = tabsEl.children[i] as HTMLElement
+      el.classList.toggle('active', tab.active)
+      el.setAttribute('aria-selected', String(tab.active))
+      el.tabIndex = tab.active ? 0 : -1
+      const close = el.querySelector<HTMLButtonElement>('.close')
+      if (close) close.tabIndex = el.tabIndex
+    }
+    return
+  }
   tabsEl.textContent = ''
-  for (const t of state.tabs) {
+  for (const t of next) {
     const el = document.createElement('div')
     el.className = 'tab' + (t.active ? ' active' : '')
     el.title = `${t.title}\n${t.url}${t.isolated ? `\n${uiText('（隔离会话：不共享登录态）', '(Isolated session: sign-in state is not shared)')}` : ''}`
@@ -660,7 +695,7 @@ function renderToolbar(): void {
     btnForward.disabled = true
   }
   const connected = state.agentVerifiedCount > 0
-  const waiting = !connected && (state.bridgeState === 'waiting' || state.agentCount > 0)
+  const waiting = !connected && (state.bridgeState === 'starting' || state.bridgeState === 'waiting' || state.agentCount > 0)
   const statusText = connected
     ? (activeLocale === 'en-US' ? `AI connected ×${state.agentVerifiedCount}` : `AI 已连接 ×${state.agentVerifiedCount}`)
     : waiting
@@ -1028,8 +1063,14 @@ function applyState(next: UiState): void {
   // 状态流会重建列表；只恢复外壳内同一业务控件，不能抢走网页的焦点。
   const focused = document.hasFocus() ? document.activeElement as HTMLElement | null : null
   const focusKey = focused?.dataset['focusKey']
-  const activeChanged = state.activeId !== next.activeId
+  const previous = state
+  const activeChanged = previous.activeId !== next.activeId
+  const connectionChanged = previous.bridgeState !== next.bridgeState || previous.agentCount !== next.agentCount || previous.agentVerifiedCount !== next.agentVerifiedCount
   state = next
+  if (connectionChanged && settingsModal && !settingsModal.hidden) {
+    renderAgentInfo()
+    if (previous.bridgeState === 'starting' && hasAgentInfo) void refreshAgentInfo()
+  }
   if (activeChanged) {
     hideSuggest()
     if (document.activeElement === omnibox) {
@@ -1148,23 +1189,78 @@ btnFeed?.addEventListener('click', () => {
 btnCloseFeed?.addEventListener('click', () => closeDrawer('feed'))
 
 /* ── 设置面板：连接 AI 客户端 ─────────────── */
-/** 设置里的 Agent 服务信息：语言切换时用缓存值即时重渲染，不重新请求。 */
+/** 路径仅供本机展开查看；可分享的诊断由主进程白名单生成。 */
 function renderAgentInfo(): void {
-  if (!setAgentInfo) return
-  if (!hasAgentInfo) {
-    setAgentInfo.textContent = t('loading')
-    return
-  }
+  if (!setAgentInfo || !setAgentStatus || !setAgentGuidance) return
   const agent = lastAgentInfo
-  if (agent) {
-    setAgentInfo.textContent = activeLocale === 'en-US'
-      ? `MCP bridge: ${agent.clientCount} · verified calls: ${agent.verifiedClientCount} · port ${agent.port} · discovery file ${agent.discoveryFile}`
-      : `MCP 桥：${agent.clientCount} 个 · 已验证调用：${agent.verifiedClientCount} 个 · 端口 ${agent.port} · 发现文件 ${agent.discoveryFile}`
-    setAgentInfo.removeAttribute('title')
-  } else {
-    setAgentInfo.textContent = uiText('Agent 服务未启动', 'Agent service is not running')
+  const status = !hasAgentInfo ? 'loading'
+    : !agent ? 'unknown'
+    : state.bridgeState === 'starting' ? 'starting'
+    : state.bridgeState === 'disconnected' ? 'unavailable'
+    : state.agentVerifiedCount > 0 ? 'verified'
+    : state.agentCount > 0 ? 'authenticated'
+    : agent.bridgeFile === 'missing' ? 'missing'
+    : agent.bridgeFile === 'needs-setup' ? 'needs-setup' : 'waiting'
+  const labels = {
+    loading: t('loading'),
+    unknown: uiText('无法读取连接状态', 'Connection status unavailable'),
+    starting: uiText('正在启动本地服务', 'Starting local service'),
+    unavailable: uiText('本地服务未能启动', 'Local service could not start'),
+    verified: uiText(`已验证 ${state.agentVerifiedCount} 个客户端`, `${state.agentVerifiedCount} client connection(s) verified`),
+    authenticated: uiText('客户端已连接，尚未验证调用', 'Client connected; first call not verified'),
+    missing: uiText('当前安装缺少 MCP 桥文件', 'MCP bridge file missing'),
+    'needs-setup': uiText('需要完成客户端接入', 'Client setup required'),
+    waiting: uiText('本地服务就绪，等待客户端', 'Local service ready; waiting for a client')
+  }
+  // Avoid repeatedly announcing an unchanged status during Agent progress updates.
+  if (setAgentStatus.textContent !== labels[status]) setAgentStatus.textContent = labels[status]
+  setAgentStatus.dataset['state'] = status
+  setAgentGuidance.textContent = agent?.bridgeFile === 'missing'
+    ? uiText('重新安装受支持的正式版，再重新扫描并修复客户端路径。', 'Reinstall a supported release, then rescan and repair the client path.')
+    : status === 'unavailable' || status === 'unknown'
+      ? uiText('请重启 Aa Browser；仍未恢复时，可复制连接诊断。', 'Restart Aa Browser. If the issue persists, copy the connection diagnostics.')
+      : ['waiting', 'authenticated', 'needs-setup'].includes(status)
+        ? uiText('完成接入并重启客户端，然后调用 browser_tabs（list）验证。', 'Complete setup, restart the client, then call browser_tabs (list) to verify.')
+        : ''
+  setAgentInfo.textContent = agent?.port && state.bridgeState !== 'disconnected'
+    ? uiText(
+      `已认证客户端：${state.agentCount} · 已验证：${state.agentVerifiedCount} · 端口 ${agent.port} · 发现文件 ${agent.discoveryFile}`,
+      `Authenticated clients: ${state.agentCount} · verified: ${state.agentVerifiedCount} · port ${agent.port} · discovery file ${agent.discoveryFile}`
+    )
+    : labels[status]
+  if (copyDiagnostics) {
+    copyDiagnostics.disabled = !hasAgentInfo
+    copyDiagnostics.setAttribute('aria-busy', String(diagnosticsCopying))
+  }
+  if (diagnosticsResult) {
+    diagnosticsResult.textContent = diagnosticsFeedback === 'copied' ? uiText('连接诊断已复制。', 'Connection diagnostics copied.')
+      : diagnosticsFeedback === 'failed' ? uiText('复制失败，请重试。', 'Unable to copy. Try again.') : ''
+    diagnosticsResult.dataset['state'] = diagnosticsFeedback === 'failed' ? 'error' : diagnosticsFeedback === 'copied' ? 'success' : ''
   }
 }
+
+async function refreshAgentInfo(): Promise<void> {
+  const request = settingsRequest
+  const revision = ++agentInfoRequest
+  const info = await window.aa.agentInfo().catch(() => null)
+  if (!currentSettingsRequest(request) || revision !== agentInfoRequest) return
+  lastAgentInfo = info
+  hasAgentInfo = true
+  renderAgentInfo()
+}
+
+copyDiagnostics?.addEventListener('click', async () => {
+  const request = settingsRequest
+  if (!settingsReady || !currentSettingsRequest(request) || diagnosticsCopying) return
+  diagnosticsCopying = true
+  diagnosticsFeedback = null
+  renderAgentInfo()
+  const copied = await window.aa.copyConnectionDiagnostics().catch(() => false)
+  if (!currentSettingsRequest(request)) return
+  diagnosticsCopying = false
+  diagnosticsFeedback = copied ? 'copied' : 'failed'
+  renderAgentInfo()
+})
 
 /** 客户端注册表里的显示名带中文说明；英文界面按稳定 id 换用英文名，未知 id 保留原名。 */
 const clientEnglishNames: Record<string, string> = {
@@ -1260,8 +1356,10 @@ async function refreshClients(): Promise<void> {
 }
 
 btnClientScan?.addEventListener('click', () => {
+  if (!settingsReady) return
   if (setClientResult) setClientResult.textContent = ''
   void refreshClients()
+  void refreshAgentInfo()
 })
 
 btnClientSetup?.addEventListener('click', async () => {
@@ -1286,7 +1384,7 @@ btnClientSetup?.addEventListener('click', async () => {
         ? results.map((r) => `${clientStatusBadge(r.status)} ${clientDisplayName(r.id, r.name)} — ${r.message}`).join('　')
         : uiText('没有可写入的客户端。', 'No clients available to configure.')
     }
-    await refreshClients()
+    await Promise.all([refreshClients(), refreshAgentInfo()])
   } catch (err) {
     if (currentSettingsRequest(request) && setClientResult) setClientResult.textContent = `${uiText('写入失败：', 'Write failed: ')}${err instanceof Error ? err.message : String(err)}`
   } finally {
@@ -1359,6 +1457,11 @@ async function openSettings(): Promise<boolean> {
   if (dlPanel) dlPanel.hidden = true
   if (feedDrawer) feedDrawer.hidden = true
   settingsModal.hidden = false
+  hasAgentInfo = false
+  lastAgentInfo = null
+  diagnosticsCopying = false
+  diagnosticsFeedback = null
+  renderAgentInfo()
   isolateSettings(true)
   document.getElementById('btn-close-settings')?.focus()
   if (settingsBody) settingsBody.scrollTop = 0
@@ -1418,6 +1521,8 @@ async function openSettings(): Promise<boolean> {
   hasAgentInfo = true
   applyLocale(savedLocale)
   setSettingsReady(true)
+  // 服务可能在读取初始状态时完成启动，补取一次尚未出现的端口和发现文件。
+  if (agent && !agent.port && state.bridgeState !== 'starting' && state.bridgeState !== 'disconnected') void refreshAgentInfo()
   if (settingsStatus) {
     settingsStatus.textContent = ''
     delete settingsStatus.dataset['state']

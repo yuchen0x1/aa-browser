@@ -1,4 +1,5 @@
 import { app } from 'electron'
+import type { BridgeFileState } from '../shared/types'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -214,12 +215,20 @@ export const CLIENT_DEFS: ClientDef[] = [
 /** MCP 桥脚本的绝对路径：优先用构建出的单文件零依赖产物（out/bridge/mcp.cjs） */
 export function mcpBridgePath(): string {
   if (isAppImage()) return path.join(app.getPath('userData'), 'mcp', 'bridge.cjs')
-  if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'app.asar.unpacked', 'out', 'bridge', 'mcp.cjs')
-  }
+  if (app.isPackaged) return bundledBridgePath()
   const bundled = path.resolve(app.getAppPath(), 'out', 'bridge', 'mcp.cjs')
-  if (fs.existsSync(bundled)) return bundled
+  if (isFile(bundled)) return bundled
   return path.resolve(app.getAppPath(), 'cli', 'mcp.mjs')
+}
+
+const bundledBridgePath = (): string => path.join(process.resourcesPath, 'app.asar.unpacked', 'out', 'bridge', 'mcp.cjs')
+const isFile = (file: string): boolean => {
+  try { return fs.statSync(file).isFile() } catch { return false }
+}
+
+export function bridgeFileState(): BridgeFileState {
+  if (isFile(mcpBridgePath())) return 'present'
+  return isAppImage() && isFile(bundledBridgePath()) ? 'needs-setup' : 'missing'
 }
 
 /** AppImage mount paths change every launch. Publish the bridge under a stable client path. */
@@ -227,7 +236,7 @@ export function syncAppImageBridge(existingOnly = false): void {
   if (!isAppImage()) return
   const dest = mcpBridgePath()
   if (existingOnly && !fs.existsSync(dest)) return
-  writeFileAtomic(dest, fs.readFileSync(path.join(process.resourcesPath, 'app.asar.unpacked', 'out', 'bridge', 'mcp.cjs')))
+  writeFileAtomic(dest, fs.readFileSync(bundledBridgePath()))
 }
 
 /** MCP 条目：优先系统 node；没有则用本应用本体（ELECTRON_RUN_AS_NODE）作为运行时 */

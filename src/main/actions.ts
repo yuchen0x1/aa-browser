@@ -1,5 +1,5 @@
 import { WebContents, webContents, nativeImage } from 'electron'
-import type { PageSnapshot, SnapshotElement, ToolContent } from '@shared/types'
+import type { SnapshotSummary, ToolContent } from '@shared/types'
 import { __aaSnapshot } from '@snapshot/engine'
 import {
   locateScript,
@@ -70,28 +70,26 @@ export async function raceAbort<T>(
 }
 
 /** 从 webContents 上执行注入的快照引擎（mode=full 强制完整快照，默认增量） */
+const snapshotEngineSource = __aaSnapshot.toString()
+
 export async function captureSnapshot(
   wc: WebContents,
   opts?: { mode?: 'full' | 'auto'; maxNodes?: number; cursor?: number }
-): Promise<PageSnapshot> {
-  const source = `(${__aaSnapshot.toString()})(${jsLiteral(opts ?? {})})`
-  const snap = (await wc.executeJavaScript(source, false)) as PageSnapshot
+): Promise<SnapshotSummary> {
+  const source = `(${snapshotEngineSource})(${jsLiteral({ ...opts, includeElements: false })})`
+  const snap = (await wc.executeJavaScript(source, false)) as (SnapshotSummary & { error?: string }) | null
   if (!snap || typeof snap !== 'object') {
     throw new ActionError('快照执行失败：页面未返回有效数据')
   }
-  if ((snap as unknown as { error?: string }).error) {
-    throw new ActionError(`快照执行失败：${(snap as unknown as { error: string }).error}`)
+  if (snap.error) {
+    throw new ActionError(`快照执行失败：${snap.error}`)
   }
   return snap
 }
 
 /** Agent 可读文本（引擎已在页面内拼好头部与模式标注） */
-export function snapshotText(snap: PageSnapshot): string {
+export function snapshotText(snap: SnapshotSummary): string {
   return snap.tree || `页面快照 url: ${snap.url}\ntitle: ${snap.title}\n（页面无可渲染内容）`
-}
-
-export function findElement(snap: PageSnapshot, ref: string): SnapshotElement | null {
-  return snap.elements.find((e) => e.ref === ref) ?? null
 }
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
@@ -215,7 +213,7 @@ export async function doClick(
   ref: string,
   wantSnapshot: boolean,
   opts?: { button?: 'left' | 'right' | 'middle'; clickCount?: number; signal?: AbortSignal }
-): Promise<{ clicked: string; snapshot?: PageSnapshot }> {
+): Promise<{ clicked: string; snapshot?: SnapshotSummary }> {
   const signal = opts?.signal
   throwIfAborted(signal)
   const wc = tab.view.webContents
@@ -295,7 +293,7 @@ export async function doDrag(
   tab: Tab,
   ref: string,
   opts: { toRef?: string; dx?: number; dy?: number; wantSnapshot?: boolean; signal?: AbortSignal }
-): Promise<{ dragged: string; snapshot?: PageSnapshot }> {
+): Promise<{ dragged: string; snapshot?: SnapshotSummary }> {
   throwIfAborted(opts.signal)
   const wc = tab.view.webContents
   const loc1 = (await wc.executeJavaScript(locateScript(ref), false)) as {
@@ -381,7 +379,7 @@ export async function doType(
   ref: string,
   text: string,
   opts: { submit?: boolean; clear?: boolean; wantSnapshot?: boolean; signal?: AbortSignal }
-): Promise<{ typed: string; snapshot?: PageSnapshot }> {
+): Promise<{ typed: string; snapshot?: SnapshotSummary }> {
   const { signal } = opts
   throwIfAborted(signal)
   const wc = tab.view.webContents
@@ -451,7 +449,7 @@ export async function doSelectOption(
   tab: Tab,
   ref: string,
   opts: { value?: string; label?: string; wantSnapshot?: boolean; signal?: AbortSignal }
-): Promise<{ selected: string; snapshot?: PageSnapshot }> {
+): Promise<{ selected: string; snapshot?: SnapshotSummary }> {
   const { signal } = opts
   throwIfAborted(signal)
   const wc = tab.view.webContents
@@ -486,7 +484,7 @@ export async function doScroll(
   direction: string,
   amount: number,
   wantSnapshot: boolean
-): Promise<{ where: string; snapshot?: PageSnapshot }> {
+): Promise<{ where: string; snapshot?: SnapshotSummary }> {
   const wc = tab.view.webContents
   const result = (await wc.executeJavaScript(scrollScript(direction, amount), false)) as {
     ok: boolean
@@ -867,7 +865,7 @@ export async function doNavigateHistory(
   wantSnapshot: boolean,
   go: (t: Tab) => void,
   canGo: (t: Tab) => boolean
-): Promise<{ moved: boolean; snapshot?: PageSnapshot }> {
+): Promise<{ moved: boolean; snapshot?: SnapshotSummary }> {
   if (!canGo(tab)) throw new ActionError(`没有可${dir === 'back' ? '后退' : '前进'}的历史记录`)
   const wc = tab.view.webContents
   const urlBefore = wc.getURL()
@@ -1026,7 +1024,7 @@ export async function doCookies(
       await session.cookies.set(details as never)
       return { content: `已写入 Cookie ${opts.name}（${opts.url}）` }
     }
-    // clear
+    if (opts.action !== 'clear') throw new ActionError('不支持的 Cookie 操作')
     const cookies = await session.cookies.get({})
     let n = 0
     for (const c of cookies) {
@@ -1130,7 +1128,7 @@ export async function doPdf(tab: Tab, filePath?: string, landscape = false): Pro
   const file = filePath || pathMod.join(process.env['AA_BROWSER_DOWNLOAD_DIR'] || pathMod.join(osMod.homedir(), '.aabrowser', 'downloads'), `aa-page-${Date.now()}.pdf`)
   fsMod.mkdirSync(pathMod.dirname(file), { recursive: true })
   fsMod.writeFileSync(file, pdf)
-  getEvidenceManager().record(file, 'pdf')
+  getEvidenceManager().record(file, 'pdf', { managed: !filePath })
   return { savedPath: file }
 }
 

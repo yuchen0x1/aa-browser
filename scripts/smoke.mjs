@@ -295,9 +295,21 @@ async function main() {
     const copyPromptRef = findRef(promptSnapshot, new RegExp(`- button "复制${promptLabel}"`))
     check('安装提示词提供可操作的复制按钮', !!copyPromptRef, promptSnapshot.slice(0, 400))
     if (copyPromptRef) {
-      await mcp.call('browser_click', { ref: copyPromptRef, snapshot: false })
-      const copyStatus = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.querySelector("#copy-status")?.innerText' }))
-      check('复制按钮给出成功或手动复制反馈', copyStatus.includes(`${promptLabel}已复制`) || copyStatus.includes(`已选中${promptLabel}`), copyStatus)
+      // Exercise the real new-tab handler without replacing the operator's system clipboard.
+      const stub = await mcp.call('browser_evaluate', { expression: `(() => {
+        Object.defineProperty(navigator, 'clipboard', { configurable: true, value: {
+          writeText: async (value) => { window.__aaSmokePromptCopied = value === document.querySelector('#connection-prompt').value }
+        } });
+        return typeof navigator.clipboard.writeText === 'function';
+      })()` })
+      if (stub.isError || mcp.text(stub) !== 'true') throw new Error('Unable to isolate the smoke clipboard')
+      try {
+        await mcp.call('browser_click', { ref: copyPromptRef, snapshot: false })
+        const copied = mcp.text(await mcp.call('browser_evaluate', { expression: `window.__aaSmokePromptCopied === true && document.querySelector('#copy-status').innerText.includes('已复制')` }))
+        check('复制按钮发送生成的提示词并给出成功反馈（剪贴板替身）', copied === 'true')
+      } finally {
+        await mcp.call('browser_evaluate', { expression: 'delete navigator.clipboard; delete window.__aaSmokePromptCopied; true' })
+      }
     }
     if (!packagedApp) {
       const localNewtabUrl = pathToFileURL(path.join(ROOT, 'out', 'renderer', 'newtab.html')).toString()

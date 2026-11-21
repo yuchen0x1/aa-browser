@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('aa', {
   settingsSet: (patch: Partial<AppSettings>): Promise<AppSettings | null> => ipcRenderer.invoke('aa:settings-set', patch),
   settingsOpen: (open: boolean): Promise<void> => ipcRenderer.invoke('aa:settings-open', open),
   agentInfo: (): Promise<AgentInfo | null> => ipcRenderer.invoke('aa:agent-info'),
+  copyConnectionDiagnostics: (): Promise<boolean> => ipcRenderer.invoke('aa:connection-diagnostics-copy'),
   clientsDetect: (): Promise<unknown> => ipcRenderer.invoke('aa:clients-detect'),
   clientsSetup: (ids: string[]): Promise<unknown> => ipcRenderer.invoke('aa:clients-setup', ids),
   updateCheck: (): Promise<UpdateState> => ipcRenderer.invoke('aa:update-check'),

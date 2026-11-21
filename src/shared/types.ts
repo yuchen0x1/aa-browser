@@ -72,7 +72,7 @@ export interface UiState {
   agentCount: number
   /** 已成功调用 browser_tabs 的 MCP 客户端数；仅令牌握手不计为已验证连接 */
   agentVerifiedCount: number
-  bridgeState: 'connected' | 'waiting' | 'disconnected'
+  bridgeState: 'starting' | 'connected' | 'waiting' | 'disconnected'
   pendingApprovals: PendingApprovalInfo[]
   agentInterrupted: boolean
   /** Agent 工具调用活动状态，供外壳显示操作中的高亮/状态提示。 */
@@ -155,11 +155,14 @@ export interface SettingsView {
   presets: { label: string; url: string }[]
 }
 
-/** 本地 Agent 服务连接信息（设置面板展示） */
+export type BridgeFileState = 'present' | 'needs-setup' | 'missing'
+
+/** 本地 Agent 服务连接信息（设置面板展示；不含连接令牌） */
 export interface AgentInfo {
   port: number
   version: string
   discoveryFile: string
+  bridgeFile: BridgeFileState
   /** 已通过本机令牌认证的 MCP 桥数量 */
   clientCount: number
   /** 已成功调用 browser_tabs(action=list) 的 MCP 桥数量 */
@@ -203,6 +206,9 @@ export interface PageSnapshot {
   hasMore?: boolean
   capturedAt: number
 }
+
+/** MCP 文本路径无需跨进程传输元素明细；页面仍持有完整 ref 和增量状态。 */
+export type SnapshotSummary = Omit<PageSnapshot, 'elements'>
 
 /** Agent WebSocket 请求/响应协议 */
 export interface WsRequest {

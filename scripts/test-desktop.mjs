@@ -42,7 +42,7 @@ if (!process.versions.electron) {
   // Do not await app.whenReady() at module top level: Electron waits for its
   // ESM entry to finish evaluating before it can emit ready.
   void (async () => {
-  const { app, webContents, BaseWindow, Menu, screen } = await import('electron')
+  const { app, webContents, BaseWindow, Menu, screen, clipboard } = await import('electron')
   const runDir = process.env.AA_DESKTOP_TEST_DIR
   const displayOnly = process.argv.includes('--display-only')
   const displayScale = Number(process.env.AA_DISPLAY_MATRIX_SCALE || 1)
@@ -388,8 +388,36 @@ if (!process.versions.electron) {
     await click('#btn-settings')
     await until(() => ui('document.querySelector("#set-engine").options.length > 0'), 'settings ready')
      assert.equal(await ui('document.activeElement?.id'), 'btn-close-settings')
-     assert.equal(await ui('document.querySelector("#set-agent-info")?.getAttribute("title")'), null)
-     assert.equal(await ui('window.aa.agentInfo().then((info) => Object.prototype.hasOwnProperty.call(info, "token"))'), false)
+    assert.equal(await ui('document.querySelector("#set-agent-info")?.getAttribute("title")'), null)
+    const info = await ui('window.aa.agentInfo()')
+    assert.equal(Object.hasOwn(info, 'token'), false)
+    assert.equal(info.bridgeFile, 'present')
+    await until(() => ui('document.querySelector("#set-agent-status").dataset.state === "authenticated"'), 'authenticated connection status')
+    await tool('browser_tabs', { action: 'list' })
+    await until(() => ui('document.querySelector("#set-agent-status").dataset.state === "verified"'), 'verified connection status')
+    assert.equal(await ui('document.querySelector(".connection-details").open'), false)
+    const originalWriteText = clipboard.writeText
+    const copied = []
+    let clipboardUnavailable = false
+    clipboard.writeText = (value) => {
+      if (clipboardUnavailable) throw new Error('Fixture clipboard failure')
+      copied.push(value)
+    }
+    try {
+      await click('#btn-copy-connection-diagnostics')
+      await until(() => ui('document.querySelector("#connection-diagnostics-result").dataset.state === "success"'), 'copy diagnostic success')
+      assert.deepEqual(copied, [[
+        `Aa Browser ${info.version} (${process.platform}-${process.arch})`,
+        'Local service: connected', 'Bridge file: present', 'Authenticated clients: 1', 'Verified clients: 1'
+      ].join('\n')], 'diagnostics use exactly the shareable fields, not the discovery file, token, URL or configs')
+      clipboardUnavailable = true
+      await click('#btn-copy-connection-diagnostics')
+      await until(() => ui('document.querySelector("#connection-diagnostics-result").dataset.state === "error"'), 'copy diagnostic failure')
+      assert.equal(copied.length, 1)
+    } finally {
+      clipboard.writeText = originalWriteText
+    }
+    pass('connection diagnostics follow live verification and copy only shareable fields (clipboard stub)')
     await ui('document.querySelector("#set-engine").value="https://duckduckgo.com/?q="; document.querySelector("#set-engine").dispatchEvent(new Event("change"))')
     await click('#btn-save-settings')
     assert.equal((await ui('window.aa.settingsGet()')).settings.searchEngine, 'https://duckduckgo.com/?q=')
@@ -440,6 +468,28 @@ if (!process.versions.electron) {
     }
     pass('native title bar overlay follows the light/dark theme setting')
     await click('#btn-close-settings')
+
+    const restoredA = initial.tabs.find(tab => tab.url === base + '/restored-a')
+    const restoredB = initial.tabs.find(tab => tab.url === base + '/restored-b')
+    // Map by the distinct fixture URLs without consulting which view is attached.
+    const restoredContents = (tab) => until(() => webContents.getAllWebContents().find(wc => wc.getURL() === tab.url), `WebContents for ${tab.url}`)
+    const [pageA, pageB] = await Promise.all([restoredContents(restoredA), restoredContents(restoredB)])
+    const assertSelectedView = async (tab, expectedPage, expectedFocus) => {
+      assert.equal((await state()).activeId, tab.id)
+      assert.deepEqual(browserWindow.contentView.children.map(view => view.webContents?.id), [expectedPage.id, chrome.id], `${tab.url} must be the only page view, below the shell`)
+      assert.equal(webContents.getFocusedWebContents()?.id, expectedFocus.id, `unexpected native focus after selecting ${tab.url}`)
+    }
+    await click(`[data-tab-id="${restoredA.id}"]`)
+    await until(() => webContents.getFocusedWebContents() === pageA, 'default tab click focuses restored-a')
+    await assertSelectedView(restoredA, pageA, pageA)
+    pass('clicking a tab attaches only its native page below the shell and focuses it')
+
+    // MCP selection changes the page underneath the shell, without taking shell focus.
+    chrome.focus()
+    await until(() => webContents.getFocusedWebContents() === chrome, 'shell focus before MCP tab selection')
+    await tool('browser_tabs', { action: 'select', tabId: restoredB.id })
+    await assertSelectedView(restoredB, pageB, chrome)
+    pass('MCP tab selection attaches only the requested native page below the shell and retains shell focus')
 
     await ui(`window.aa.tabNew(${jsLiteral(base + '/normal')})`)
     await until(async () => (await state()).tabs.some((t) => t.active && t.url === base + '/normal' && !t.loading), 'normal page')
@@ -640,6 +690,8 @@ if (!process.versions.electron) {
     const historyFile = path.join(process.env.AA_BROWSER_HISTORY_DIR, 'history.json')
     await until(() => fs.existsSync(historyFile), 'history file')
     assert.ok(JSON.parse(fs.readFileSync(historyFile)).some((e) => e.url === base + '/normal'))
+    // This standalone panel-sizing fixture needs native shell focus before its DOM setup.
+    chrome.focus()
     await ui('document.querySelector("#omnibox").focus(); document.querySelector("#omnibox").value="127"; document.querySelector("#omnibox").dispatchEvent(new Event("input"))')
     await until(() => ui('!document.querySelector("#suggest-panel").hidden'), 'history suggestions')
     await until(async () => shellView.getBounds().height >= await ui('document.querySelector("#suggest-panel").getBoundingClientRect().bottom'), 'suggestions native bounds')

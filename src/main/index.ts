@@ -9,7 +9,7 @@ import type { Tab } from './tabs'
 import { AgentServer } from './agent-server'
 import { buildTools } from './tools'
 import { normalizeUrl } from './tabs'
-import { detectClients, setupClients, syncAppImageBridge } from './clients'
+import { bridgeFileState, detectClients, setupClients, syncAppImageBridge } from './clients'
 import { getDownloadTracker } from './downloads'
 import { getEvidenceManager } from './evidence'
 import { getHistoryStore } from './history'
@@ -50,7 +50,7 @@ let tabManager: TabManager | null = null
 let agentServer: AgentServer | null = null
 let agentCount = 0
 let agentVerifiedCount = 0
-let bridgeState: UiState['bridgeState'] = 'waiting'
+let bridgeState: UiState['bridgeState'] = 'starting'
 let agentActivity: NonNullable<UiState['agentActivity']> = { active: false, paused: false }
 let settingsOpen = false
 let overlayHeight = 0
@@ -107,13 +107,6 @@ function layout(): void {
   if (active) {
     active.view.setBounds({ x: 0, y: CHROME_HEIGHT + panelHeight, width, height: Math.max(0, height - CHROME_HEIGHT - panelHeight) })
   }
-}
-
-function attachTabView(tabView: WebContentsView): void {
-  if (!win) return
-  // 页面视图插到底部，保证 chromeView（后加入）始终在最上层
-  win.contentView.addChildView(tabView, 0)
-  layout()
 }
 
 function detachTabView(tabView: WebContentsView): void {
@@ -288,7 +281,7 @@ function installPageContextMenu(wc: Electron.WebContents): void {
         const dir = app.getPath('pictures') || os.homedir()
         const p = path.join(dir, `aabrowser-${Date.now()}.png`)
         fs.writeFileSync(p, img.toPNG())
-        getEvidenceManager().record(p, 'context-shot')
+        getEvidenceManager().record(p, 'context-shot', { managed: false })
         shell.showItemInFolder(p)
       }).catch(() => {})
     } })
@@ -466,11 +459,9 @@ function registerIpc(): void {
   })
   ipcMain.handle('aa:tab-select', (event, id: string, focusPage: unknown = true) => {
     return guard(event, undefined, () => {
-      const prev = tabManager?.tabs.find((t) => t.id === tabManager?.activeId)
       const next = tabManager?.get(id)
       if (!tabManager || !next) return
-      if (prev && prev.id !== id) detachTabView(prev.view)
-      attachTabView(next.view)
+      // onTabChange owns view attachment for both UI and MCP tab selection.
       tabManager.selectTab(id)
       if (focusPage !== false) next.view.webContents.focus()
       else chromeView?.webContents.focus()
@@ -609,13 +600,31 @@ function registerIpc(): void {
   ipcMain.handle('aa:agent-info', (event) => {
     return guard(event, null, () => {
       const info = agentServer?.info()
-      if (!info) return null
       return {
-        port: info.port,
-        version: info.version,
-        discoveryFile: info.discoveryFile,
-        clientCount: info.clientCount,
-        verifiedClientCount: info.verifiedClientCount
+        port: info?.port ?? 0,
+        version: VERSION,
+        discoveryFile: info?.discoveryFile ?? '',
+        clientCount: agentCount,
+        verifiedClientCount: agentVerifiedCount,
+        bridgeFile: bridgeFileState()
+      }
+    })
+  })
+  ipcMain.handle('aa:connection-diagnostics-copy', (event) => {
+    return guard(event, false, () => {
+      if (!settingsOpen) return false
+      // Explicit allowlist: never stringify AgentServer.info(), paths, or config.
+      try {
+        clipboard.writeText([
+          `Aa Browser ${VERSION} (${process.platform}-${process.arch})`,
+          `Local service: ${bridgeState}`,
+          `Bridge file: ${bridgeFileState()}`,
+          `Authenticated clients: ${agentCount}`,
+          `Verified clients: ${agentVerifiedCount}`
+        ].join('\n'))
+        return true
+      } catch {
+        return false
       }
     })
   })
@@ -637,15 +646,13 @@ function registerIpc(): void {
 function onTabChange(): void {
   if (!win || !tabManager) return
   finder?.syncActive()
-  // 活动标签挂载/卸载
-  const active = tabManager.active()
-  for (const t of tabManager.tabs) {
-    const isShown = t.id === tabManager.activeId
-    const isAttached = win.contentView.children.includes(t.view)
-    if (isShown && !isAttached) attachTabView(t.view)
-    if (!isShown && isAttached) detachTabView(t.view)
+  // 先摘除旧页面，再把新页面放到外壳下面；每次切换只挂载一次。
+  const active = tabManager.active()?.view
+  const parent = win.contentView
+  for (const tab of tabManager.tabs) {
+    if (tab.view !== active && parent.children.includes(tab.view)) parent.removeChildView(tab.view)
   }
-  if (active) layout()
+  if (active && !parent.children.includes(active)) parent.addChildView(active, 0)
   pushState()
   scheduleSessionSave()
 }

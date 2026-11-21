@@ -9,7 +9,8 @@ import { writeJsonAtomic } from './atomic-json'
  *
  * - 每次写入后登记：路径、大小、sha256、文件身份、时间、TTL
  * - 启动时与定时 sweep：按 TTL / 总配额清理最旧且仍匹配的临时证据
- * - 基线、下载属于用户数据，不按 TTL / 配额删除
+ * - 显式导出、基线、下载属于用户数据，不按 TTL / 配额删除
+ * - 无所有权标记的历史登记仅供查询，不推断为可清理的临时文件
  */
 export type EvidenceKind = 'screenshot' | 'viewport' | 'har' | 'pdf' | 'baseline' | 'diff' | 'download' | 'context-shot'
 
@@ -23,6 +24,8 @@ export interface EvidenceEntry {
   hash: string
   ts: number
   ttlMs: number
+  /** 只有明确受管的临时文件才可自动清理；缺省的历史登记保留文件。 */
+  managed?: boolean
   /** 写入时的文件身份；字符串避免 inode / 纳秒时间在 JSON 中丢精度。旧登记仍可读取。 */
   identity?: EvidenceIdentity
 }
@@ -42,13 +45,19 @@ const DEFAULT_TTL: Record<EvidenceKind, number> = {
   baseline: 0,
   diff: 7 * DAY,
   download: 0,
-  'context-shot': 7 * DAY
+  // 右键「截图保存」写入用户图片目录，不是自动生成的临时文件。
+  'context-shot': 0
 }
-/** 临时证据总配额（超过后删除最旧的）；基线/下载不计入配额 */
+/** 临时证据总配额（超过后删除最旧的）；用户文件不计入配额 */
 const EPHEMERAL_QUOTA_BYTES = 500 * 1024 * 1024
 /** 刚生成的文件不清理，避免删掉仍在 MCP 结果里引用的图片 */
 const GRACE_MS = 60_000
-const MAX_ENTRIES = 5000
+/** 仅限制非受管文件的查询历史，不能因登记数上限而丢失临时文件的清理责任。 */
+const MAX_UNMANAGED_ENTRIES = 5000
+
+function isManagedTemporary(entry: EvidenceEntry): boolean {
+  return entry.managed === true && DEFAULT_TTL[entry.kind] > 0
+}
 
 function registryFile(): string {
   return process.env['AA_BROWSER_EVIDENCE_FILE'] || path.join(os.homedir(), '.aabrowser', 'evidence-registry.json')
@@ -75,7 +84,8 @@ function isEntry(value: unknown): value is EvidenceEntry {
       typeof value.bytes !== 'number' || !Number.isSafeInteger(value.bytes) || value.bytes < 0 ||
       typeof value.hash !== 'string' || !/^[a-f0-9]{64}$/i.test(value.hash) ||
       typeof value.ts !== 'number' || !Number.isFinite(value.ts) || value.ts < 0 ||
-      typeof value.ttlMs !== 'number' || !Number.isFinite(value.ttlMs) || value.ttlMs < 0) return false
+      typeof value.ttlMs !== 'number' || !Number.isFinite(value.ttlMs) || value.ttlMs < 0 ||
+      (value.managed !== undefined && typeof value.managed !== 'boolean')) return false
   const identity = value.identity
   return identity === undefined || (isObject(identity) && IDENTITY_FIELDS.every((key) =>
     typeof identity[key] === 'string' &&
@@ -129,10 +139,11 @@ export class EvidenceManager {
     }
   }
 
-  /** 文件写完后调用；返回登记条目。opts.hash 可复用已算好的 hash。 */
-  record(file: string, kind: EvidenceKind, opts?: { hash?: string; ttlMs?: number }): EvidenceEntry | null {
+  /** 文件写完后调用；PDF/HAR 默认视为用户文件，仅自动路径显式传 managed: true。 */
+  record(file: string, kind: EvidenceKind, opts?: { hash?: string; ttlMs?: number; managed?: boolean }): EvidenceEntry | null {
     this.load()
     const abs = path.resolve(file)
+    const managed = DEFAULT_TTL[kind] > 0 && (opts?.managed ?? (kind !== 'pdf' && kind !== 'har'))
     let entry: EvidenceEntry
     try {
       const stat = fs.lstatSync(abs, { bigint: true })
@@ -143,7 +154,8 @@ export class EvidenceManager {
         bytes: Number(stat.size),
         hash: opts?.hash ?? hashFile(abs),
         ts: Date.now(),
-        ttlMs: opts?.ttlMs ?? DEFAULT_TTL[kind],
+        ttlMs: managed ? opts?.ttlMs ?? DEFAULT_TTL[kind] : 0,
+        managed,
         identity: {
           dev: stat.dev.toString(),
           ino: stat.ino.toString(),
@@ -159,7 +171,14 @@ export class EvidenceManager {
     }
     this.entries = this.entries.filter((e) => e.file !== abs)
     this.entries.push(entry)
-    if (this.entries.length > MAX_ENTRIES) this.entries.splice(0, this.entries.length - MAX_ENTRIES)
+    let excess = this.entries.filter((e) => !isManagedTemporary(e)).length - MAX_UNMANAGED_ENTRIES
+    if (excess > 0) {
+      this.entries = this.entries.filter((e) => {
+        if (excess <= 0 || isManagedTemporary(e)) return true
+        excess--
+        return false
+      })
+    }
     this.save()
     return entry
   }
@@ -180,7 +199,9 @@ export class EvidenceManager {
 
   list(limit = 100): EvidenceEntry[] {
     this.load()
-    return this.entries.slice(-Math.min(500, Math.max(1, limit))).reverse()
+    return this.entries.slice(-Math.min(500, Math.max(1, limit))).reverse().map((entry) =>
+      isManagedTemporary(entry) ? entry : { ...entry, ttlMs: 0 }
+    )
   }
 
   /** 删除过期 / 超配额的临时证据；返回清理结果。 */
@@ -188,7 +209,7 @@ export class EvidenceManager {
     this.load()
     const removed: string[] = []
     let bytesFreed = 0
-    const isEphemeral = (e: EvidenceEntry): boolean => DEFAULT_TTL[e.kind] > 0
+    const isEphemeral = isManagedTemporary
     const retired = new Set<EvidenceEntry>()
     const attempted = new Set<EvidenceEntry>()
 
@@ -207,7 +228,7 @@ export class EvidenceManager {
     }
 
     const remove = (e: EvidenceEntry): void => {
-      if (retired.has(e) || attempted.has(e)) return
+      if (!isEphemeral(e) || retired.has(e) || attempted.has(e)) return
       attempted.add(e)
       try {
         if (!e.identity || !matchesFile(e, fs.lstatSync(e.file, { bigint: true })) ||

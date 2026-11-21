@@ -239,6 +239,22 @@ try {
       Object.defineProperty(process, 'resourcesPath', previousResources)
     }
   }
+  test('AppImage bridge diagnostics distinguish bundled, absent and stable files without writing', () => {
+    withAppImage(true, (resources) => {
+      const bundled = path.join(resources, 'app.asar.unpacked', 'out', 'bridge', 'mcp.cjs')
+      const stable = clients.mcpBridgePath()
+      assert.equal(clients.bridgeFileState(), 'missing')
+      fs.mkdirSync(path.dirname(bundled), { recursive: true })
+      fs.writeFileSync(bundled, 'fixture')
+      assert.equal(clients.bridgeFileState(), 'needs-setup')
+      assert.equal(fs.existsSync(stable), false)
+      fs.mkdirSync(path.dirname(stable), { recursive: true })
+      fs.writeFileSync(stable, 'stable fixture entry')
+      try { assert.equal(clients.bridgeFileState(), 'present') }
+      finally { fs.rmSync(stable) }
+      assert.ok(operations.every(({ method }) => method === 'statSync'), 'diagnostics must not edit or read client configuration')
+    })
+  })
   function downloadItem(url = 'https://example.test/下载/e\u0301?原文=Ω') {
     const item = new EventEmitter()
     item.getFilename = () => '下载 e\u0301.txt'

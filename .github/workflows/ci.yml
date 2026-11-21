@@ -120,7 +120,11 @@ jobs:
           fi
       - name: Launch Linux AppImage and connect its MCP bridge
         if: runner.os == 'Linux'
-        run: APPIMAGE_EXTRACT_AND_RUN=1 xvfb-run -a npm run smoke -- release/*.AppImage
+        run: |
+          set -euo pipefail
+          export APPIMAGE_EXTRACT_AND_RUN=1
+          xvfb-run -a npm run smoke -- release/*.AppImage
+          xvfb-run -a npm run test:bridge-autolaunch -- release/*.AppImage
       - name: Install Windows NSIS package, exercise MCP and uninstall
         if: runner.os == 'Windows'
         shell: pwsh

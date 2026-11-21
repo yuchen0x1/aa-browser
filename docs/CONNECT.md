@@ -96,12 +96,17 @@ node install.mjs --verify-only
 
 ## 排查
 
+在「设置 → AI 集成 → Agent 本地服务」查看本机状态。**已认证**仅表示客户端连到了本地服务；在客户端成功调用 `browser_tabs` 的 `list` 后才显示为**已验证**。AppImage 包内有桥但用户数据目录未生成稳定入口时，先完成客户端接入。桥文件存在不代表第三方客户端已写入或能运行该文件。
+
+展开「本机连接详情」可在本机核对端口和发现文件路径。需要共享排查信息时，可用「复制连接诊断」；复制结果只有版本、平台、服务状态、桥文件状态和连接数量，不会复制路径、端口、令牌、配置或浏览数据。
+
 | 现象 | 处理 |
 | --- | --- |
 | 提示缺少 Node.js 或版本过低 | 安装 Node.js 22.12+ 后重试；安装器需要 Node 运行，浏览器本体不依赖系统 Node |
 | 下载 GitHub 失败 | 检查网络/代理；官方下载地址必须是 `github.com` / `raw.githubusercontent.com` |
 | Windows SmartScreen 提示 | 当前安装包未配置 Authenticode 签名；确认来源为官方 Release 后选择「更多信息 → 仍要运行」 |
 | Linux 缺少 FUSE | 用 `APPIMAGE_EXTRACT_AND_RUN=1` 启动 AppImage；MCP 桥仍会写到用户数据目录 |
+| Linux 使用 `--dir` 自定义目录后无法冷启动 | 默认自动发现只包含 `~/Applications/AaBrowser.AppImage`。自定义目录不会自动写入桥的启动配置；在 MCP 客户端为桥设置 `AA_BROWSER_APP_PATH`，值为受支持 Aa Browser AppImage 的绝对文件路径，或先手动启动浏览器 |
 | 客户端看不到工具 | 重启/重载客户端；确认配置写入路径和备份；运行 `node install.mjs --verify-only` 验证浏览器侧是否正常 |
 | 浏览器未运行 | MCP 桥会在第一次 `tools/call` 时从受信安装路径自动拉起 Aa Browser，并等待最多 30 秒；找不到路径时设置 `AA_BROWSER_APP_PATH`，不需要自动启动时设置 `AA_BROWSER_AUTO_LAUNCH=0`；`--connect-only` 验证失败会明确报错 |
 | 工具名带前缀 | 例如 `mcp__aa-browser__browser_tabs`，以客户端实际展示为准 |

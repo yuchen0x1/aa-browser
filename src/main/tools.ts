@@ -637,7 +637,10 @@ export function buildTools(
     name: 'browser_cookies',
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
-      const action = String(args['action'])
+      const action = args['action']
+      if (action !== 'get' && action !== 'set' && action !== 'clear') {
+        throw new ActionError('Cookie 操作必须为 get、set 或 clear。')
+      }
       if (action === 'set' || action === 'clear') {
         await opGate(
           {
@@ -650,7 +653,7 @@ export function buildTools(
         )
       }
       const r = await doCookies(tab, {
-        action: action as 'get' | 'set' | 'clear',
+        action,
         url: args['url'] as string | undefined,
         name: args['name'] as string | undefined,
         value: args['value'] as string | undefined,
@@ -889,7 +892,7 @@ export function buildTools(
       assertToolRunning(signal)
       fs.mkdirSync(path.dirname(file), { recursive: true })
       fs.writeFileSync(file, data, 'utf-8')
-      getEvidenceManager().record(file, 'har')
+      getEvidenceManager().record(file, 'har', { managed: !args['path'] })
       return { content: [text(`HAR 已导出: ${file}\n共 ${fs.statSync(file).size} 字节`)] }
     }
   })

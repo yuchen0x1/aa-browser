@@ -30,6 +30,7 @@ export type LocaleKey =
   | 'settingsDescGeneral' | 'settingsDescBrowsing' | 'settingsDescData' | 'settingsDescAi'
   | 'settingsDescUpdate' | 'updateChannel' | 'engineHint'
   | 'theme' | 'themeLight' | 'themeDark' | 'themeSystem'
+  | 'connectionDetails' | 'copyConnectionDiagnostics' | 'connectionDiagnosticsHint'
 
 const catalogs: Record<Locale, Record<LocaleKey, string>> = {
   'zh-CN': {
@@ -61,7 +62,9 @@ const catalogs: Record<Locale, Record<LocaleKey, string>> = {
     settingsDescData: '下载落盘位置与可访问站点范围', settingsDescAi: '连接本机 AI 客户端与 Agent 本地服务',
     settingsDescUpdate: '更新通道、下载与安装', updateChannel: '更新通道',
     engineHint: '浏览器与 Agent 共用；也可直接填写自定义搜索基址。',
-    theme: '主题', themeLight: '浅色（默认）', themeDark: '深色', themeSystem: '跟随系统'
+    theme: '主题', themeLight: '浅色（默认）', themeDark: '深色', themeSystem: '跟随系统',
+    connectionDetails: '本机连接详情', copyConnectionDiagnostics: '复制连接诊断',
+    connectionDiagnosticsHint: '只复制版本、平台、服务状态、桥文件状态和连接数量；不包含路径、令牌或浏览数据。'
   },
   'en-US': {
     appTitle: 'aa-browser', tabs: 'Browser tabs', newTab: 'New tab (Ctrl+T)', back: 'Back (Alt+←)',
@@ -92,7 +95,9 @@ const catalogs: Record<Locale, Record<LocaleKey, string>> = {
     settingsDescData: 'Where downloads go and which sites are reachable', settingsDescAi: 'Connect local AI clients and the Agent service',
     settingsDescUpdate: 'Update channel, download and install', updateChannel: 'Update channel',
     engineHint: 'Shared by you and the Agent. You can also type a custom search base directly.',
-    theme: 'Theme', themeLight: 'Light (default)', themeDark: 'Dark', themeSystem: 'System'
+    theme: 'Theme', themeLight: 'Light (default)', themeDark: 'Dark', themeSystem: 'System',
+    connectionDetails: 'Local connection details', copyConnectionDiagnostics: 'Copy connection diagnostics',
+    connectionDiagnosticsHint: 'Copies only version, platform, service status, bridge file status and connection counts—not paths, tokens or browsing data.'
   }
 }
 

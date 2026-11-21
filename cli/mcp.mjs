@@ -126,7 +126,7 @@ function browserLaunchSpec() {
     const allowed = process.platform === 'win32'
       ? /^(Aa Browser|aa-browser)\.exe$/i
       : process.platform === 'linux'
-        ? /^(?:AppRun|(?:Aa Browser|aa-browser)(?:\.AppImage|-[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9._-]+)?\.AppImage)?)$/i
+        ? /^(?:AppRun|AaBrowser\.AppImage|(?:Aa Browser|aa-browser)(?:\.AppImage|-[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9._-]+)?\.AppImage)?)$/i
         : /^(Aa Browser|aa-browser)$/i
     if (!allowed.test(path.basename(file)) || !isRegularFile(file)) {
       throw new Error('AA_BROWSER_APP_PATH 不是受支持的 Aa Browser 可执行文件。')
@@ -162,6 +162,7 @@ function browserLaunchSpec() {
     addPathCandidate(candidates, '/usr/local/bin/aa-browser')
     addPathCandidate(candidates, '/opt/Aa Browser/aa-browser')
     addPathCandidate(candidates, path.join(os.homedir(), '.local', 'bin', 'aa-browser'))
+    if (process.platform === 'linux') addPathCandidate(candidates, path.join(os.homedir(), 'Applications', 'AaBrowser.AppImage'))
   }
 
   // 源码目录：只在当前仓库和本地 Electron 可验证时启动构建产物，不执行 shell 或任意命令。

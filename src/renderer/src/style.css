@@ -227,7 +227,8 @@ body {
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
-textarea:focus-visible {
+textarea:focus-visible,
+.connection-details > summary:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
   z-index: 1;
@@ -1465,6 +1466,35 @@ label.settings-label {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
+
+.connection-status {
+  align-self: start;
+  max-width: 100%;
+  padding: 5px 9px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.45;
+  border: 1px solid var(--border-item);
+  border-radius: var(--radius-item);
+  background: var(--surface-code);
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}
+.connection-status[data-state='verified'] { color: var(--accent-ink); }
+.connection-status[data-state='missing'],
+.connection-status[data-state='unavailable'] { color: var(--danger-ink); }
+.connection-details > summary {
+  width: fit-content;
+  max-width: 100%;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.connection-details[open] > summary { margin-bottom: 6px; }
+#set-agent-guidance, #connection-diagnostics-hint { margin: 0; }
+#set-agent-guidance:empty, #connection-diagnostics-result:empty { margin: 0; }
+#connection-diagnostics-result[data-state='error'] { color: var(--danger-ink); }
+#connection-diagnostics-result[data-state='success'] { color: var(--accent-ink); }
 
 .settings-info {
   font-size: 11.5px;

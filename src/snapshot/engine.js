@@ -684,7 +684,7 @@ export function __aaSnapshot() {
   }
 
   var mode = 'full'
-  var text = fullText()
+  var text
   var newRefs = []
   var removedRefs = []
   var totalLines = lines.length
@@ -763,6 +763,8 @@ export function __aaSnapshot() {
         }
       }
     }
+  } else {
+    text = fullText()
   }
 
   /* ── 持久化状态并返回 ── */
@@ -779,13 +781,12 @@ export function __aaSnapshot() {
     }
   } catch (e) {}
 
-  return {
+  var result = {
     v: 2,
     mode: mode,
     url: url,
     title: title,
     tree: text,
-    elements: elements,
     newRefs: newRefs,
     removedRefs: removedRefs,
     truncated: truncated,
@@ -795,4 +796,8 @@ export function __aaSnapshot() {
     hasMore: hasMore,
     capturedAt: Date.now()
   }
+  // Text callers only need the tree and its page metadata. Keep the full
+  // elements array in page state for ref reuse without cloning it over IPC.
+  if (opts.includeElements !== false) result.elements = elements
+  return result
 }

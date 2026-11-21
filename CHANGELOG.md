@@ -2,6 +2,14 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
+## v0.7.0
+
+- 新增可共享的 AI 连接诊断，区分未连接、已认证及首调用已验证；本机详情保留端口和发现路径，复制文本不包含它们或令牌。
+- MCP 快照的内部传输不再重复返回整份结构化元素数组，保留文本、分页和全树引用。状态更新和仅切换活动标签时保留标签 DOM 节点。
+- 手动指定路径的 PDF/HAR、右键截图与未标记的历史证据不进入自动清理；自动产物继续受 TTL 与配额管理。Cookie 工具拒绝缺失或无效操作，写入与清除仍遵循原审批设置。
+- Linux MCP 桥识别安装器的默认 AppImage 路径；SBOM 使用锁定的 Electron 精确版本。
+- 保持 42 个 MCP 工具，不新增运行依赖或要求用户迁移配置。
+
 ## v0.6.12 — 2026-11-21
 
 - 完善批量填表、点击/输入、选择、iframe 和 HAR 的取消检查，防止异步等待结束后继续分派下一步副作用；不回滚已完成动作。

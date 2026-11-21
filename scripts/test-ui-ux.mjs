@@ -90,20 +90,37 @@ if (!process.versions.electron) {
       await pause(100)
     }
     const capture = async (name, wc = chrome) => {
-      // State-only HUD fixtures bypass main-process activity; reproduce its full-window view bounds for evidence.
-      const view = wc === chrome ? win.contentView.children.find(view=>view.webContents === chrome) : null
-      const bounds = view?.getBounds()
-      let clip = null
-      if (view && name.endsWith('-agent-progress') && await ui('!document.querySelector("#agent-activity-overlay").hidden')) {
-        const content = win.getContentBounds()
-        view.setBounds({x:0,y:0,width:content.width,height:content.height})
-        // Crop to the HUD itself: the expanded view leaves a transparent gap over the page view,
-        // and capturing that gap returns compositor garbage unrelated to the product UI.
-        clip = await ui(`(() => {const r=document.querySelector('#agent-activity-card').getBoundingClientRect();return {x:Math.floor(r.x),y:Math.floor(r.y),width:Math.ceil(r.width),height:Math.ceil(r.height)};})()`)
+      const view = win.contentView.children.find(view => view.webContents === wc)
+      assert.ok(view, `${name}: capture target must be attached to the native window`)
+      let originalBounds
+      try {
+        // State-only HUD fixtures bypass main-process activity; reproduce its full-window view bounds for evidence.
+        let clip
+        if (wc === chrome && name.endsWith('-agent-progress') && await ui('!document.querySelector("#agent-activity-overlay").hidden')) {
+          const content = win.getContentBounds()
+          originalBounds = view.getBounds()
+          view.setBounds({x:0,y:0,width:content.width,height:content.height})
+          // Crop to the HUD itself: capturing transparent gaps can return unrelated compositor output.
+          clip = await ui(`(() => {const r=document.querySelector('#agent-activity-card').getBoundingClientRect();return {x:Math.floor(r.x),y:Math.floor(r.y),width:Math.ceil(r.width),height:Math.ceil(r.height)};})()`)
+        }
+        await pause(400)
+        const image = await wc.capturePage(clip)
+        assert.ok(!image.isEmpty(), `${name}: compositor returned an empty screenshot`)
+        fs.writeFileSync(path.join(runDir, name + '.png'), image.toPNG())
+      } catch (error) {
+        const visibility = !wc.isDestroyed()
+          ? await wc.executeJavaScript('document.visibilityState').catch(() => 'unavailable')
+          : 'destroyed'
+        const details = {
+          attached: win.contentView.children.includes(view), bounds: view.getBounds(),
+          shellBounds: win.contentView.children.find(child => child.webContents === chrome)?.getBounds(),
+          viewVisible: view.getVisible(), windowVisible: win.isVisible(), windowFocused: win.isFocused(),
+          targetFocused: webContents.getFocusedWebContents() === wc, visibility
+        }
+        throw new Error(`Capture ${name}: ${String(error)} ${JSON.stringify(details)}`, { cause: error })
+      } finally {
+        if (originalBounds) view.setBounds(originalBounds)
       }
-      await pause(400)
-      fs.writeFileSync(path.join(runDir, name + '.png'), (await wc.capturePage(clip ?? undefined)).toPNG())
-      if (view && bounds) view.setBounds(bounds)
     }
     const contrastExpr = `(() => {
       const e = document.querySelector('.dl-item.done .dl-state');
@@ -130,13 +147,16 @@ if (!process.versions.electron) {
       win.focus()
       chrome.focus()
       chrome.sendInputEvent({type:'mouseMove',x:5,y:90})
-      chrome.sendInputEvent({type:'mouseMove',...point})
-      await until(() => ui('document.querySelector("#btn-save-settings").matches(":hover")'), 'real primary hover')
       await pause(250)
-      // Native DPI transitions may deliver the real cursor's old position after the first event.
-      chrome.sendInputEvent({type:'mouseMove',...point})
-      const hover = await ui(`(() => { const e=document.querySelector('#btn-save-settings'); const s=getComputedStyle(e); const rgb=value=>(value.match(/[\\d.]+/g)||[]).map(Number).slice(0,3); const lum=color=>color.map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4}).reduce((sum,v,i)=>sum+v*[.2126,.7152,.0722][i],0); const brightness=Number(s.filter.match(/brightness\\(([\\d.]+)\\)/)?.[1]||1); const light=value=>lum(rgb(value).map(v=>Math.min(255,v*brightness))); const fg=light(s.color); const ratios=(s.backgroundImage.match(/rgba?\\([^)]+\\)/g)||[]).map(value=>{const bg=light(value);return (Math.max(fg,bg)+.05)/(Math.min(fg,bg)+.05)}); return {hovered:e.matches(':hover'),image:s.backgroundImage,color:s.color,background:s.backgroundColor,minimumContrast:ratios.length?Math.min(...ratios):0}; })()`)
+      let hover
+      // Accept the first hovered style sample, not an earlier hover check followed by a separate measurement.
+      await until(async () => {
+        chrome.sendInputEvent({type:'mouseMove',...point})
+        hover = await ui(`(() => { const e=document.querySelector('#btn-save-settings'); const s=getComputedStyle(e); const rgb=value=>(value.match(/[\\d.]+/g)||[]).map(Number).slice(0,3); const lum=color=>color.map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4}).reduce((sum,v,i)=>sum+v*[.2126,.7152,.0722][i],0); const brightness=Number(s.filter.match(/brightness\\(([\\d.]+)\\)/)?.[1]||1); const light=value=>lum(rgb(value).map(v=>Math.min(255,v*brightness))); const fg=light(s.color); const ratios=(s.backgroundImage.match(/rgba?\\([^)]+\\)/g)||[]).map(value=>{const bg=light(value);return (Math.max(fg,bg)+.05)/(Math.min(fg,bg)+.05)}); return {hovered:e.matches(':hover'),image:s.backgroundImage,color:s.color,background:s.backgroundColor,minimumContrast:ratios.length?Math.min(...ratios):0}; })()`)
+        return hover.hovered
+      }, 'real primary hover')
       check(`${theme} primary button preserves its accent surface and 4.5:1 text on hover`, hover.hovered && hover.image.includes('linear-gradient') && hover.minimumContrast >= 4.5, hover)
+      // Later captures are supplementary; the sampled computed style above is the hover evidence.
       await capture(`${theme}-primary-hover`)
       chrome.sendInputEvent({type:'mouseMove',x:5,y:90})
       await click('#btn-close-settings')
@@ -191,7 +211,15 @@ if (!process.versions.electron) {
     chrome.focus()
     await key('Tab')
     const tabFocus = await ui('document.activeElement.id')
-    check('settings Tab skips disabled actions', tabFocus === 'set-auto-update', { tabFocus })
+    check('settings Tab skips disabled setup and reaches the connection details', tabFocus === 'set-agent-details-label', { tabFocus })
+    // A failed focus assertion must not activate the copy button or touch the system clipboard.
+    if (tabFocus === 'set-agent-details-label') await key('Enter')
+    check('local connection details can be opened with the keyboard', await ui('document.querySelector(".connection-details").open'))
+    await key('Tab')
+    const diagnosticsFocus = await ui('document.activeElement.id')
+    check('copy diagnostics is next in the keyboard order', diagnosticsFocus === 'btn-copy-connection-diagnostics', { diagnosticsFocus })
+    await key('Tab')
+    check('one Tab continues from connection diagnostics to update settings', await ui('document.activeElement.id === "set-auto-update"'))
     await ui(`document.querySelector('#btn-client-setup').disabled=${literal(setupDisabled)}`)
     for (const id of ['set-engine', 'set-engine-url', 'set-download-dir', 'set-allowed-sites']) {
       const label = await ui(`(() => {
@@ -207,15 +235,32 @@ if (!process.versions.electron) {
     await click('#btn-close-settings')
 
     const initial = await ui('window.aa.getState()')
-    await ui('window.aa.tabNew(); window.aa.tabNew()')
+    const initialPage = win.contentView.children.find(view => view.webContents !== chrome)?.webContents
+    assert.ok(initialPage, 'initial page must be attached')
+    const tabContentsIds = new Map([[initial.activeId, initialPage.id]])
+    const assertTabView = (id) => {
+      assert.ok(tabContentsIds.has(id), `missing WebContents mapping for tab ${id}`)
+      assert.deepEqual(win.contentView.children.map(view => view.webContents?.id), [tabContentsIds.get(id), chrome.id], `tab ${id} must be the only page view, below the shell`)
+    }
+    assertTabView(initial.activeId)
+    // All fixture pages use the same URL. Pair each newly created tab with its new WebContents independently of attachment.
+    for (let i = 0; i < 2; i++) {
+      const known = new Set(webContents.getAllWebContents().map(wc => wc.id))
+      assert.equal(await ui('window.aa.tabNew()'), true)
+      const [newTab, ...otherTabs] = (await ui('window.aa.getState()')).tabs.filter(tab => !tabContentsIds.has(tab.id))
+      const [newContents, ...otherContents] = webContents.getAllWebContents().filter(wc => !known.has(wc.id))
+      assert.ok(newTab && newContents && !otherTabs.length && !otherContents.length, 'tabNew must create exactly one tab and WebContents')
+      tabContentsIds.set(newTab.id, newContents.id)
+    }
     await until(() => ui(`window.aa.getState().then(s=>s.tabs.length === ${initial.tabs.length + 2} && s.tabs.every(t=>!t.loading))`), 'three tabs')
     const tabs = (await ui('window.aa.getState()')).tabs
     const inactiveClose = await ui('Array.from(document.querySelectorAll(".tab:not(.active) .close")).map(e=>e.tabIndex)')
     check('inactive tab close buttons stay outside sequential Tab navigation', inactiveClose.every(value=>value === -1), inactiveClose)
     await ui(`window.aa.tabSelect(${literal(tabs[0].id)}, false)`)
     await until(async () => (await ui(`window.aa.getState().then(s=>s.activeId === ${literal(tabs[0].id)})`)) && webContents.getFocusedWebContents() === chrome, 'initial keyboard tab selection')
+    assertTabView(tabs[0].id)
     chrome.focus()
-    await ui(`document.querySelector('[data-tab-id="${tabs[0].id}"]').focus()`)
+    await ui(`document.querySelector('[data-tab-id="${tabs[0].id}"]').focus(); window.__nextTabProbe = document.querySelector('[data-tab-id="${tabs[1].id}"]')`)
     await key('Right')
     try {
       await until(async () => (await ui(`window.aa.getState().then(s=>s.activeId === ${literal(tabs[1].id)})`)) && webContents.getFocusedWebContents() === chrome, 'arrow-selected tab and native shell focus')
@@ -230,19 +275,25 @@ if (!process.versions.electron) {
         focusedURL: webContents.getFocusedWebContents()?.getURL() ?? null,
         focusedIsChrome: webContents.getFocusedWebContents() === chrome,
         allWebContents: webContents.getAllWebContents().map((wc) => wc.getURL()),
+        dom: await ui('({hasFocus:document.hasFocus(),focusKey:document.activeElement?.dataset.focusKey,tabRetained:window.__nextTabProbe?.isConnected})'),
       }
       throw new Error(`${error.message} ${JSON.stringify(diagnostics)}`)
     }
+    assertTabView(tabs[1].id)
+    check('changing the active tab does not replace its focused DOM node', await ui('document.activeElement === window.__nextTabProbe && window.__nextTabProbe.getAttribute("aria-selected") === "true"'))
+    await ui('delete window.__nextTabProbe')
     const arrowFocus = webContents.getFocusedWebContents() === chrome
     const focusedAfterFirstArrow = webContents.getFocusedWebContents()
     check('tab arrow selection retains shell keyboard focus', arrowFocus, { focusedURL: focusedAfterFirstArrow?.getURL(), activeId: (await ui('window.aa.getState()')).activeId, expectedId: tabs[1].id })
     await key('Right')
     await until(async () => (await ui(`window.aa.getState().then(s=>s.activeId === ${literal(tabs[2].id)})`)) && webContents.getFocusedWebContents() === chrome, 'second keyboard tab and native shell focus')
+    assertTabView(tabs[2].id)
     const secondArrow = (await ui('window.aa.getState()')).activeId
     check('two consecutive arrows select two successive tabs', secondArrow === tabs[2].id, { secondArrow, focusedURL: webContents.getFocusedWebContents()?.getURL(), expectedId: tabs[2].id })
     for (const [keyCode,index,label] of [['Left',1,'Left selects the previous tab'],['Home',0,'Home selects the first tab'],['Left',2,'Left wraps from the first to last tab'],['Right',0,'Right wraps from the last to first tab'],['End',2,'End selects the last tab']]) {
       await key(keyCode)
       await until(async () => (await ui(`window.aa.getState().then(s=>s.activeId === ${literal(tabs[index].id)})`)) && webContents.getFocusedWebContents() === chrome, label)
+      assertTabView(tabs[index].id)
       const selected = (await ui('window.aa.getState()')).activeId
       check(label, selected === tabs[index].id && webContents.getFocusedWebContents() === chrome, {selected,expectedId:tabs[index].id})
     }
@@ -258,13 +309,23 @@ if (!process.versions.electron) {
     const suggestionWidth = await ui('({scroll:document.querySelector("#suggest-panel").scrollWidth,client:document.querySelector("#suggest-panel").clientWidth})')
     check('long history titles truncate inside the suggestion panel', suggestionWidth.scroll <= suggestionWidth.client + 1, suggestionWidth)
     for (let i=0; i<8; i++) await key('Down')
-    const suggestion = await ui(`(() => { const p=document.querySelector('#suggest-panel').getBoundingClientRect(); const r=document.querySelector('.suggest-item.selected').getBoundingClientRect(); return {visible:r.top>=p.top&&r.bottom<=p.bottom,top:r.top,bottom:r.bottom,panelBottom:p.bottom}; })()`)
+    const suggestion = await ui(`(() => {
+      const input = document.querySelector('#omnibox');
+      const selected = document.querySelector('.suggest-item.selected[aria-selected="true"]');
+      const p = document.querySelector('#suggest-panel').getBoundingClientRect();
+      const r = selected?.getBoundingClientRect();
+      return {focused:document.hasFocus() && document.activeElement === input,
+        selected:!!selected && input.getAttribute('aria-activedescendant') === selected.id,
+        visible:!!r && r.top>=p.top && r.bottom<=p.bottom,top:r?.top,bottom:r?.bottom,panelBottom:p.bottom};
+    })()`)
     check('keyboard-selected history suggestion stays visible', suggestion.visible, suggestion)
-    await capture('history-selected-last')
-    await ui('document.querySelector("#omnibox").value="https://ui-suggestion.test/0"; document.querySelector("#omnibox").dispatchEvent(new Event("input"))')
-    await until(() => ui('document.querySelectorAll(".suggest-item").length === 1'), 'narrowed history results')
+    const nativeFocus = webContents.getFocusedWebContents() === chrome
+    check('omnibox keeps native and DOM focus and a selected option before narrowing', nativeFocus && suggestion.focused && suggestion.selected, {nativeFocus, ...suggestion})
+    await ui('(() => {const input=document.querySelector("#omnibox");input.value="https://ui-suggestion.test/0";input.dispatchEvent(new Event("input"));})()')
+    await until(() => ui('document.querySelectorAll(".suggest-item").length === 1 && !document.querySelector("#suggest-panel").hidden'), 'narrowed history results')
     const activeDescendant = await ui(`(() => {const e=document.querySelector('#omnibox');const id=e.getAttribute('aria-activedescendant');return {id,resolves:!id||!!document.getElementById(id)};})()`)
     check('rebuilt suggestions never reference a removed active option', activeDescendant.resolves, activeDescendant)
+    await capture('history-narrowed-results')
     await ui('window.aa.findOpen()')
     await until(() => ui('!document.querySelector("#find-bar").hidden'), 'finder before suggestion Escape')
     chrome.focus()

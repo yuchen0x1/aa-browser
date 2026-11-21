@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-globalThis.__AA_BRIDGE_VERSION__ = "0.6.12";
+globalThis.__AA_BRIDGE_VERSION__ = "0.7.0";
 // \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -5333,7 +5333,7 @@ function browserLaunchSpec() {
 	if (explicit) {
 		if (!node_path.default.isAbsolute(explicit)) throw new Error("AA_BROWSER_APP_PATH 必须是绝对路径。");
 		const file = node_path.default.resolve(explicit);
-		if (!(node_process.default.platform === "win32" ? /^(Aa Browser|aa-browser)\.exe$/i : node_process.default.platform === "linux" ? /^(?:AppRun|(?:Aa Browser|aa-browser)(?:\.AppImage|-[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9._-]+)?\.AppImage)?)$/i : /^(Aa Browser|aa-browser)$/i).test(node_path.default.basename(file)) || !isRegularFile(file)) throw new Error("AA_BROWSER_APP_PATH 不是受支持的 Aa Browser 可执行文件。");
+		if (!(node_process.default.platform === "win32" ? /^(Aa Browser|aa-browser)\.exe$/i : node_process.default.platform === "linux" ? /^(?:AppRun|AaBrowser\.AppImage|(?:Aa Browser|aa-browser)(?:\.AppImage|-[0-9]+\.[0-9]+\.[0-9]+(?:-[A-Za-z0-9._-]+)?\.AppImage)?)$/i : /^(Aa Browser|aa-browser)$/i).test(node_path.default.basename(file)) || !isRegularFile(file)) throw new Error("AA_BROWSER_APP_PATH 不是受支持的 Aa Browser 可执行文件。");
 		return {
 			command: file,
 			args: [],
@@ -5367,6 +5367,7 @@ function browserLaunchSpec() {
 		addPathCandidate(candidates, "/usr/local/bin/aa-browser");
 		addPathCandidate(candidates, "/opt/Aa Browser/aa-browser");
 		addPathCandidate(candidates, node_path.default.join(node_os.default.homedir(), ".local", "bin", "aa-browser"));
+		if (node_process.default.platform === "linux") addPathCandidate(candidates, node_path.default.join(node_os.default.homedir(), "Applications", "AaBrowser.AppImage"));
 	}
 	let sourceSpec = null;
 	let sourceRoot = bridgeDir;

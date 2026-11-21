@@ -215,32 +215,39 @@ console.log('  PASS: deletion requires both recorded identity and current conten
 }
 console.log('  PASS: non-file outputs are preserved and their stale records are removed')
 
-// 7) v1 旧条目继续可读，但缺少写入时身份信息的临时文件只能忘记，不能现场补身份后删除。
+// 7) 历史条目不论有无身份信息都不能推断所有权；保留文件及查询记录，不现场认领。
 {
   const f = fixture('legacy', 1)
   const file = f.write('legacy.png')
+  const pdf = f.write('aa-page-123.pdf')
+  const har = f.write('aa-123.har')
   const baseline = f.write('baseline.png')
   const download = f.write('download.zip')
   f.manager.record(file, 'screenshot', { ttlMs: 1000 })
+  f.manager.record(pdf, 'pdf', { managed: true, ttlMs: 1000 })
+  f.manager.record(har, 'har', { managed: true, ttlMs: 1000 })
   f.manager.record(baseline, 'baseline', { ttlMs: 1000 })
   f.manager.record(download, 'download', { ttlMs: 1000 })
   ageEntries(f)
-  writeEntries(f, readEntries(f).map(({ identity, ...entry }) => entry))
+  const legacy = readEntries(f).map(({ managed, ...entry }, i) => {
+    if (i % 2 === 0) delete entry.identity
+    return entry
+  })
+  writeEntries(f, legacy)
   const manager = new EvidenceManager()
-  assert.equal(manager.list().length, 3, 'legacy entries remain readable')
-  assert.deepEqual(manager.sweep(), { removed: [], kept: 2, bytesFreed: 0 })
-  assert.equal(fs.readFileSync(file, 'utf8'), '12345678')
-  assert.deepEqual(readEntries(f).map((e) => e.file), [baseline, download])
-  assert.ok(readEntries(f).every((e) => e.identity === undefined), 'sweep must not adopt current file identity')
-  // 主流程显式重新登记才会恢复清理资格，不能要求调用者新增必填参数。
+  assert.equal(manager.list().length, 5, 'legacy entries remain readable')
+  assert.ok(manager.list().every((e) => e.ttlMs === 0), 'report retained legacy records without an active TTL')
+  assert.deepEqual(manager.sweep(Date.now() + 31 * 24 * 3600 * 1000), { removed: [], kept: 5, bytesFreed: 0 })
+  for (const entry of legacy) assert.equal(fs.readFileSync(entry.file, 'utf8'), '12345678')
+  assert.deepEqual(readEntries(f), legacy, 'do not silently infer ownership, replace metadata, or drop legacy lookup records')
+  // 只有主流程重新明确登记的临时文件才恢复清理资格；其余历史记录继续保留。
   const rerecorded = new EvidenceManager()
   assert.ok(rerecorded.record(file, 'screenshot', { ttlMs: 1000 }))
   ageEntries(f)
-  assert.deepEqual(new EvidenceManager().sweep(), { removed: [file], kept: 2, bytesFreed: 8 })
-  assert.equal(fs.existsSync(baseline), true)
-  assert.equal(fs.existsSync(download), true)
+  assert.deepEqual(new EvidenceManager().sweep(), { removed: [file], kept: 4, bytesFreed: 8 })
+  for (const retained of [pdf, har, baseline, download]) assert.equal(fs.existsSync(retained), true)
 }
-console.log('  PASS: legacy records are readable without trust-on-first-use deletion; durable kinds stay protected')
+console.log('  PASS: ambiguous legacy ownership is retained with and without identity, including generated-looking PDF/HAR names')
 
 // 8) 注册表不可信：无效字段不能成为删除任意文件的依据，且仅删坏登记也必须落盘。
 {
@@ -260,6 +267,7 @@ console.log('  PASS: legacy records are readable without trust-on-first-use dele
     ['hash', ''], ['hash', 'not-a-sha256'], ['hash', null],
     ['ts', -1], ['ts', 'yesterday'], ['ts', null],
     ['ttlMs', -1], ['ttlMs', '1000'], ['ttlMs', null],
+    ['managed', 'true'], ['managed', 'false'], ['managed', 1], ['managed', null],
     ['identity', null], ['identity', {}], ['identity', { ...entry.identity, ino: 'invalid' }]
   ]) invalid.push({ ...entry, [key]: value })
   for (const key of ['kind', 'bytes', 'hash', 'ts', 'ttlMs']) {
@@ -371,35 +379,93 @@ console.log('  PASS: retryable filesystem errors retain records and only success
 }
 console.log('  PASS: missing paths retire ownership persistently without claiming deleted bytes')
 
-// 12) 不改变显式输出路径的既有 TTL，也不让 baseline/download 参与 TTL 或配额淘汰。
+// 12) 用户导出仍登记，但不参与 TTL/配额；受管 PDF/HAR 的 TTL、截图宽限期等不变。
 {
-  const f = fixture('ttl-contracts')
+  const f = fixture('ownership-contracts')
   const pdf = f.write('user-chosen.pdf')
-  const har = f.write('user-chosen.har')
+  const har = f.write('aa-123.har') // 名称像默认输出也不能推断为受管文件。
+  const managedPdf = f.write('automatic.pdf')
+  const managedHar = f.write('automatic.har')
   const baseline = f.write('baseline.png')
   const download = f.write('download.zip')
   const screenshot = f.write('recent.png')
   const noTtl = f.write('no-ttl.png')
-  const pdfEntry = f.manager.record(pdf, 'pdf')
-  const harEntry = f.manager.record(har, 'har')
-  assert.equal(pdfEntry.ttlMs, 30 * 24 * 3600 * 1000)
-  assert.equal(harEntry.ttlMs, 7 * 24 * 3600 * 1000)
-  f.manager.record(baseline, 'baseline', { ttlMs: 1 })
-  f.manager.record(download, 'download', { ttlMs: 1 })
+  const pdfEntry = f.manager.record(pdf, 'pdf', { managed: false, ttlMs: 1 })
+  const harEntry = f.manager.record(har, 'har') // 未明确传入 managed 的 PDF/HAR 安全缺省为保留。
+  for (const entry of [pdfEntry, harEntry]) {
+    assert.equal(entry.managed, false)
+    assert.equal(entry.ttlMs, 0)
+  }
+  assert.equal(f.manager.record(managedPdf, 'pdf', { managed: true }).ttlMs, 30 * 24 * 3600 * 1000)
+  assert.equal(f.manager.record(managedHar, 'har', { managed: true }).ttlMs, 7 * 24 * 3600 * 1000)
+  f.manager.record(baseline, 'baseline', { managed: true, ttlMs: 1 })
+  f.manager.record(download, 'download', { managed: true, ttlMs: 1 })
   f.manager.record(screenshot, 'screenshot', { ttlMs: 1 })
   f.manager.record(noTtl, 'screenshot', { ttlMs: 0 })
   const entries = readEntries(f)
   for (const e of entries) if (e.file !== screenshot) e.ts -= 31 * 24 * 3600 * 1000
   writeEntries(f, entries)
   const now = Date.now()
-  assert.deepEqual(new EvidenceManager().sweep(now + 1000), { removed: [pdf, har], kept: 4, bytesFreed: 16 })
+  assert.deepEqual(new EvidenceManager().sweep(now + 1000), { removed: [managedPdf, managedHar], kept: 6, bytesFreed: 16 })
   process.env['AA_BROWSER_EVIDENCE_QUOTA_BYTES'] = '1'
-  assert.deepEqual(new EvidenceManager().sweep(now + 1000), { removed: [noTtl], kept: 3, bytesFreed: 8 }, 'ttlMs=0 still participates in quota; grace applies to recent evidence')
-  assert.equal(fs.existsSync(baseline), true)
-  assert.equal(fs.existsSync(download), true)
-  assert.equal(fs.existsSync(screenshot), true)
+  assert.deepEqual(new EvidenceManager().sweep(now + 1000), { removed: [noTtl], kept: 5, bytesFreed: 8 }, 'managed ttlMs=0 still participates in quota; grace applies to recent evidence')
+  for (const retained of [pdf, har, baseline, download, screenshot]) assert.equal(fs.existsSync(retained), true)
+  const manager = new EvidenceManager()
+  assert.ok(manager.list().some((e) => e.file === pdf && e.kind === 'pdf' && e.ttlMs === 0))
+  assert.equal(manager.hash(har), harEntry.hash, 'protected exports remain hashable')
+  assert.equal(manager.forget(pdf), true, 'protected exports remain individually forgettable')
+  assert.equal(fs.readFileSync(pdf, 'utf8'), '12345678', 'forget only removes metadata')
 }
-console.log('  PASS: explicit PDF/HAR TTL, ttlMs=0, grace, and baseline/download contracts are preserved')
+console.log('  PASS: explicit exports stay registered and protected; automatic exports, grace, and durable kinds retain their contracts')
+
+{
+  const f = fixture('export-quota', 8)
+  const pdf = f.write('explicit.pdf')
+  const har = f.write('explicit.har')
+  const picture = f.write('user-saved.png')
+  const managed = f.write('managed.har')
+  f.manager.record(pdf, 'pdf', { managed: false })
+  f.manager.record(har, 'har', { managed: false })
+  assert.equal(f.manager.record(picture, 'context-shot').ttlMs, 0, 'right-click saves have no expiry')
+  f.manager.record(managed, 'har', { managed: true, ttlMs: 0 })
+  ageEntries(f)
+  assert.deepEqual(new EvidenceManager().sweep(Date.now() + 31 * 86400000), { removed: [], kept: 4, bytesFreed: 0 }, 'user bytes must not expire or displace otherwise-within-quota managed evidence')
+  process.env['AA_BROWSER_EVIDENCE_QUOTA_BYTES'] = '1'
+  assert.deepEqual(new EvidenceManager().sweep(), { removed: [managed], kept: 3, bytesFreed: 8 }, 'automatic exports still participate in quota')
+  for (const file of [pdf, har, picture]) assert.equal(fs.readFileSync(file, 'utf8'), '12345678')
+}
+console.log('  PASS: user exports do not consume managed quota, while automatic HAR exports remain sweepable')
+
+// 13) 非受管历史数量达到上限也不能挤掉受管文件，超过旧总数上限的临时文件仍可清理。
+{
+  const f = fixture('managed-overflow')
+  const old = f.write('old.png')
+  const next = f.write('next.png')
+  const exported = f.write('explicit.pdf')
+  const seed = f.manager.record(old, 'screenshot', { ttlMs: 1000 })
+  writeEntries(f, [seed, ...Array.from({ length: 4999 }, (_, i) => ({
+    ...seed, file: path.join(f.dir, `missing-managed-${i}.png`)
+  }))])
+  const manager = new EvidenceManager()
+  manager.record(next, 'screenshot', { ttlMs: 1000 })
+  assert.equal(readEntries(f).length, 5001, 'do not evict managed records at the former total-entry cap')
+  manager.record(exported, 'pdf')
+  assert.ok(readEntries(f).some((e) => e.file === old), 'old managed file must not be forgotten')
+  assert.ok(manager.list().some((e) => e.file === exported), 'new user exports remain visible beside many managed records')
+  ageEntries(f)
+  assert.deepEqual(new EvidenceManager().sweep(), { removed: [old, next], kept: 1, bytesFreed: 16 })
+  assert.equal(fs.existsSync(exported), true)
+  const retained = readEntries(f)[0]
+  writeEntries(f, [seed, ...Array.from({ length: 5000 }, (_, i) => ({
+    ...retained, file: path.join(f.dir, `missing-export-${i}.pdf`)
+  }))])
+  const capped = new EvidenceManager()
+  capped.record(exported, 'pdf')
+  const cappedEntries = readEntries(f)
+  assert.equal(cappedEntries.filter((e) => !e.managed).length, 5000, 'user export lookup history remains bounded')
+  assert.ok(cappedEntries.some((e) => e.file === old), 'protected-history pruning must never evict managed registrations')
+}
+console.log('  PASS: managed cleanup responsibility survives registry limits while user lookup history stays bounded')
 
 fs.rmSync(tmp, { recursive: true, force: true })
 console.log('All evidence lifecycle unit tests passed')

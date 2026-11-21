@@ -25,7 +25,7 @@ function deferred() {
 const { TOOL_DEFS, TOOL_ANNOTATIONS } = await import(pathToFileURL(path.join(root, 'src/shared/tool-defs.mjs')).href)
 
 function createFixture({ requireOperationApproval = false } = {}) {
-  const calls = { type: [], frameType: [], frameEvaluate: [], pageEvaluate: [], sensitive: [], operation: [], actions: [] }
+  const calls = { type: [], frameType: [], frameEvaluate: [], pageEvaluate: [], sensitive: [], operation: [], actions: [], cookies: [] }
   const pending = []
   const tab = {
     id: 'tab-1', title: 'Fixture page',
@@ -80,6 +80,7 @@ function createFixture({ requireOperationApproval = false } = {}) {
       doSelectOption: async () => ({ selected: 'choice' }), doScroll: forbidden, doExtract: forbidden,
       doWaitForText: forbidden, doWaitForCondition: forbidden, doWaitForDom: forbidden,
       doPressKey: forbidden, doScreenshot: forbidden, doConsoleLogs: forbidden, raceAbort: (p) => p,
+      doCookies: async (_tab, { action }) => { calls.cookies.push(action); return { content: action } },
       resolveWebContents: (manager, id) => {
         const result = id ? manager.get(id) : manager.active()
         if (!result) throw new Error('missing fixture tab')
@@ -141,6 +142,30 @@ try {
     path.join(root, 'src/main/tools.ts')
   ], { cwd: root, encoding: 'utf8' })
   assert.equal(compiled.status, 0, `Compilation failed: ${compiled.error ?? ''}\n${compiled.stdout}\n${compiled.stderr}`)
+
+  await test('Cookie actions accept explicit operations only, and writes and clears keep the approval gate', async () => {
+    const f = createFixture({ requireOperationApproval: true })
+    const handle = f.tools.get('browser_cookies').handler
+    for (const args of [{}, { action: 'unsupported' }, { action: 123 }]) {
+      await assert.rejects(handle(args), /Cookie 操作必须/)
+    }
+    assert.deepEqual(f.calls.cookies, [])
+    assert.deepEqual(f.calls.operation, [])
+    assert.equal(texts(await handle({ action: 'get' })), 'get')
+    const denied = handle({ action: 'set', name: 'fixture', value: 'sample' })
+    await tick()
+    assert.equal(f.calls.operation.length, 1)
+    assert.deepEqual(f.calls.cookies, ['get'])
+    f.pending[0].resolve(false)
+    await assert.rejects(denied, /高危操作已取消/)
+    const allowed = handle({ action: 'clear', name: 'fixture' })
+    await tick()
+    assert.equal(f.calls.operation.length, 2)
+    assert.deepEqual(f.calls.cookies, ['get'])
+    f.pending[1].resolve(true)
+    assert.equal(texts(await allowed), 'clear')
+    assert.deepEqual(f.calls.cookies, ['get', 'clear'])
+  })
 
   await test('browser_fill_form sensitive input requests approval, never calls doType, and does not echo the secret', async () => {
     const f = createFixture()

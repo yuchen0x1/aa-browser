@@ -20,6 +20,7 @@ const snapshotWarmups = 2
 const historyWarmups = 5
 const historyAdds = 100
 const capacity = 1000
+const textOnly = process.argv.includes('--text-only')
 const byteLength = (value) => Buffer.byteLength(value, 'utf8')
 const jsonBytes = (value) => byteLength(JSON.stringify(value))
 const sum = (values) => values.reduce((total, value) => total + value, 0)
@@ -199,7 +200,8 @@ async function measureSnapshots(runDir) {
     const execute = (code) => wc.executeJavaScript(code, true)
     const capture = async (opts) => {
       const start = performance.now()
-      const result = await execute(`(() => { const start=performance.now(); const snapshot=(${engine})(${jsLiteral(opts)}); return {snapshot,renderer_ms:performance.now()-start} })()`)
+      const options = textOnly ? { ...opts, includeElements: false } : opts
+      const result = await execute(`(() => { const start=performance.now(); const snapshot=(${engine})(${jsLiteral(options)}); return {snapshot,renderer_ms:performance.now()-start} })()`)
       return { ...result, roundtrip_ms: performance.now() - start }
     }
     for (const count of buttonCounts) {
@@ -224,7 +226,8 @@ async function measureSnapshots(runDir) {
             const { snapshot, renderer_ms, roundtrip_ms } = await capture({ maxNodes, cursor, mode: 'auto' })
             assert.equal(snapshot.mode, 'page', snapshot.error)
             assert.equal(snapshot.truncated, false)
-            assert.equal(snapshot.elements.length, count)
+            if (textOnly) assert.equal(Object.hasOwn(snapshot, 'elements'), false, 'Text path must not transfer element metadata')
+            else assert.equal(snapshot.elements.length, count)
             assert.equal(snapshot.totalLines, 2 * count)
             assert.equal(snapshot.cursor, cursor)
             for (const match of snapshot.tree.matchAll(/\[ref=(e\d+)\]/g)) treeRefs.add(match[1])
@@ -239,7 +242,7 @@ async function measureSnapshots(runDir) {
             assert.equal(refs.count, count)
             for (const key of ['connected', 'all_buttons', 'all_elements', 'stable']) assert.equal(refs[key], true, key)
             if (pages.length === 0) assert.equal(await execute(tagNameScript(refs.last_ref)), 'button', 'Last ref must resolve before its tree page is visited')
-            pages.push({ cursor, next_cursor: snapshot.nextCursor, has_more: snapshot.hasMore, tree_bytes: byteLength(snapshot.tree), elements_json_bytes: jsonBytes(snapshot.elements), return_json_bytes: jsonBytes(snapshot), elements: snapshot.elements.length, renderer_ms, roundtrip_ms, refs })
+            pages.push({ cursor, next_cursor: snapshot.nextCursor, has_more: snapshot.hasMore, tree_bytes: byteLength(snapshot.tree), elements_json_bytes: textOnly ? 0 : jsonBytes(snapshot.elements), return_json_bytes: jsonBytes(snapshot), elements: snapshot.elements?.length ?? 0, renderer_ms, roundtrip_ms, refs })
             if (!snapshot.hasMore) { assert.equal(snapshot.nextCursor, null); break }
             assert.ok(snapshot.nextCursor > cursor)
             cursor = snapshot.nextCursor
@@ -269,11 +272,11 @@ async function measureSnapshots(runDir) {
     }
     const result = {
       status: 'PASS', runtime: { electron: process.versions.electron, chromium: process.versions.chrome, node: process.versions.node },
-      engine_sha256: createHash('sha256').update(source).digest('hex'), warmup_snapshots_per_case: snapshotWarmups, repeats_per_case: snapshotRepeats,
+      engine_sha256: createHash('sha256').update(source).digest('hex'), transport: textOnly ? 'text-only' : 'structured', warmup_snapshots_per_case: snapshotWarmups, repeats_per_case: snapshotRepeats,
       fixture: 'Real sandboxed Electron renderer; hidden 1280x800 viewport, local file DOM; 10-column grid of visible-size native buttons with nested divs and click handler. Off-viewport buttons are retained. Each button emits one interactive line plus its text line.',
-      definitions: { tree_bytes: 'UTF-8 bytes of returned tree string, including production headers and local file URL.', elements_json_bytes: 'UTF-8 bytes of JSON.stringify(snapshot.elements).', return_json_bytes: 'UTF-8 bytes of JSON.stringify(the complete engine return); not an MCP/WebSocket envelope, compressed size, or heap size.', roundtrip_ms: 'Main-process performance.now around executeJavaScript: engine source evaluation + traversal + Electron return/IPC; excludes payload byte counting and separate ref verification.', renderer_ms: 'Renderer performance.now directly around production engine invocation; excludes IPC.', all_pages: 'Measured cursor traversal until hasMore=false; byte totals sum every page, including repeated full elements arrays.', percentiles: 'Nearest-rank percentiles; 3 complete passes/case, first-page n=3 only (not a robust tail estimate).' },
+      definitions: { tree_bytes: 'UTF-8 bytes of returned tree string, including production headers and local file URL.', elements_json_bytes: 'UTF-8 bytes of JSON.stringify(snapshot.elements), or 0 if the field is omitted.', return_json_bytes: 'UTF-8 bytes of JSON.stringify(the complete engine return); not an MCP/WebSocket envelope, compressed size, or heap size.', roundtrip_ms: 'Main-process performance.now around executeJavaScript: engine source evaluation + traversal + Electron return/IPC; excludes payload byte counting and separate ref verification.', renderer_ms: 'Renderer performance.now directly around production engine invocation; excludes IPC.', all_pages: 'Measured cursor traversal until hasMore=false; byte totals sum every page.', percentiles: `Nearest-rank percentiles; ${snapshotRepeats} complete passes per case, not a robust tail estimate.` },
       isolated_paths: Object.fromEntries(Object.keys(directories).map((name) => [name, app.getPath(name)])), cases: results,
-      caveat: 'Single Windows machine, local deterministic DOM, warm runtime, no external pages/network or production-app startup. No performance optimization was applied.'
+      caveat: 'One machine, local deterministic DOM and warm runtime. No external pages, network traffic, CPU/memory measurements, or production-app startup.'
     }
     fs.writeFileSync(output, JSON.stringify(result, null, 2))
     win.destroy()
@@ -295,7 +298,7 @@ async function launchElectron(runDir) {
   }
   delete env.ELECTRON_RUN_AS_NODE
   const profile = path.join(runDir, 'profile')
-  const args = [`--user-data-dir=${profile}`, `--disk-cache-dir=${path.join(runDir, 'cache')}`, '--no-first-run', script]
+  const args = [`--user-data-dir=${profile}`, `--disk-cache-dir=${path.join(runDir, 'cache')}`, '--no-first-run', script, ...(textOnly ? ['--text-only'] : [])]
   await new Promise((resolve, reject) => {
     const log = fs.createWriteStream(path.join(runDir, 'electron.log'))
     const child = spawn(require('electron'), args, { cwd: runDir, env, stdio: ['ignore', 'pipe', 'pipe'] })
