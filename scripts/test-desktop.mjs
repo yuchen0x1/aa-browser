@@ -297,8 +297,9 @@ if (!process.versions.electron) {
       })
     }
     const settle = (promise) => promise.then((value) => ({ ok: true, value }), (error) => ({ ok: false, error }))
-    const concurrentA = settle(call2('browser_wait', { text: '并发A_永不出现', timeoutMs: 9000 }, 'desktop-progress'))
-    const concurrentB = settle(tool('browser_wait', { text: '并发B_永不出现', timeoutMs: 9000 }))
+    // HUD 并发在不同标签上验证；同标签等待按队列串行，不应要求排队调用提前报告执行进度。
+    const concurrentA = settle(call2('browser_wait', { tabId: initial.tabs[0].id, text: '并发A_永不出现', timeoutMs: 9000 }, 'desktop-progress'))
+    const concurrentB = settle(tool('browser_wait', { tabId: initial.tabs[1].id, text: '并发B_永不出现', timeoutMs: 9000 }))
     await until(async () => ((await state()).agentActivity?.calls?.length ?? 0) >= 2, 'concurrent calls visible in activity', 5000)
     const visibleCalls = (await state()).agentActivity.calls
     assert.equal(new Set(visibleCalls.map((c) => c.client)).size, 2, `expected two distinct clients, got ${JSON.stringify(visibleCalls)}`)
