@@ -6,7 +6,7 @@ import { writeJsonAtomic } from './atomic-json'
 /**
  * 跨会话标签恢复（崩溃/正常退出后重启）。
  *
- * 只保存「普通标签的网页地址 + 活动标签序号」：
+ * 只保存「普通标签的网页地址、标签 id + 活动标签序号」：
  *   - 隔离标签本身是一次性会话，关闭即清理，恢复它只会得到一个看不到登录态的页面；
  *   - 新标签页、内部页、file:/data:/javascript: 等地址不写入；
  *   - 地址中的账号密码被剥离，避免把凭据写进明文会话文件。
@@ -14,13 +14,20 @@ import { writeJsonAtomic } from './atomic-json'
  * 文件写入使用原子替换；损坏或未来版本的文件返回 null，绝不阻塞启动。
  */
 
-export const SESSION_VERSION = 1
+export const SESSION_VERSION = 2
 export const MAX_RESTORE_TABS = 20
 const MAX_TITLE_LENGTH = 300
+/** 与 TabManager 的 genId 同一形状；恢复时只接受这种 id，避免任意字符串进入运行时。 */
+const TAB_ID = /^t[a-z0-9]{1,32}$/
 
 export interface SessionTab {
   url: string
   title?: string
+  /**
+   * v2：保留标签 id。更新重启后 Agent 手里的 tabId 仍然有效，
+   * 已排队的重放调用和后续步骤不会因为 id 全部换新而失败。
+   */
+  id?: string
 }
 
 export interface SessionSnapshot {
@@ -50,9 +57,11 @@ export function normalizeSessionSnapshot(value: unknown): SessionSnapshot | null
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const record = value as Record<string, unknown>
   const version = record.version
-  if (version !== undefined && version !== SESSION_VERSION) return null
+  // v1 只有地址；v2 增加标签 id。旧文件继续可读，保存时统一写成当前版本。
+  if (version !== undefined && version !== 1 && version !== SESSION_VERSION) return null
 
   const seen = new Set<string>()
+  const seenIds = new Set<string>()
   const tabs: SessionTab[] = []
   const rawTabs = Array.isArray(record.tabs) ? record.tabs : []
   for (const item of rawTabs) {
@@ -62,7 +71,9 @@ export function normalizeSessionSnapshot(value: unknown): SessionSnapshot | null
     if (!url || seen.has(url)) continue
     seen.add(url)
     const title = typeof tab.title === 'string' ? tab.title.trim().slice(0, MAX_TITLE_LENGTH) : ''
-    tabs.push(title ? { url, title } : { url })
+    const id = typeof tab.id === 'string' && TAB_ID.test(tab.id) && !seenIds.has(tab.id) ? tab.id : undefined
+    if (id) seenIds.add(id)
+    tabs.push({ url, ...(title ? { title } : {}), ...(id ? { id } : {}) })
     if (tabs.length >= MAX_RESTORE_TABS) break
   }
   if (!tabs.length) return null
@@ -97,7 +108,7 @@ export class SessionStore {
    * 没有任何可恢复网页时删除旧记录，避免下次启动恢复过期页面。
    * 写入失败只记录警告：会话记录是尽力而为的便利功能，不能影响浏览。
    */
-  save(tabs: { url: string; title?: string }[], activeIndex = 0): SessionSnapshot | null {
+  save(tabs: { url: string; title?: string; id?: string }[], activeIndex = 0): SessionSnapshot | null {
     const snapshot = normalizeSessionSnapshot({ version: SESSION_VERSION, savedAt: Date.now(), activeIndex, tabs })
     try {
       if (!snapshot) {

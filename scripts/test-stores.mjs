@@ -120,11 +120,11 @@ test('session snapshots only keep web URLs, strip credentials, dedupe and cap ta
     version: 1,
     activeIndex: 99,
     tabs: [
-      { url: 'https://user:secret@example.com/path#frag', title: 'A' },
+      { url: 'https://user:secret@example.com/path#frag', title: 'A', id: 'tab01' },
       { url: 'file:///C:/Windows/win.ini' },
       { url: 'javascript:alert(1)' },
-      { url: 'https://example.com/path#frag' },
-      { url: 'http://example.org/b', title: 42 },
+      { url: 'https://example.com/path#frag', id: 'tab01' },
+      { url: 'http://example.org/b', title: 42, id: 'not a tab id' },
       ...Array.from({ length: 25 }, (_, i) => ({ url: `https://site${i}.example/` }))
     ]
   })
@@ -132,19 +132,29 @@ test('session snapshots only keep web URLs, strip credentials, dedupe and cap ta
   assert.equal(snapshot.tabs.length, 20)
   assert.equal(snapshot.tabs[0].url, 'https://example.com/path#frag')
   assert.equal(snapshot.tabs[1].url, 'http://example.org/b')
+  assert.equal(snapshot.tabs[0].id, 'tab01', 'v2 snapshots keep the tab id for agent continuity')
+  assert.equal(snapshot.tabs[1].id, undefined, 'malformed tab ids are dropped, not restored')
   assert.equal(snapshot.activeIndex, 19)
   assert.equal(JSON.stringify(snapshot).includes('secret'), false)
-  assert.equal(normalizeSessionSnapshot({ version: 2, tabs: [{ url: 'https://example.com' }] }), null)
+  assert.equal(normalizeSessionSnapshot({ version: 2, tabs: [{ url: 'https://example.com' }] }).tabs.length, 1)
+  assert.equal(normalizeSessionSnapshot({ version: 3, tabs: [{ url: 'https://example.com' }] }), null)
   assert.equal(normalizeSessionSnapshot({ version: 1, tabs: [{ url: 'about:blank' }] }), null)
 })
 test('session store round-trips restorable tabs and clears the record when none remain', () => {
   fixture('session-roundtrip')
   const store = new SessionStore()
-  const saved = store.save([{ url: 'https://a.example/', title: 'A' }, { url: 'file:///tmp/x' }, { url: 'https://b.example/' }], 1)
+  const saved = store.save([
+    { url: 'https://a.example/', title: 'A', id: 'tabaa' },
+    { url: 'file:///tmp/x' },
+    { url: 'https://b.example/', id: 'tabbb' }
+  ], 1)
   assert.deepEqual(saved.tabs.map((tab) => tab.url), ['https://a.example/', 'https://b.example/'])
+  assert.deepEqual(saved.tabs.map((tab) => tab.id), ['tabaa', 'tabbb'])
+  assert.equal(saved.version, 2)
   assert.equal(saved.activeIndex, 1)
   const loaded = store.load()
   assert.deepEqual(loaded.tabs.map((tab) => tab.url), ['https://a.example/', 'https://b.example/'])
+  assert.deepEqual(loaded.tabs.map((tab) => tab.id), ['tabaa', 'tabbb'], 'agent-facing tab ids survive a restart')
   assert.equal(loaded.activeIndex, 1)
   assert.equal(store.save([{ url: 'javascript:alert(1)' }]), null)
   assert.equal(store.load(), null)

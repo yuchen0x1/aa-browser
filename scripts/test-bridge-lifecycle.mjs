@@ -17,6 +17,7 @@ import { TOOL_DEFS, TOOL_ANNOTATIONS } from '../src/shared/tool-defs.mjs'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const BRIDGE = path.join(ROOT, 'cli/mcp.mjs')
 const CONNECTION = path.join(ROOT, '__in_memory_lifecycle_connection__.json')
+const RESTART_MARKER = path.join(ROOT, 'update-restart.json')
 const source = fs.readFileSync(BRIDGE, 'utf8').replace(/\r\n/g, '\n')
 const expectedImports = [
   "import fs from 'node:fs'",
@@ -39,7 +40,7 @@ assert.doesNotMatch(adapted, /^\s*(?:import|export)\s|\bimport\s*\(|\bimport\.me
   'Unexpected module syntax: do not execute unreviewed bridge dependencies')
 const program = new Script(`${adapted}\n;globalThis.fixtureBridge = {
   handleStdioLine, connectWs,
-  state: () => ({ ws, connecting, pending, mcpToBridge, cancelledMcpRequests, bridgeToProgressToken })
+  state: () => ({ ws, connecting, pending, suspended, mcpToBridge, cancelledMcpRequests, bridgeToProgressToken })
 };`, { filename: BRIDGE })
 
 // Drain a bounded number of promise continuations, never a real request timeout.
@@ -137,8 +138,10 @@ function createFixture() {
   const context = createContext({
     fs: {
       readFileSync(file, encoding) {
-        assert.equal(file, CONNECTION, 'Only fixture discovery may be read')
         assert.equal(encoding, 'utf-8')
+        // 更新重启标记是可选的旁路文件：夹具里视为不存在。
+        if (file === RESTART_MARKER) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+        assert.equal(file, CONNECTION, 'Only fixture discovery may be read')
         return JSON.stringify({ pid: 123, port: 12345, token: 'fixture-token' })
       },
       statSync: forbidden,
@@ -164,9 +167,9 @@ function createFixture() {
   const bridge = context.fixtureBridge
   const results = (id) => messages.filter((message) => Object.hasOwn(message, 'id') && message.id === id)
   const notifications = () => messages.filter((message) => !Object.hasOwn(message, 'id'))
-  const call = (id, token = `progress-${id}`) => bridge.handleStdioLine(JSON.stringify({
+  const call = (id, token = `progress-${id}`, name = 'browser_tabs', args = { action: 'list' }) => bridge.handleStdioLine(JSON.stringify({
     jsonrpc: '2.0', id, method: 'tools/call',
-    params: { name: 'browser_tabs', arguments: { action: 'list' }, _meta: { progressToken: token } }
+    params: { name, arguments: args, _meta: { progressToken: token } }
   }))
   const cancel = (requestId) => bridge.handleStdioLine(JSON.stringify({
     jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId }
@@ -181,7 +184,7 @@ function createFixture() {
   }
   const clean = (ids) => {
     const state = bridge.state()
-    for (const name of ['pending', 'mcpToBridge', 'cancelledMcpRequests', 'bridgeToProgressToken']) {
+    for (const name of ['pending', 'suspended', 'mcpToBridge', 'cancelledMcpRequests', 'bridgeToProgressToken']) {
       assert.equal(state[name].size, 0, `${name} must be empty after completion`)
     }
     assert.equal(state.connecting, null, 'Settled handshake must release the single-flight slot')
@@ -210,7 +213,9 @@ async function connectedFixture() {
 
 await test('old close and wrong-socket frames preserve replacement pending calls and progress', async () => {
   const f = createFixture()
-  f.call(10)
+  // Use a mutating call: read-only calls are intentionally suspended for replay,
+  // while this test covers the fail-once path for a call owned by the old socket.
+  f.call(10, 'click-token', 'browser_click', { ref: 'e1' })
   const old = f.sockets[0]
   old.open()
   await flush()
@@ -388,4 +393,102 @@ await test('controlled request timeout cancels its owner and ignores late comple
   socket.close()
   await flush()
   f.clean([80])
+})
+
+await test('read-only call survives a browser restart and is replayed exactly once', async () => {
+  const f = createFixture()
+  f.call(90, 'snap-token', 'browser_snapshot', {})
+  const old = f.sockets[0]
+  old.open()
+  await flush()
+  const oldId = old.sent[0].id
+
+  old.close()
+  await flush()
+  assert.equal(f.results(90).length, 0, 'an in-flight read-only call must not fail on restart')
+  assert.equal(f.state().pending.size, 0)
+  assert.equal(f.state().suspended.size, 1)
+  assert.equal(f.state().mcpToBridge.get(90), -2, 'suspended calls use the -2 sentinel')
+
+  const reconnection = f.connectWs()
+  const next = f.sockets[1]
+  next.open()
+  assert.equal(await reconnection, next)
+  await flush()
+  assert.equal(f.state().suspended.size, 0)
+  assert.equal(next.sent.length, 1, 'the suspended call is replayed once')
+  const newId = next.sent[0].id
+  assert.notEqual(newId, oldId, 'replay uses a fresh wire id on the new instance')
+  assert.equal(next.sent[0].tool, 'browser_snapshot')
+  assert.equal(f.state().mcpToBridge.get(90), newId)
+  assert.equal(f.state().bridgeToProgressToken.get(newId), 'snap-token')
+
+  next.reply(newId, 'snapshot after restart')
+  await flush()
+  f.result(90, false, /snapshot after restart/)
+  f.clean([90])
+})
+
+await test('mutating call is failed once instead of silently replayed after restart', async () => {
+  const f = createFixture()
+  f.call(91, 'click-token', 'browser_click', { ref: 'e1' })
+  const socket = f.sockets[0]
+  socket.open()
+  await flush()
+
+  socket.close()
+  await flush()
+  assert.equal(f.results(91).length, 1)
+  f.result(91, true, /不会自动重试/)
+  assert.equal(f.state().suspended.size, 0)
+  assert.equal(f.sockets.length, 1, 'mutating calls must not trigger a replay connection')
+  f.clean([91])
+})
+
+await test('cancelling a suspended read-only call prevents replay', async () => {
+  const f = createFixture()
+  f.call(92, 'snap-token', 'browser_snapshot', {})
+  const old = f.sockets[0]
+  old.open()
+  await flush()
+  old.close()
+  await flush()
+  assert.equal(f.state().suspended.size, 1)
+
+  f.cancel(92)
+  await flush()
+  f.result(92, true, /已取消/)
+  assert.equal(f.state().suspended.size, 0)
+
+  const reconnection = f.connectWs()
+  const next = f.sockets[1]
+  next.open()
+  await reconnection
+  await flush()
+  assert.equal(next.sent.length, 0, 'a cancelled call must never reach the new instance')
+  f.clean([92])
+})
+
+await test('browser_tabs list is safe to replay even though the tool also mutates', async () => {
+  const f = createFixture()
+  f.call(93, 'tabs-token')
+  const old = f.sockets[0]
+  old.open()
+  await flush()
+  old.close()
+  await flush()
+  assert.equal(f.results(93).length, 0)
+  assert.equal(f.state().suspended.size, 1)
+
+  const reconnection = f.connectWs()
+  const next = f.sockets[1]
+  next.open()
+  await reconnection
+  await flush()
+  const replayed = next.sent.find((message) => message.tool === 'browser_tabs')
+  assert.ok(replayed, 'tab listing must be replayed after a restart')
+  next.reply(replayed.id, 'restored tabs list')
+  await flush()
+  f.result(93, false, /restored tabs list/)
+  f.clean([93])
 })

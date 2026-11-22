@@ -96,11 +96,13 @@ jobs:
       - run: npm run test:printing
       - run: npm run test:security
       - run: npm run test:updater
+      - run: npm run test:update-restart
       - run: npm run test:release
       - run: npm run test:installer
       - run: npm run test:bridge
       - run: npm run test:bridge-connection-race
       - run: npm run test:bridge-lifecycle
+      - run: npm run test:bridge-restart-replay
       - run: npm run test:agent-cancellation
       - run: npm run test:session-permissions
       - run: npm run test:approval-parity

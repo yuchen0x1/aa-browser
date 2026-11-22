@@ -73,6 +73,11 @@ export class UpdateManager {
     this.emit()
   }
 
+  /** 已把控制权交给安装器：退出路径据此写更新重启标记。 */
+  isInstalling(): boolean {
+    return this.installing
+  }
+
   getState(): UpdateState {
     const notice = ['available', 'downloading', 'downloaded', 'error'].includes(this.state.status)
     return { ...this.state, noticeVisible: notice && this.dismissedNotice !== this.noticeKey() }

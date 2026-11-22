@@ -203,11 +203,14 @@ export class TabManager {
    * 新建标签。
    * @param isolated 使用独立会话分区（不共享登录态），关闭时自动清理。
    *                 省略时取设置里的「默认隔离」开关。
+   * @param restoreId 会话恢复时沿用上次的标签 id，让 Agent 缓存的 tabId 继续有效。
+   *                  只接受 genId 形状且当前未被占用。
    */
-  createTab(url?: string, activate = true, isolated?: boolean, deferInitialNavigation = false): Tab {
+  createTab(url?: string, activate = true, isolated?: boolean, deferInitialNavigation = false, restoreId?: string): Tab {
     const target = url || this.newtabUrl
     this.assertUrlAllowed(target)
-    const id = genId()
+    const reusable = restoreId !== undefined && /^t[a-z0-9]{1,32}$/.test(restoreId) && !this.get(restoreId)
+    const id = reusable ? restoreId : genId()
     const useIsolated = isolated ?? this.getDefaultIsolated()
     const partition = useIsolated ? `persist:${ISOLATED_PARTITION_PREFIX}${id}` : SHARED_PARTITION
     const ses = session.fromPartition(partition)
@@ -530,16 +533,16 @@ export class TabManager {
    * 跨会话恢复所需的普通网页标签（保持标签顺序，跳过隔离标签和内部页）。
    * 只收集 http(s) 地址；同一地址只保留一次，活动标签序号按过滤后的列表计算。
    */
-  sessionTabs(): { tabs: { url: string; title: string }[]; activeIndex: number } {
+  sessionTabs(): { tabs: { url: string; title: string; id: string }[]; activeIndex: number } {
     const restorable = this.tabs.filter((tab) => !tab.isolated && /^https?:\/\//i.test(tab.url))
     const seen = new Set<string>()
-    const tabs: { url: string; title: string }[] = []
+    const tabs: { url: string; title: string; id: string }[] = []
     let activeIndex = 0
     for (const tab of restorable) {
       if (seen.has(tab.url)) continue
       seen.add(tab.url)
       if (tab.id === this.activeId) activeIndex = tabs.length
-      tabs.push({ url: tab.url, title: tab.title })
+      tabs.push({ url: tab.url, title: tab.title, id: tab.id })
     }
     return { tabs, activeIndex }
   }

@@ -1,4 +1,4 @@
-import { app, BaseWindow, WebContentsView, ipcMain, Menu, MenuItem, shell, clipboard, powerMonitor, nativeTheme } from 'electron'
+import { app, BaseWindow, WebContentsView, ipcMain, Menu, MenuItem, shell, clipboard, powerMonitor, nativeTheme, dialog } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -21,12 +21,18 @@ import { session } from 'electron'
 import type { UiState } from '@shared/types'
 import { contextMenuLabels } from '@shared/menu-labels'
 import { UpdateManager } from './updater'
+import { clearUpdateRestartMarker, writeUpdateRestartMarker } from './update-restart'
 import { PageFinder } from './page-finder'
 import { printPage } from './printing'
 import { getMainLocale } from './locale'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const VERSION = app.getVersion()
+
+/** AgentServer 使用的连接发现文件；更新重启标记与它放在同一目录。 */
+function discoveryFile(): string {
+  return process.env['AA_BROWSER_CONNECTION_FILE'] || path.join(os.homedir(), '.aabrowser', 'connection.json')
+}
 
 const CHROME_HEIGHT = 84
 let lastContentSize = { width: 1280, height: 840 }
@@ -754,7 +760,30 @@ function registerIpc(): void {
     if (!isTrustedSender(event)) return updater?.getState() ?? null
     return updater?.download() ?? null
   })
-  ipcMain.handle('aa:update-install', (event) => guard(event, false, () => updater?.install() ?? false))
+  ipcMain.handle('aa:update-install', async (event) => {
+    if (!isTrustedSender(event) || !updater) return false
+    const activity = agentServer?.activity()
+    const busyTool = activity?.calls?.find((call) => call.tool)?.tool ?? activity?.tool
+    const busy = activity?.active === true || approvals.list().length > 0
+    if (busy) {
+      const en = getMainLocale() === 'en-US'
+      const { response } = await dialog.showMessageBox({
+        type: 'warning',
+        buttons: en ? ['Cancel', 'Restart and install anyway'] : ['取消', '仍然重启安装'],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+        message: en
+          ? 'AI is using the browser right now'
+          : 'AI 正在操作浏览器',
+        detail: en
+          ? `Restarting to install the update will interrupt the current step${busyTool ? ` (${busyTool})` : ''}. The AI may need to read the page again before continuing.`
+          : `重启安装会中断当前步骤${busyTool ? `（${busyTool}）` : ''}。更新后 AI 可能需要重新读取页面才能继续。`
+      })
+      if (response !== 1) return false
+    }
+    return updater.install()
+  })
   ipcMain.handle('aa:update-dismiss', (event) => guard(event, undefined, () => updater?.dismissNotice()))
   ipcMain.handle('aa:update-retry', (event) => guard(event, null, () => updater?.retry() ?? null))
   ipcMain.handle('aa:update-wake', (event) => guard(event, null, () => updater?.checkIfDue() ?? null))
@@ -775,7 +804,7 @@ function onTabChange(): void {
   scheduleSessionSave()
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   if (process.platform === 'linux' && app.isPackaged && app.commandLine.hasSwitch('no-sandbox')) {
     console.error('Aa Browser requires the Chromium sandbox. Enable user namespaces for the application and relaunch.')
     app.exit(1)
@@ -872,12 +901,16 @@ app.whenReady().then(() => {
 
   // 首个标签页：优先恢复上次会话；没有可恢复记录时打开新标签页。
   const restored = getSettingsStore().get().restoreSession ? sessionStore.load() : null
+  /** 恢复标签的首载 promise：MCP 服务要等它们结束，避免更新后的重放落在 about:blank。 */
+  const restoredInitialLoads: Promise<void>[] = []
   if (restored) {
     restoringSession = true
     const created: Tab[] = []
     for (const entry of restored.tabs) {
       try {
-        created.push(tabManager.createTab(entry.url, false, false))
+        const tab = tabManager.createTab(entry.url, false, false, false, entry.id)
+        created.push(tab)
+        restoredInitialLoads.push(tab.initialNavigation.catch(() => {}))
       } catch {
         /* 白名单收紧后旧地址会被拒绝：跳过并继续恢复其余标签 */
       }
@@ -892,6 +925,11 @@ app.whenReady().then(() => {
 
   // 下载追踪：静默捕获所有标签页隔离 session 的下载
   getDownloadTracker().attach(session.defaultSession)
+
+  // 恢复标签仍在首次加载时，过早写入 connection.json 会让更新后的重放调用
+  // （快照、提取等）落到 about:blank。各自有 20s 导航上限且并行执行；
+  // 失败也继续，MCP 可用性不能因为某个站点不可达而永久挂起。
+  if (restoredInitialLoads.length) await Promise.all(restoredInitialLoads)
 
   // Agent 接入服务
   const tools = buildTools(
@@ -935,6 +973,8 @@ app.whenReady().then(() => {
     }
   )
   void agentServer.start().then(() => {
+    // 新实例已经写好自己的连接信息：更新重启窗口结束，桥可以恢复正常流程。
+    clearUpdateRestartMarker(discoveryFile())
     if (agentCount === 0) bridgeState = 'waiting'
     pushState()
     console.log('[aa-browser] agent server ready')
@@ -945,6 +985,10 @@ app.whenReady().then(() => {
 })
 
 app.on('before-quit', () => {
+  // quitAndInstall 会先触发 before-quit。先留下标记，桥就知道这次断开是
+  // 「更新重启」，会等新实例而不是自动启动；普通退出则清掉残留标记。
+  if (updater?.isInstalling()) writeUpdateRestartMarker(discoveryFile(), VERSION)
+  else clearUpdateRestartMarker(discoveryFile())
   updater?.dispose()
   approvals.cancelAll()
   agentServer?.stop()

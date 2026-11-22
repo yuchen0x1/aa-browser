@@ -76,11 +76,32 @@ for (const tool of TOOL_DEFS) {
 
 let ws = null
 let connecting = null
+let suspendedReconnect = null
 let nextCallId = 1
-const pending = new Map() // id -> { resolve, reject, timer, mcpId, socket }
+const pending = new Map() // 线上 id -> { id, resolve, reject, timer, mcpId, socket, name, args, progressToken }
+/** 断线后等待重连再重发的只读调用；写操作绝不进入这里。 */
+const suspended = new Set()
 const mcpToBridge = new Map()
 const cancelledMcpRequests = new Set()
 const bridgeToProgressToken = new Map() // 桥调用 id -> MCP progressToken（仅在调用期间存在）
+
+/**
+ * 只有「只读 + 幂等」的调用才允许跨重启自动重发：
+ * 应用更新会重启进程，重发读取不会改变页面；点击、输入、表单提交等
+ * 可能已部分执行，重放会造成二次副作用，因此只回报明确的中断错误。
+ */
+const RETRYABLE_TOOLS = new Set(
+  TOOL_DEFS
+    .filter((tool) => TOOL_ANNOTATIONS[tool.name]?.readOnlyHint === true && TOOL_ANNOTATIONS[tool.name]?.idempotentHint === true)
+    .map((tool) => tool.name)
+)
+const RETRY_ON_RECONNECT = process.env['AA_BROWSER_RETRY_ON_RECONNECT'] !== '0'
+function isRetryable(name, args) {
+  if (!RETRY_ON_RECONNECT) return false
+  // browser_tabs 整体带写标记，但 list 只是读取新实例的标签列表，重发安全。
+  if (name === 'browser_tabs') return args?.action === 'list'
+  return RETRYABLE_TOOLS.has(name)
+}
 
 function readConnection() {
   try {
@@ -89,6 +110,29 @@ function readConnection() {
     return info
   } catch {
     return null
+  }
+}
+
+/**
+ * 更新重启标记：应用在 quitAndInstall 前写入，重启后的新实例清除。
+ * 看到标记说明「旧实例已退出、安装器/新实例还没就绪」，此时不能自动启动，
+ * 否则会和安装器抢文件或拉起一个旧版本。
+ */
+const RESTART_MARKER = path.join(path.dirname(CONNECT_FILE), 'update-restart.json')
+const RESTART_MARKER_TTL_MS = 10 * 60_000
+const UPDATE_RESTART_TIMEOUT_MS = Math.min(
+  CALL_TIMEOUT_MS,
+  Math.max(5_000, Number(process.env['AA_BROWSER_RESTART_TIMEOUT_MS']) || 120_000)
+)
+
+function updateRestartPending() {
+  try {
+    const marker = JSON.parse(fs.readFileSync(RESTART_MARKER, 'utf-8'))
+    if (marker?.reason !== 'update' || typeof marker.at !== 'number') return false
+    const age = Date.now() - marker.at
+    return age >= -60_000 && age <= RESTART_MARKER_TTL_MS
+  } catch {
+    return false
   }
 }
 
@@ -240,6 +284,87 @@ async function ensureBrowserStarted() {
   return launchPromise
 }
 
+/** 清除一条调用的所有索引；调用方随后决定 resolve / reject。 */
+function detachPending(p) {
+  clearTimeout(p.timer)
+  if (p.id !== null) {
+    pending.delete(p.id)
+    bridgeToProgressToken.delete(p.id)
+  }
+  suspended.delete(p)
+  if (p.mcpId !== undefined && (mcpToBridge.get(p.mcpId) === p.id || mcpToBridge.get(p.mcpId) === -2)) {
+    mcpToBridge.delete(p.mcpId)
+  }
+}
+
+function rejectPending(p, error) {
+  detachPending(p)
+  p.reject(error)
+}
+
+/** 发送（首次或重连后重发）；成功回包由 socket message 处理。 */
+function sendPending(p, socket) {
+  suspended.delete(p)
+  const id = nextCallId++
+  p.id = id
+  p.socket = socket
+  pending.set(id, p)
+  if (p.mcpId !== undefined) mcpToBridge.set(p.mcpId, id)
+  if (p.progressToken !== undefined) bridgeToProgressToken.set(id, p.progressToken)
+  const request = { id, tool: p.name, args: p.args }
+  if (p.progressToken !== undefined) request.progressToken = p.progressToken
+  const failSend = (error) => {
+    if (!error || pending.get(id) !== p) return
+    rejectPending(p, error)
+  }
+  try {
+    if (socket.readyState !== WebSocket.OPEN) throw new Error('与 Aa Browser 的连接已断开。')
+    socket.send(JSON.stringify(request), failSend)
+  } catch (error) {
+    failSend(error)
+  }
+}
+
+/** 新实例连上后，把等待中的只读调用按新 id 重发。 */
+function flushSuspended(socket) {
+  if (!suspended.size || socket.readyState !== WebSocket.OPEN) return
+  const queue = [...suspended]
+  suspended.clear()
+  for (const p of queue) {
+    if (pending.get(p.id) === p) continue
+    log('replaying read-only call after browser restart:', p.name)
+    sendPending(p, socket)
+  }
+}
+
+/**
+ * 断线后主动恢复，避免只读调用干等到 5 秒的 eager 轮询。
+ * 走 getWs()：更新重启时它会识别标记、只等待新实例；普通退出/崩溃时
+ * 沿用原有的自动启动行为，把浏览器带回来完成这次读取。
+ */
+function scheduleSuspendedReconnect() {
+  if (suspendedReconnect || !suspended.size) return
+  suspendedReconnect = (async () => {
+    const deadline = Date.now() + UPDATE_RESTART_TIMEOUT_MS
+    while (suspended.size && Date.now() < deadline) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        flushSuspended(ws)
+        break
+      }
+      try {
+        await getWs()
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          flushSuspended(ws)
+          break
+        }
+      } catch {
+        /* 旧实例已退出但新实例还没就绪：继续等。 */
+      }
+      await delay(CONNECT_RETRY_MS)
+    }
+  })().finally(() => { suspendedReconnect = null })
+}
+
 function connectWs() {
   if (ws && ws.readyState === WebSocket.OPEN) return Promise.resolve(ws)
   if (connecting) return connecting
@@ -301,14 +426,25 @@ function connectWs() {
         if (ws === socket) ws = null
         for (const [id, p] of pending) {
           if (p.socket !== socket) continue
-          clearTimeout(p.timer)
-          pending.delete(id)
-          bridgeToProgressToken.delete(id)
-          if (p.mcpId !== undefined && mcpToBridge.get(p.mcpId) === id) mcpToBridge.delete(p.mcpId)
-          p.reject(new Error('与 Aa Browser 的连接已断开。'))
+          if (isRetryable(p.name, p.args)) {
+            // 应用重启（常见于安装更新）会断开 WS。只读且幂等的调用保留到重连后重发，
+            // 让 AI 当前这一步拿到真实结果，而不是凭空失败。
+            pending.delete(id)
+            bridgeToProgressToken.delete(id)
+            if (p.mcpId !== undefined) mcpToBridge.set(p.mcpId, -2)
+            p.id = null
+            p.socket = null
+            suspended.add(p)
+            log('browser disconnected; queued read-only call for replay:', p.name)
+            continue
+          }
+          rejectPending(p, new Error('与 Aa Browser 的连接已断开。此操作不会自动重试；请重新读取页面状态后再继续。'))
         }
+        scheduleSuspendedReconnect()
       })
       socket.on('error', (err) => log('ws error:', err.message))
+      // 先重发挂起调用，再把连接交给新的工具调用；两者使用同一 socket。
+      flushSuspended(socket)
       finish()
     })
     socket.on('error', (err) => finish(new Error(`无法连接 Aa Browser: ${err.message}`)))
@@ -321,9 +457,28 @@ function connectWs() {
   return attempt
 }
 
+/** 更新安装期间只等新实例回来，绝不自动启动，避免与安装器抢文件。 */
+async function waitForUpdateRestart() {
+  const deadline = Date.now() + UPDATE_RESTART_TIMEOUT_MS
+  while (Date.now() < deadline) {
+    try {
+      return await connectWs()
+    } catch {
+      /* 旧连接信息已失效，等新实例写回 connection.json。 */
+    }
+    if (!updateRestartPending()) return null
+    await delay(CONNECT_RETRY_MS)
+  }
+  return null
+}
+
 async function getWs() {
   if (ws && ws.readyState === WebSocket.OPEN) return ws
   let lastError
+  if (updateRestartPending()) {
+    const restarted = await waitForUpdateRestart()
+    if (restarted) return restarted
+  }
   try {
     return await connectWs()
   } catch (error) {
@@ -372,38 +527,33 @@ async function callTool(name, args, progressToken) {
   if (mcpId !== undefined && cancelledMcpRequests.delete(mcpId)) {
     throw new Error('MCP 请求已取消。')
   }
-  const id = nextCallId++
+  const cleanArgs = { ...(args ?? {}) }
+  delete cleanArgs.__mcpId
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      const p = pending.get(id)
-      pending.delete(id)
-      bridgeToProgressToken.delete(id)
-      if (p?.mcpId !== undefined && mcpToBridge.get(p.mcpId) === id) mcpToBridge.delete(p.mcpId)
-      try { socket.send(JSON.stringify({ id, cancel: true })) } catch {}
+    const p = {
+      id: null,
+      name,
+      args: cleanArgs,
+      progressToken,
+      mcpId,
+      socket: null,
+      resolve,
+      reject,
+      timer: null
+    }
+    p.timer = setTimeout(() => {
+      const owner = p.socket
+      const wireId = p.id
+      detachPending(p)
+      try {
+        if (owner && owner.readyState === WebSocket.OPEN && wireId !== null) {
+          owner.send(JSON.stringify({ id: wireId, cancel: true }))
+        }
+      } catch {}
       reject(new Error(`工具 ${name} 执行超时（${CALL_TIMEOUT_MS / 1000}s）`))
     }, CALL_TIMEOUT_MS)
-    pending.set(id, { resolve, reject, timer, mcpId: args?.__mcpId, socket })
-    if (args?.__mcpId !== undefined) mcpToBridge.set(args.__mcpId, id)
-    // 在发送 WS 请求前登记，避免主进程先发来的进度事件找不到 token。
-    if (progressToken !== undefined) bridgeToProgressToken.set(id, progressToken)
-    const cleanArgs = { ...(args ?? {}) }
-    delete cleanArgs.__mcpId
-    const request = { id, tool: name, args: cleanArgs }
-    if (progressToken !== undefined) request.progressToken = progressToken
-    const failSend = (error) => {
-      if (!error || pending.get(id)?.socket !== socket) return
-      clearTimeout(timer)
-      pending.delete(id)
-      bridgeToProgressToken.delete(id)
-      if (args?.__mcpId !== undefined && mcpToBridge.get(args.__mcpId) === id) mcpToBridge.delete(args.__mcpId)
-      reject(error)
-    }
-    try {
-      if (socket.readyState !== WebSocket.OPEN) throw new Error('与 Aa Browser 的连接已断开。')
-      socket.send(JSON.stringify(request), failSend)
-    } catch (error) {
-      failSend(error)
-    }
+    // sendPending 在发送前登记 pending / progressToken，避免进度事件先到。
+    sendPending(p, socket)
   })
 }
 
@@ -459,19 +609,22 @@ function handleStdioLine(line) {
     const requestId = params?.requestId
     const bridgeId = mcpToBridge.get(requestId)
     if (bridgeId !== undefined) {
-      const p = pending.get(bridgeId)
-      if (p) {
-        clearTimeout(p.timer)
-        pending.delete(bridgeId)
-        bridgeToProgressToken.delete(bridgeId)
-        p.reject(new Error('MCP 请求已取消。'))
-      }
-      // -1 是"仍在等待建立连接"的占位 id；此时没有可发送的浏览器调用。
-      if (bridgeId === -1) cancelledMcpRequests.add(requestId)
-      else if (bridgeId > 0) {
-        try {
-          if (p?.socket.readyState === WebSocket.OPEN) p.socket.send(JSON.stringify({ id: bridgeId, cancel: true }))
-        } catch {}
+      // -1 是"仍在等待建立连接"的占位 id；-2 是"已断线、等待重连后重发"的只读调用。
+      if (bridgeId === -1) {
+        cancelledMcpRequests.add(requestId)
+      } else if (bridgeId === -2) {
+        for (const p of [...suspended]) {
+          if (p.mcpId === requestId) rejectPending(p, new Error('MCP 请求已取消。'))
+        }
+      } else {
+        const p = pending.get(bridgeId)
+        if (p) {
+          detachPending(p)
+          p.reject(new Error('MCP 请求已取消。'))
+          try {
+            if (p.socket?.readyState === WebSocket.OPEN) p.socket.send(JSON.stringify({ id: bridgeId, cancel: true }))
+          } catch {}
+        }
       }
       mcpToBridge.delete(requestId)
     }

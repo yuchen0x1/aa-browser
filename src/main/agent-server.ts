@@ -279,9 +279,10 @@ export class AgentServer {
       if (controller.signal.aborted || this.approvals?.isInterrupted()) {
         throw new Error('工具调用已被用户中断或取消。')
       }
-      const args = req.args ?? {}
       const toolSucceeded = typeof result === 'object' && result !== null && (result as { isError?: boolean }).isError !== true
-      if (toolSucceeded && req.tool === 'browser_tabs' && args['action'] === 'list' && !this.verifiedClients.has(ws)) {
+      // 任意一次成功调用都证明客户端确实能驱动浏览器。更新重启后桥会先重放
+      // 只读调用；只认 browser_tabs(list) 会让界面在任务已恢复时仍显示“等待首次调用”。
+      if (toolSucceeded && !this.verifiedClients.has(ws)) {
         this.verifiedClients.add(ws)
         this.onStatusChange(this.clients.size, this.verifiedClients.size)
       }

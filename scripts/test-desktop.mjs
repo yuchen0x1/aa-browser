@@ -104,13 +104,14 @@ if (!process.versions.electron) {
   // process starts, then assert it is restored instead of a blank new tab.
   const sessionFile = process.env.AA_BROWSER_SESSION_FILE
   assert.ok(sessionFile, 'desktop suite needs AA_BROWSER_SESSION_FILE')
+  // v2 记录带标签 id：更新重启后 Agent 缓存的 tabId 必须继续有效。
   fs.writeFileSync(sessionFile, JSON.stringify({
-    version: 1,
+    version: 2,
     savedAt: Date.now(),
     activeIndex: 1,
     tabs: [
-      { url: base + '/restored-a', title: 'Restored A' },
-      { url: base + '/restored-b', title: 'Restored B' }
+      { url: base + '/restored-a', title: 'Restored A', id: 'trestoreda' },
+      { url: base + '/restored-b', title: 'Restored B', id: 'trestoredb' }
     ]
   }))
   let chrome
@@ -235,7 +236,12 @@ if (!process.versions.electron) {
     assert.ok(initial.tabs.some((tab) => tab.url === base + '/restored-a'), `restored tabs: ${JSON.stringify(initial.tabs.map((tab) => tab.url))}`)
     assert.ok(initial.tabs.some((tab) => tab.url === base + '/restored-b'))
     assert.equal(initial.tabs.find((tab) => tab.active)?.url, base + '/restored-b')
-    pass('startup restores the previous session tabs and the saved active tab')
+    assert.deepEqual(
+      initial.tabs.map((tab) => tab.id),
+      ['trestoreda', 'trestoredb'],
+      `restored tab ids must survive the restart: ${JSON.stringify(initial.tabs)}`
+    )
+    pass('startup restores the previous session tabs, saved active tab and stable tab ids')
     const initialSettings = await ui('window.aa.settingsGet()')
     assert.equal(initialSettings.settings.theme, 'light')
     assert.equal(await ui('document.documentElement.dataset.theme'), 'light')

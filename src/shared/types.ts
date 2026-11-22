@@ -165,7 +165,7 @@ export interface AgentInfo {
   bridgeFile: BridgeFileState
   /** 已通过本机令牌认证的 MCP 桥数量 */
   clientCount: number
-  /** 已成功调用 browser_tabs(action=list) 的 MCP 桥数量 */
+  /** 已至少成功执行过一次工具调用的 MCP 桥数量 */
   verifiedClientCount: number
 }
 
