@@ -137,7 +137,7 @@ Eine geschriebene Konfiguration ist **keine** funktionierende Verbindung. Verifi
 
 ## MCP-Tools
 
-**42 Tools** in fünf Gruppen: Navigation & Snapshot (5), Interaktion (9), Lesen & Status (19), Netzwerk & Mock (6), Diagnose & Tabs (3). Tool-Namen im Client können das Präfix `mcp__aa-browser__` tragen.
+**43 Tools** in fünf Gruppen: Navigation & Snapshot (5), Interaktion (9), Lesen & Status (20), Netzwerk & Mock (6), Diagnose & Tabs (3). Tool-Namen im Client können das Präfix `mcp__aa-browser__` tragen.
 
 | Gruppe | Tools |
 | --- | --- |

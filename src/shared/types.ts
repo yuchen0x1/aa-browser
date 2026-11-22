@@ -3,6 +3,8 @@
 /** 浏览器外壳 UI 需要的标签信息 */
 export interface TabInfo {
   id: string
+  /** 标签创建时间（毫秒时间戳） */
+  createdAt?: number
   title: string
   url: string
   favicon?: string
@@ -10,6 +12,8 @@ export interface TabInfo {
   active: boolean
   /** 是否使用独立会话分区（不与普通标签共享登录态） */
   isolated?: boolean
+  /** 是否由跨会话恢复重建（沿用上次的标签 id） */
+  restored?: boolean
   canBack: boolean
   canForward: boolean
 }

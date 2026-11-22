@@ -11,6 +11,7 @@ import {
   setValueScript,
   selectOptionScript,
   scrollScript,
+  pageStateScript,
   extractScript,
   containsTextScript,
   readValueScript,
@@ -685,20 +686,59 @@ export async function doSelectOption(
   return { selected: `${result.value}${result.label !== result.value ? ` (${result.label})` : ''}`, snapshot }
 }
 
+export interface ScrollResult {
+  didScroll: boolean
+  where: string
+  before?: { x: number; y: number }
+  after?: { x: number; y: number }
+  atLimit?: boolean
+  scrollHeight?: number
+  scrollWidth?: number
+  viewportHeight?: number
+  viewportWidth?: number
+  visibilityState?: string
+  hidden?: boolean
+  reason?: string
+}
+
+/**
+ * 滚动并回报实际结果。
+ *
+ * 不再把 `executeJavaScript` 完成当成滚动成功：页面在末尾、内容不足一屏、
+ * 或滚动容器未初始化时，浏览器会静默不移动，调用方必须拿到 didScroll:false。
+ */
 export async function doScroll(
   tab: Tab,
   direction: string,
   amount: number,
   wantSnapshot: boolean
-): Promise<{ where: string; snapshot?: SnapshotSummary }> {
+): Promise<{ result: ScrollResult; snapshot?: SnapshotSummary }> {
   const wc = tab.view.webContents
-  const result = (await wc.executeJavaScript(scrollScript(direction, amount), false)) as {
-    ok: boolean
-    where?: string
+  const raw = (await wc.executeJavaScript(scrollScript(direction, amount), false)) as ScrollResult | null
+  const result: ScrollResult = {
+    didScroll: raw?.didScroll === true,
+    where: raw?.where ?? 'unknown',
+    ...(raw?.before ? { before: raw.before } : {}),
+    ...(raw?.after ? { after: raw.after } : {}),
+    ...(typeof raw?.atLimit === 'boolean' ? { atLimit: raw.atLimit } : {}),
+    ...(typeof raw?.scrollHeight === 'number' ? { scrollHeight: raw.scrollHeight } : {}),
+    ...(typeof raw?.scrollWidth === 'number' ? { scrollWidth: raw.scrollWidth } : {}),
+    ...(typeof raw?.viewportHeight === 'number' ? { viewportHeight: raw.viewportHeight } : {}),
+    ...(typeof raw?.viewportWidth === 'number' ? { viewportWidth: raw.viewportWidth } : {}),
+    ...(typeof raw?.visibilityState === 'string' ? { visibilityState: raw.visibilityState } : {}),
+    ...(typeof raw?.hidden === 'boolean' ? { hidden: raw.hidden } : {}),
+    ...(typeof raw?.reason === 'string' ? { reason: raw.reason } : {})
   }
   await delay(200)
   const snapshot = wantSnapshot ? await captureSnapshot(wc) : undefined
-  return { where: result?.where ?? 'unknown', snapshot }
+  return { result, snapshot }
+}
+
+/** 页面状态摘要（主进程侧补充标签信息，见 browser_page_state） */
+export async function doPageState(tab: Tab): Promise<Record<string, unknown>> {
+  const wc = tab.view.webContents
+  const page = (await wc.executeJavaScript(pageStateScript(), false)) as Record<string, unknown> | null
+  return page && typeof page === 'object' ? page : {}
 }
 
 export async function doExtract(tab: Tab, ref?: string): Promise<{ text: string; url?: string; title?: string }> {

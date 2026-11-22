@@ -32,9 +32,9 @@
 
 <!-- github-release:start -->
 
-**[v0.6.10 候选说明](./release-notes-v0.6.10.md)** · 2026-11-21 · 尚未正式发布
+**[v0.10.0](./release-notes-v0.10.0.md)** · 2026-11-22 · 最新正式版
 
-本轮修复 MCP 桥并发重连时的请求归属竞态，并减少 iframe 元素描述的已知敏感字段值回显；同时修复冷启动回归的 Chromium profile 异步清理失败。新增三项专项回归并改进现有冷启动回归，MCP 工具集保持 42 个，用户数据无需迁移。正式版下载与跨平台发行结果请以已发布 Release 为准。
+本版让滚动结果可验证：真实前后位置、`didScroll` 与边界原因不再被「已发送」掩盖。新增 `browser_page_state` 一次读取可见性、焦点、滚动、弹窗、Cloudflare 验证与限流；导航支持 `waitFor` 等待 SPA 渲染；标签列表附带实例与恢复信息。MCP 工具增至 43 个，用户数据无需迁移。
 
 [全部发行记录](https://github.com/yuchen0x1/aa-browser/releases)
 
@@ -46,7 +46,7 @@
 
 它适合把**真实登录态**交给 Agent 的场景：后台运营、数据采集、回归验证、抓包排障，以及把重复的网页操作交给模型。浏览器本体照常使用，Agent 只是多出来的一个「遥控器」。
 
-一句话概括：**42 个 MCP 工具、增量快照、真实输入、本地 token 鉴权，而浏览器本体也照常上网。**
+一句话概括：**43 个 MCP 工具、增量快照、真实输入、本地 token 鉴权，而浏览器本体也照常上网。**
 
 ## 目录
 
@@ -346,7 +346,7 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 
 ## MCP 工具
 
-共 **42 个**工具，按能力分为五类：导航与快照 5 个、交互 9 个、读取与状态 19 个、网络与 Mock 6 个、诊断与标签 3 个。工具名在客户端可能带 `mcp__aa-browser__` 前缀（如 `mcp__aa-browser__browser_tabs`），以客户端实际展示为准。
+共 **43 个**工具，按能力分为五类：导航与快照 5 个、交互 9 个、读取与状态 20 个、网络与 Mock 6 个、诊断与标签 3 个。工具名在客户端可能带 `mcp__aa-browser__` 前缀（如 `mcp__aa-browser__browser_tabs`），以客户端实际展示为准。
 
 共享行为：
 
@@ -360,7 +360,7 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 
 | 工具 | 说明 |
 | --- | --- |
-| `browser_navigate` | 导航到 URL（非 URL 文本自动转搜索词；结果内嵌完整快照，`snapshot: false` 可跳过） |
+| `browser_navigate` | 导航到 URL（非 URL 文本自动转搜索词；结果内嵌完整快照，`snapshot: false` 可跳过）。SPA 可用 `waitFor: { selector / text / urlContains, timeoutMs }` 等真实内容渲染；超时返回 `isError` 与当前快照 |
 | `browser_reload` | 刷新当前或指定标签页；`hard: true` 绕过缓存，默认返回刷新后快照 |
 | `browser_snapshot` | 结构化页面快照（默认增量省 token；`full: true` 强制完整树）。长页面可用 `maxNodes` 分页，响应给出 `nextCursor`，跨页 ref 仍有效 |
 | `browser_navigate_back` / `browser_navigate_forward` | 历史后退 / 前进（返回增量快照） |
@@ -375,7 +375,7 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 | `browser_select_option` | 按 ref 选择下拉项（按 value 或可见文本匹配） |
 | `browser_drag` | 按 ref 拖拽（拖到目标元素 `toRef` 或相对偏移 `dx, dy`，支持滑块与看板） |
 | `browser_hover` | 按 ref 悬停（真实 mouseMove，触发悬停菜单 / 提示） |
-| `browser_scroll` | 滚动页面（先主文档，后最大滚动区域；默认 700px，上限 3000px） |
+| `browser_scroll` | 滚动页面（先主文档，后该方向上最大的滚动区域；默认 700px，上限 3000px）。返回真实前后位置、`didScroll`、`atLimit`、`visibilityState` 与未滚动原因，不再把静默无操作报告为成功 |
 | `browser_press_key` | 按键：Enter / Escape / Tab / 方向键 / PageUp / PageDown / F1-F12 / 单字符；支持 `modifiers: [ctrl, alt, shift, meta]` 及 `Ctrl+C` / `Ctrl+Shift+R` 等组合 |
 | `browser_upload_file` | 向 `<input type=file>` 上传本机文件（触发 change 事件） |
 
@@ -384,6 +384,7 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 | 工具 | 说明 |
 | --- | --- |
 | `browser_extract` | 提取整页或指定元素的纯文本 |
+| `browser_page_state` | 一次读取页面状态：URL / 标题 / `readyState` / 可见性与焦点 / 滚动位置与高度 / 可见弹窗与被拦截的原生对话框 / Cloudflare 验证 / 限流提示，并附带浏览器实例、标签创建时间等身份信息 |
 | `browser_evaluate` | 在页面执行 JS 表达式并返回 JSON（可按 ref 绑定 `element`） |
 | `browser_dialogs` | 读取页面弹过的 `alert` / `confirm` / `prompt`（已被拦截，不会卡死），并显示守卫实际返回的值 |
 | `browser_dialog_respond` | 预设 `confirm` / `prompt` 的返回值（可 `once:false` 常驻、`reset:true` 清除），用于测试需要确认或输入的流程 |
@@ -420,7 +421,7 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 | --- | --- |
 | `browser_performance` | 页面性能摘要：TTFB / DOMContentLoaded / load、首绘、资源体积与慢资源、JS 堆、DOM 规模（只读诊断） |
 | `browser_resize` | 调整视口尺寸 200–5000px（响应式测试） |
-| `browser_tabs` | 列表 / 新建 / 切换 / 关闭标签页；`isolated: true` 新建隔离标签 |
+| `browser_tabs` | 列表 / 新建 / 切换 / 关闭标签页；列表附带浏览器实例、PID、版本、启动时间、标签创建时间与恢复标记；`isolated: true` 新建隔离标签；`select` 可加 `bringToFront: true` 同时恢复窗口并聚焦页面 |
 
 视觉评审建议流程：先用 `browser_viewport_matrix` 跑一遍响应式矩阵（发现横向溢出），再用 `browser_contrast_audit` 找不可读文本，最后对关键页面用 `browser_visual_diff action=save` 存基线、改动后 `action=compare` 做回归对比。基线目录可用 `AA_BROWSER_BASELINE_DIR` 覆盖。
 

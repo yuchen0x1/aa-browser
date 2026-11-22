@@ -32,6 +32,7 @@ export class AgentServer {
   private port = 0
   private token = ''
   private instanceId = crypto.randomUUID()
+  private startedAt = 0
   private ownConnectionFile = ''
   private activityState: AgentActivityState = { active: false, paused: false }
   private activeTools = new Map<WebSocket, Map<number, ActiveTool>>()
@@ -51,6 +52,11 @@ export class AgentServer {
     this.wss.on('connection', (ws, req) => this.onConnection(ws, req))
   }
 
+  /** 供 MCP 工具展示的运行时身份；不包含令牌和端口。 */
+  get runtimeInfo(): { instanceId: string; pid: number; version: string; startedAt: number } {
+    return { instanceId: this.instanceId, pid: process.pid, version: this.version, startedAt: this.startedAt }
+  }
+
   async start(): Promise<void> {
     this.token = crypto.randomBytes(24).toString('hex')
     await new Promise<void>((resolve, reject) => {
@@ -62,12 +68,13 @@ export class AgentServer {
       })
     })
     this.ownConnectionFile = connectionFile()
+    this.startedAt = Date.now()
     const info: ConnectionInfo = {
       port: this.port,
       token: this.token,
       pid: process.pid,
       version: this.version,
-      startedAt: Date.now(),
+      startedAt: this.startedAt,
       instanceId: this.instanceId
     }
     const discoveryDir = path.resolve(path.dirname(this.ownConnectionFile))

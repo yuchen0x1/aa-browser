@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-globalThis.__AA_BRIDGE_VERSION__ = "0.9.1";
+globalThis.__AA_BRIDGE_VERSION__ = "0.10.0";
 // \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -3672,7 +3672,7 @@ const TOOL_DEFS = [
 	{
 		name: "browser_navigate",
 		title: "导航",
-		description: "Navigate the browser to a URL in the active tab (or a new tab). Plain text that is not a URL is treated as a search query. Returns a full page snapshot after loading, so you can act immediately (pass snapshot:false to skip it if you only need browser_extract / browser_wait).",
+		description: "Navigate the browser to a URL in the active tab (or a new tab). Plain text that is not a URL is treated as a search query. Returns a full page snapshot after loading, so you can act immediately (pass snapshot:false to skip it if you only need browser_extract / browser_wait). For SPAs (Discourse, React apps), pass waitFor to wait until the real content is rendered; a timeout returns isError with the partial page snapshot.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -3687,6 +3687,28 @@ const TOOL_DEFS = [
 				snapshot: {
 					type: "boolean",
 					description: "Include a full snapshot in the result (default true)"
+				},
+				waitFor: {
+					type: "object",
+					description: "Wait after load until one condition is met (default timeout 10000ms, max 30000ms)",
+					properties: {
+						selector: {
+							type: "string",
+							description: "Wait until this CSS selector matches a visible element (preferred for SPAs)"
+						},
+						text: {
+							type: "string",
+							description: "Wait until this text appears on the page"
+						},
+						urlContains: {
+							type: "string",
+							description: "Wait until the page URL contains this string"
+						},
+						timeoutMs: {
+							type: "number",
+							description: "Wait timeout in ms (default 10000, max 30000)"
+						}
+					}
 				},
 				tabId: {
 					type: "string",
@@ -3884,7 +3906,7 @@ const TOOL_DEFS = [
 	{
 		name: "browser_scroll",
 		title: "滚动页面",
-		description: "Scroll the page (window first, then the largest scrollable area). Useful before re-snapshotting content outside the viewport.",
+		description: "Scroll the page (window first, then the largest scrollable area in the requested direction). Returns the real before/after position, didScroll, atLimit and visibilityState: a scroll that did not move the page reports didScroll:false with a reason instead of a success message. Useful before re-snapshotting content outside the viewport.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -3930,6 +3952,18 @@ const TOOL_DEFS = [
 					description: "Tab id (default: active tab)"
 				}
 			}
+		}
+	},
+	{
+		name: "browser_page_state",
+		title: "页面状态",
+		description: "Read a compact page-state summary in one call: URL, title, readyState, visibilityState/hasFocus, scroll position/height/viewport (and whether the page is scrollable), visible dialogs plus intercepted alert/confirm/prompt records, Cloudflare challenge and rate-limit hints, and the browser/tab identity. Read-only. Use it before long tasks or whenever navigation or scrolling seems to have no effect.",
+		inputSchema: {
+			type: "object",
+			properties: { tabId: {
+				type: "string",
+				description: "Tab id (default: active tab)"
+			} }
 		}
 	},
 	{
@@ -4794,7 +4828,7 @@ const TOOL_DEFS = [
 	{
 		name: "browser_tabs",
 		title: "标签管理",
-		description: "Manage tabs: \"list\" shows all tabs with ids (isolated ones are marked); \"new\" opens a URL in a new tab; \"select\" makes a tab active; \"close\" closes a tab. Tabs share the default session (cookies/logins) unless created with isolated:true, which uses a throwaway partition cleared on close.",
+		description: "Manage tabs: \"list\" shows all tabs with ids (isolated tabs are marked, restored tabs are marked ♻) plus the browser instance id, PID, version, start time and each tab creation time; \"new\" opens a URL in a new tab; \"select\" makes a tab active (pass bringToFront:true to also bring the OS window to the front and focus the page); \"close\" closes a tab. Tabs share the default session (cookies/logins) unless created with isolated:true, which uses a throwaway partition cleared on close.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -4819,6 +4853,10 @@ const TOOL_DEFS = [
 				tabId: {
 					type: "string",
 					description: "(action=select/close) target tab id"
+				},
+				bringToFront: {
+					type: "boolean",
+					description: "(action=select) Also restore/show the browser window and focus the page (default false: only switches the active tab)"
 				}
 			},
 			required: ["action"]
@@ -5034,6 +5072,12 @@ const TOOL_ANNOTATIONS = Object.freeze({
 		openWorldHint: true
 	},
 	browser_extract: {
+		readOnlyHint: true,
+		destructiveHint: false,
+		idempotentHint: true,
+		openWorldHint: true
+	},
+	browser_page_state: {
 		readOnlyHint: true,
 		destructiveHint: false,
 		idempotentHint: true,

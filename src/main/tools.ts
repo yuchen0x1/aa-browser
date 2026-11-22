@@ -37,6 +37,7 @@ import {
   doType,
   doSelectOption,
   doScroll,
+  doPageState,
   doExtract,
   doWaitForText,
   doWaitForCondition,
@@ -163,15 +164,30 @@ function withSnap(base: string, snapshot: unknown, wantSnapshot: boolean): strin
   return base + '\n\n' + snapshotText(snapshot as Parameters<typeof snapshotText>[0])
 }
 
+export interface BrowserRuntimeInfo {
+  instanceId?: string
+  pid: number
+  version?: string
+  startedAt?: number
+}
+
+export interface WindowControl {
+  resize: (w: number, h: number) => Promise<{ width: number; height: number }>
+  /** 把浏览器窗口带到前台（最小化时先恢复）。 */
+  focus?: () => void
+  state?: () => { focused: boolean; visible: boolean; minimized: boolean }
+}
+
 export function buildTools(
   tabs: TabManager,
   newtabUrl: string,
   searchUrl: string,
-  windowCtl: { resize: (w: number, h: number) => Promise<{ width: number; height: number }> },
+  windowCtl: WindowControl,
   downloads: DownloadTracker,
   approvals?: ApprovalManager,
   onAction?: (item: import('@shared/types').ActionLogItem) => void,
-  getSettings?: () => { requireOperationApproval: boolean; fullSnapshot?: boolean; searchEngine?: string }
+  getSettings?: () => { requireOperationApproval: boolean; fullSnapshot?: boolean; searchEngine?: string },
+  browserInfo?: () => BrowserRuntimeInfo
 ): McpToolDef[] {
   const tools: McpToolDefBase[] = []
   /** title / description / inputSchema 来自单一来源，主进程只保留 name 与 handler。 */
@@ -320,13 +336,41 @@ export function buildTools(
       if (!url) throw new ActionError('url 不能为空')
       const target = normalizeUrl(url, getSettings?.().searchEngine || searchUrl, newtabUrl)
       const signal = callSignal(args)
+      const rawWait = args['waitFor']
+      const waitFor = rawWait && typeof rawWait === 'object' && !Array.isArray(rawWait) ? (rawWait as Record<string, unknown>) : null
+      const waitSelector = typeof waitFor?.['selector'] === 'string' && waitFor['selector'] ? String(waitFor['selector']) : ''
+      const waitText = typeof waitFor?.['text'] === 'string' && waitFor['text'] ? String(waitFor['text']) : ''
+      const waitUrl = typeof waitFor?.['urlContains'] === 'string' && waitFor['urlContains'] ? String(waitFor['urlContains']) : ''
+      if (waitFor && !waitSelector && !waitText && !waitUrl) {
+        throw new ActionError('waitFor 需要 selector、text 或 urlContains 之一')
+      }
+      const waitTimeoutMs = typeof waitFor?.['timeoutMs'] === 'number'
+        ? Math.min(30000, Math.max(1000, waitFor['timeoutMs'] as number))
+        : 10000
+      type WaitOutcome = { found: boolean; elapsedMs: number; condition: string }
+      const waitState: { outcome: WaitOutcome | null } = { outcome: null }
       let snapshot = ''
       const r = await doNavigate(tabs, target, {
         newTab: !!args['newTab'],
         tabId: args['tabId'] as string | undefined,
         signal,
-        onComplete: async (tab) => {
+        onComplete: async (tab, navSignal) => {
           assertToolRunning(signal)
+          // 等待条件在标签锁内完成：SPA 渲染期间不会有其他 MCP 操作插进来。
+          if (waitFor) {
+            const condition = waitSelector ? `selector=${waitSelector}` : waitText ? `text=${waitText}` : `urlContains=${waitUrl}`
+            if (waitSelector) {
+              const w = await doWaitForDom(tab, { selector: waitSelector, timeoutMs: waitTimeoutMs, signal: navSignal })
+              waitState.outcome = { found: w.found, elapsedMs: w.elapsedMs, condition }
+            } else if (waitText) {
+              const w = await doWaitForCondition(tab, { text: waitText, timeoutMs: waitTimeoutMs, signal: navSignal })
+              waitState.outcome = { found: w.found, elapsedMs: w.elapsedMs, condition }
+            } else {
+              const w = await doWaitForDom(tab, { urlContains: waitUrl, timeoutMs: waitTimeoutMs, signal: navSignal })
+              waitState.outcome = { found: w.found, elapsedMs: w.elapsedMs, condition }
+            }
+            assertToolRunning(signal)
+          }
           if (args['snapshot'] === false) return
           try {
             const snap = await captureSnapshot(tab.view.webContents)
@@ -338,7 +382,14 @@ export function buildTools(
           }
         }
       })
-      return { content: [text(`已导航: ${r.url}\ntitle: ${r.title}${snapshot}`)] }
+      const waitOutcome = waitState.outcome
+      const waitNote = waitOutcome
+        ? `\n等待条件 ${waitOutcome.condition}: ${waitOutcome.found ? `已满足（${waitOutcome.elapsedMs}ms）` : `超时（${waitOutcome.elapsedMs}ms）`}`
+        : ''
+      return {
+        content: [text(`已导航: ${r.url}\ntitle: ${r.title}${waitNote}${snapshot}`)],
+        ...(waitOutcome && !waitOutcome.found ? { isError: true } : {})
+      }
     }
   })
 
@@ -475,8 +526,27 @@ export function buildTools(
       const dir = String(args['direction'] ?? 'down')
       if (!['up', 'down', 'left', 'right'].includes(dir)) throw new ActionError('direction 必须是 up/down/left/right')
       const amount = typeof args['amount'] === 'number' ? args['amount'] : 700
-      const r = await onTab(tab, callSignal(args), () => doScroll(tab, dir, amount, want))
-      return { content: [text(withSnap(`已滚动: ${dir} ${amount}px（作用区域: ${r.where}）`, r.snapshot, want))] }
+      const { result, snapshot } = await onTab(tab, callSignal(args), () => doScroll(tab, dir, amount, want))
+      const reasonText =
+        result.reason === 'at-limit' ? '已到该方向的可滚动边界'
+          : result.reason === 'not-scrollable' ? '页面内容不足一屏，无法滚动'
+            : result.reason === 'no-scrollable-area' ? '未找到可滚动区域（页面可能尚未完成渲染）'
+              : '页面位置未变化'
+      const head = result.didScroll
+        ? `已滚动: ${dir} ${amount}px（作用区域: ${result.where}）`
+        : `未发生滚动: ${dir} ${amount}px（${reasonText}）`
+      const pos = result.before && result.after
+        ? `位置: (${result.before.x}, ${result.before.y}) → (${result.after.x}, ${result.after.y})`
+        : ''
+      const hint = result.didScroll
+        ? ''
+        : '如果页面确实还有未读内容，先 browser_wait 等待选择器出现，或 browser_page_state 确认滚动高度与可见性。'
+      const visibilityHint = result.hidden
+        ? `页面处于后台（visibilityState=${result.visibilityState ?? 'hidden'}）；滚动仍会执行，但定时器与网络上报可能被节流。`
+        : ''
+      const details = { ...result, tabId: tab.id, activeTab: tabs.activeId === tab.id }
+      const base = [head, pos, visibilityHint, hint, JSON.stringify(details, null, 2)].filter(Boolean).join('\n')
+      return { content: [text(withSnap(base, snapshot, want))] }
     }
   })
 
@@ -487,6 +557,30 @@ export function buildTools(
       const r = await onTab(tab, callSignal(args), () => doExtract(tab, args['ref'] as string | undefined))
       const head = r.title ? `title: ${r.title}\n\n` : ''
       return { content: [text(head + r.text)] }
+    }
+  })
+
+  pushTool({
+    name: 'browser_page_state',
+    handler: async (args) => {
+      const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      const page = await onTab(tab, callSignal(args), () => doPageState(tab))
+      const info = browserInfo?.()
+      const win = windowCtl.state?.()
+      const state = {
+        browser: info ?? { pid: process.pid },
+        window: win ?? null,
+        tabId: tab.id,
+        activeTab: tabs.activeId === tab.id,
+        tabTitle: tab.title,
+        isolated: tab.isolated,
+        restored: tab.restored,
+        loading: tab.loading,
+        createdAt: tab.createdAt,
+        ...page,
+        ready: page['readyState'] === 'complete' && !tab.loading
+      }
+      return { content: [text(JSON.stringify(state, null, 2))] }
     }
   })
 
@@ -1001,11 +1095,26 @@ export function buildTools(
       approvals?.assertRunning()
       const action = String(args['action'] ?? 'list')
       if (action === 'list') {
-        const lines = tabs.infos().map(
-          (t, i) =>
-            `${i + 1}. [${t.id}]${t.active ? ' ★活动' : ''}${t.isolated ? ' 🔒隔离' : ''} ${t.title}\n   ${t.url}`
-        )
-        return { content: [text(lines.length ? `共 ${lines.length} 个标签页：\n${lines.join('\n')}` : '（无标签页）')] }
+        const info = browserInfo?.()
+        const win = windowCtl.state?.()
+        const header: string[] = []
+        if (info) {
+          const started = typeof info.startedAt === 'number' ? new Date(info.startedAt).toISOString() : ''
+          header.push(
+            `浏览器实例: ${info.instanceId ? info.instanceId.slice(0, 8) : 'unknown'} · PID ${info.pid}` +
+              (info.version ? ` · v${info.version}` : '') +
+              (started ? ` · 启动 ${started}` : '')
+          )
+        }
+        if (win) {
+          header.push(`窗口: ${win.minimized ? '最小化' : win.visible ? '可见' : '隐藏'} · ${win.focused ? '前台' : '后台'}`)
+        }
+        const lines = tabs.infos().map((t, i) => {
+          const created = typeof t.createdAt === 'number' ? ` · 创建 ${new Date(t.createdAt).toISOString().slice(11, 19)}Z` : ''
+          return `${i + 1}. [${t.id}]${t.active ? ' ★活动' : ''}${t.isolated ? ' 🔒隔离' : ''}${t.restored ? ' ♻恢复' : ''} ${t.title}${created}\n   ${t.url}`
+        })
+        const body = lines.length ? `共 ${lines.length} 个标签页：\n${lines.join('\n')}` : '（无标签页）'
+        return { content: [text(header.length ? `${header.join('\n')}\n${body}` : body)] }
       }
       if (action === 'new') {
         const url = String(args['url'] ?? '')
@@ -1017,10 +1126,39 @@ export function buildTools(
       }
       if (action === 'select') {
         const id = String(args['tabId'] ?? '')
-        if (!tabs.get(id)) throw new ActionError(`标签不存在: ${id}（用 action=list 查看）`)
-        tabs.selectTab(id)
         const t = tabs.get(id)
-        return { content: [text(`已切换到: [${id}] ${t?.title ?? ''}`)] }
+        if (!t) throw new ActionError(`标签不存在: ${id}（用 action=list 查看）`)
+        tabs.selectTab(id)
+        const bringToFront = args['bringToFront'] === true
+        if (bringToFront) {
+          try {
+            windowCtl.focus?.()
+          } catch {
+            /* 窗口可能正在销毁 */
+          }
+          try {
+            t.view.webContents.focus()
+          } catch {
+            /* 页面可能正在导航 */
+          }
+        }
+        let visibilityState = 'unknown'
+        try {
+          visibilityState = String(await t.view.webContents.executeJavaScript('String(document.visibilityState || "unknown")', false))
+        } catch {
+          /* 页面尚未就绪 */
+        }
+        const win = windowCtl.state?.()
+        const focusNote = win && !win.focused && !bringToFront
+          ? '\n（窗口当前不在前台；select 只切换标签，需要系统级焦点请传 bringToFront: true）'
+          : ''
+        return {
+          content: [
+            text(
+              `已切换到: [${id}] ${t.title}\nwindowFocused: ${win?.focused === true}\nvisibilityState: ${visibilityState}${focusNote}`
+            )
+          ]
+        }
       }
       if (action === 'close') {
         const id = String(args['tabId'] ?? '')
@@ -1029,7 +1167,7 @@ export function buildTools(
         tabs.closeTab(id)
         return { content: [text(`已关闭: [${id}] ${t.title}`)] }
       }
-      throw new ActionError(`未知 action: ${action}`)
+      throw new ActionError(`未知 action: ${action}。可用 action：list、new、select、close。`)
     }
   })
 
@@ -1208,13 +1346,44 @@ export function buildTools(
         if (value && typeof value === 'object' && '__aaError' in (value as Record<string, unknown>)) {
           throw new ActionError(String((value as Record<string, unknown>)['__aaError']))
         }
-        let rendered: string
+        let rendered: string | undefined
+        const valueType = value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value
         try {
           rendered = JSON.stringify(value, null, 2)
-        } catch {
-          rendered = String(value)
+        } catch (err) {
+          // 循环引用、BigInt 等无法直接 JSON 化：给出结构化诊断，而不是丢弃类型信息。
+          let preview = ''
+          try {
+            preview = String(value).slice(0, 300)
+          } catch {
+            /* 极少数宿主对象连 String 都会抛错 */
+          }
+          rendered = JSON.stringify(
+            {
+              serializationError: {
+                code: 'EVALUATE_RESULT_SERIALIZATION_FAILED',
+                valueType,
+                message: err instanceof Error ? err.message : String(err),
+                preview
+              }
+            },
+            null,
+            2
+          )
         }
-        if (rendered === undefined) rendered = String(value)
+        if (rendered === undefined) {
+          let preview = ''
+          try {
+            preview = String(value).slice(0, 300)
+          } catch {
+            /* ignore */
+          }
+          rendered = JSON.stringify(
+            { valueType, preview, note: '表达式结果无法直接序列化为 JSON（undefined / function / symbol）' },
+            null,
+            2
+          )
+        }
         const MAX = 20000
         if (rendered.length > MAX) rendered = rendered.slice(0, MAX) + '\n…（结果过长已截断）'
         return { content: [text(rendered)] }

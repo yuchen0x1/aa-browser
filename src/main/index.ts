@@ -946,7 +946,13 @@ app.whenReady().then(async () => {
           win.setContentSize(w, h)
           const { width, height } = win.getContentBounds()
           resolve({ width, height })
-        })
+        }),
+      focus: () => revealWindow(),
+      state: () => {
+        const current = win
+        if (!current || current.isDestroyed()) return { focused: false, visible: false, minimized: false }
+        return { focused: current.isFocused(), visible: current.isVisible(), minimized: current.isMinimized() }
+      }
     },
     getDownloadTracker(),
     approvals,
@@ -954,7 +960,8 @@ app.whenReady().then(async () => {
     () => {
       const settings = getSettingsStore().get()
       return { requireOperationApproval: settings.requireOperationApproval, fullSnapshot: settings.fullSnapshot, searchEngine: settings.searchEngine }
-    }
+    },
+    () => agentServer?.runtimeInfo ?? { pid: process.pid, version: VERSION }
   )
   agentServer = new AgentServer(
     tools,

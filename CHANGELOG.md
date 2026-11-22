@@ -2,6 +2,16 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
+## v0.10.0 — 2026-11-22
+
+- **滚动结果可验证**：`browser_scroll` 返回真实前后位置、`didScroll`、`atLimit`、`visibilityState` 与未滚动原因；主文档不动时按请求方向尝试最大滚动容器并再次校验，不再把静默无操作报告为「已滚动」。
+- **新增 `browser_page_state`**：一次返回 URL / 标题 / `readyState` / 可见性与焦点 / 滚动高度 / 可见弹窗与被拦截的原生对话框 / Cloudflare 验证 / 限流提示，并附带浏览器实例、标签 id 与创建时间。
+- **标签与窗口控制**：`browser_tabs list` 显示实例 id、PID、版本、启动时间、标签创建时间与恢复标记；`select` 支持 `bringToFront: true` 恢复窗口并聚焦页面；未知 action 的错误列出可用值。
+- **SPA 导航等待**：`browser_navigate` 支持 `waitFor: { selector | text | urlContains, timeoutMs }`，超时返回 `isError` 并附当前快照。
+- **evaluate 序列化诊断**：循环引用 / BigInt / undefined / function 返回 `EVALUATE_RESULT_SERIALIZATION_FAILED` 的结构化类型、消息与预览，而不是只回字符串。
+- 修复 `browser_get_selector` 中模板字符串吞掉反斜杠导致文本压缩正则与 `CSS.escape` 兜底失效的问题。
+- MCP 工具数由 42 增至 43；README 与静态工具手册已同步。
+
 ## v0.9.1 — 2026-11-22
 
 - **更新不再打断 AI 任务**：更新重启导致 WebSocket 断开时，只读且幂等的在途调用（快照、提取、截图、控制台、网络记录、断言等，以及 `browser_tabs` 的 `list`）会挂起并在新实例就绪后自动重发，AI 当前步骤继续拿到结果；点击、输入、提交等写操作不重放，只返回明确的「请重新读取页面状态」错误。

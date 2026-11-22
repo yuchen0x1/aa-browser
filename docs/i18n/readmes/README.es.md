@@ -137,7 +137,7 @@ Una configuración escrita **no** es una conexión funcional. Verifícala con `n
 
 ## Herramientas MCP
 
-**42 herramientas** en cinco grupos: navegación y snapshot (5), interacción (9), lectura y estado (19), red y Mock (6), diagnóstico y pestañas (3). Los nombres de herramienta en el cliente pueden llevar el prefijo `mcp__aa-browser__`.
+**43 herramientas** en cinco grupos: navegación y snapshot (5), interacción (9), lectura y estado (20), red y Mock (6), diagnóstico y pestañas (3). Los nombres de herramienta en el cliente pueden llevar el prefijo `mcp__aa-browser__`.
 
 | Grupo | Herramientas |
 | --- | --- |

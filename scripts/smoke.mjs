@@ -1296,6 +1296,107 @@ async function main() {
       const staleLegacy = path.join(partsDir, 'tab-tlegacytest')
       check('启动时清除遗留隔离分区', !fs.existsSync(staleIso), `仍存在 ${staleIso}`)
       check('启动时清除 v0.6.x 每标签分区', !fs.existsSync(staleLegacy), `仍存在 ${staleLegacy}`)
+
+      console.log('\n[19] 页面状态 / 滚动校验 / 导航等待 / 序列化诊断')
+      const navWaited = await mcp.call('browser_navigate', {
+        url: testPageUrl,
+        snapshot: false,
+        waitFor: { selector: '#out', timeoutMs: 3000 }
+      })
+      const navWaitedText = mcp.text(navWaited)
+      check(
+        'navigate waitFor 选择器满足并报告耗时',
+        !navWaited.isError && navWaitedText.includes('等待条件 selector=#out: 已满足'),
+        navWaitedText.slice(0, 220)
+      )
+
+      const stateResult = await mcp.call('browser_page_state', {})
+      let pageState = null
+      try { pageState = JSON.parse(mcp.text(stateResult)) } catch {}
+      check('page_state 返回可解析 JSON', !!pageState, mcp.text(stateResult).slice(0, 200))
+      check(
+        'page_state 附带实例 / 标签 / 创建时间',
+        pageState?.browser?.pid === info.pid && typeof pageState?.tabId === 'string' && typeof pageState?.createdAt === 'number',
+        mcp.text(stateResult).slice(0, 300)
+      )
+      check(
+        'page_state 报告可见性、焦点与滚动字段',
+        typeof pageState?.visibilityState === 'string' &&
+          typeof pageState?.hasFocus === 'boolean' &&
+          typeof pageState?.scroll?.scrollHeight === 'number' &&
+          typeof pageState?.scroll?.viewportHeight === 'number',
+        mcp.text(stateResult).slice(0, 400)
+      )
+      check('page_state 报告页面已就绪', pageState?.ready === true, mcp.text(stateResult).slice(0, 200))
+
+      const noScroll = await mcp.call('browser_scroll', { direction: 'down', amount: 500, snapshot: false })
+      const noScrollText = mcp.text(noScroll)
+      check(
+        '短页滚动明确报告未发生及原因',
+        noScrollText.includes('未发生滚动') && noScrollText.includes('"didScroll": false') && noScrollText.includes('"reason": "not-scrollable"'),
+        noScrollText.slice(0, 320)
+      )
+
+      await mcp.call('browser_evaluate', {
+        expression: "(() => { const d = document.createElement('div'); d.id = 'aa-tall'; d.style.height = '4000px'; document.body.appendChild(d); return document.documentElement.scrollHeight })()"
+      })
+      const moved = await mcp.call('browser_scroll', { direction: 'down', amount: 800, snapshot: false })
+      const movedText = mcp.text(moved)
+      check(
+        '长页滚动返回真实前后位置',
+        movedText.includes('已滚动') && movedText.includes('"didScroll": true') && movedText.includes('"before"') && movedText.includes('"after"'),
+        movedText.slice(0, 320)
+      )
+      await mcp.call('browser_scroll', { direction: 'down', amount: 3000, snapshot: false })
+      // 页面高度未知，最多再滚 3 次直到确实到底；最后一次必须报告未移动。
+      let atBottomText = ''
+      for (let i = 0; i < 3; i++) {
+        atBottomText = mcp.text(await mcp.call('browser_scroll', { direction: 'down', amount: 3000, snapshot: false }))
+        if (atBottomText.includes('"didScroll": false')) break
+      }
+      check(
+        '到底后再次滚动返回 didScroll:false / at-limit',
+        atBottomText.includes('未发生滚动') && atBottomText.includes('"didScroll": false') && atBottomText.includes('"atLimit": true'),
+        atBottomText.slice(0, 320)
+      )
+
+      const timeoutNav = await mcp.call('browser_navigate', {
+        url: testPageUrl,
+        snapshot: false,
+        waitFor: { selector: '#definitely-not-here', timeoutMs: 1200 }
+      })
+      const timeoutNavText = mcp.text(timeoutNav)
+      check(
+        'waitFor 超时返回 isError 并说明条件',
+        timeoutNav.isError && timeoutNavText.includes('等待条件 selector=#definitely-not-here: 超时'),
+        timeoutNavText.slice(0, 240)
+      )
+
+      const circular = await mcp.call('browser_evaluate', {
+        expression: '(() => { const o = {}; o.self = o; return o })()'
+      })
+      const circularText = mcp.text(circular)
+      check(
+        '循环引用返回结构化序列化诊断',
+        circularText.includes('EVALUATE_RESULT_SERIALIZATION_FAILED') && circularText.includes('"valueType": "object"'),
+        circularText.slice(0, 240)
+      )
+
+      const tabsWithIdentity = mcp.text(await mcp.call('browser_tabs', { action: 'list' }))
+      check(
+        '标签列表含实例、PID 与创建时间',
+        tabsWithIdentity.includes('浏览器实例:') && tabsWithIdentity.includes(`PID ${info.pid}`) && tabsWithIdentity.includes('创建 '),
+        tabsWithIdentity.slice(0, 320)
+      )
+      const activeTabId = (/^\d+\. \[([^\]]+)\] ★活动/m.exec(tabsWithIdentity) || [])[1]
+      const selectState = activeTabId
+        ? mcp.text(await mcp.call('browser_tabs', { action: 'select', tabId: activeTabId }))
+        : ''
+      check(
+        'browser_tabs select 返回窗口焦点与页面可见性',
+        /windowFocused: (true|false)/.test(selectState) && /visibilityState: \w+/.test(selectState),
+        selectState.slice(0, 200)
+      )
     } finally {
       server.close()
     }

@@ -229,7 +229,13 @@ export const selectOptionScript = (ref: string, value?: string, label?: string):
 })()`
 }
 
-/** 滚动：先滚主文档，失败则找最大可滚动区域 */
+/**
+ * 滚动：先滚主文档，失败则找最大可滚动区域。
+ *
+ * 返回实际前后位置，而不是只回 `{ ok: true }`：调用方必须能区分
+ * 「滚动指令已发出」和「页面真的移动了」——到末尾、内容不足一屏、
+ * 或滚动容器尚未初始化时，scrollBy 会静默无操作，旧实现仍报告成功。
+ */
 export const scrollScript = (direction: string, amount: number): string => {
   const d = jsLiteral(direction)
   const a = Math.max(50, Math.min(3000, Math.round(amount)))
@@ -237,28 +243,150 @@ export const scrollScript = (direction: string, amount: number): string => {
   const dir = ${d}, amt = ${a}
   const dx = dir === 'right' ? amt : dir === 'left' ? -amt : 0
   const dy = dir === 'down' ? amt : dir === 'up' ? -amt : 0
-  const bx = window.scrollX, by = window.scrollY
-  window.scrollBy(dx, dy)
-  if (Math.abs(window.scrollY - by) > 0 || Math.abs(window.scrollX - bx) > 0) return { ok: true, where: 'window' }
+  const root = document.scrollingElement || document.documentElement
+  const body = document.body
+  const extent = (el) => {
+    if (!el) return { width: 0, height: 0, viewWidth: window.innerWidth, viewHeight: window.innerHeight }
+    const isRoot = el === document.scrollingElement || el === document.documentElement || el === body
+    return {
+      width: Math.max(Number(el.scrollWidth) || 0, isRoot && body ? Number(body.scrollWidth) || 0 : 0),
+      height: Math.max(Number(el.scrollHeight) || 0, isRoot && body ? Number(body.scrollHeight) || 0 : 0),
+      viewWidth: isRoot ? window.innerWidth : el.clientWidth,
+      viewHeight: isRoot ? window.innerHeight : el.clientHeight
+    }
+  }
+  const readPos = (el) => el
+    ? { x: Math.round(Number(el.scrollLeft) || 0), y: Math.round(Number(el.scrollTop) || 0) }
+    : { x: Math.round(window.scrollX || 0), y: Math.round(window.scrollY || 0) }
+  // 在请求方向上还能不能再滚，而不是笼统的「到页面底部」。
+  const atLimit = (pos, size) => {
+    if (dy !== 0) return dy > 0 ? pos.y + size.viewHeight >= size.height - 2 : pos.y <= 1
+    return dx > 0 ? pos.x + size.viewWidth >= size.width - 2 : pos.x <= 1
+  }
+  const state = (where, before, after, el, reason) => {
+    const size = extent(el)
+    return {
+      ok: true,
+      didScroll: before.x !== after.x || before.y !== after.y,
+      where,
+      before,
+      after,
+      atLimit: atLimit(after, size),
+      scrollHeight: size.height,
+      scrollWidth: size.width,
+      viewportHeight: size.viewHeight,
+      viewportWidth: size.viewWidth,
+      visibilityState: String(document.visibilityState || 'unknown'),
+      hidden: document.hidden === true,
+      ...(reason ? { reason } : {})
+    }
+  }
+  const rootBefore = readPos(root)
+  try { window.scrollBy({ left: dx, top: dy, behavior: 'instant' }) } catch (e) { window.scrollBy(dx, dy) }
+  const rootAfter = readPos(root)
+  if (rootAfter.x !== rootBefore.x || rootAfter.y !== rootBefore.y) return state('window', rootBefore, rootAfter, root)
+  // 页面没有移动：在请求方向上找最大的可滚动容器再试一次。
   let best = null, bestArea = 0, count = 0
   const all = document.querySelectorAll('div,main,section,nav,aside,ul,ol,textarea')
   for (let i = 0; i < all.length && count < 3000; i++, count++) {
     const el = all[i]
-    const cs = getComputedStyle(el)
+    let cs = null
+    try { cs = getComputedStyle(el) } catch (e) {}
+    if (!cs) continue
     const scrollableY = /(auto|scroll)/.test(cs.overflowY) && el.scrollHeight > el.clientHeight + 4
     const scrollableX = /(auto|scroll)/.test(cs.overflowX) && el.scrollWidth > el.clientWidth + 4
-    if (!scrollableY && !scrollableX) continue
+    if (dy !== 0 ? !scrollableY : !scrollableX) continue
     const area = el.clientWidth * el.clientHeight
     if (area > bestArea) { bestArea = area; best = el }
   }
   if (best) {
+    const before = readPos(best)
     if (dy) best.scrollTop += dy
     if (dx) best.scrollLeft += dx
-    return { ok: true, where: 'element' }
+    const after = readPos(best)
+    return state('element', before, after, best)
   }
-  return { ok: true, where: 'none' }
+  const size = extent(root)
+  const cannotScroll = dy !== 0 ? size.height <= size.viewHeight + 2 : size.width <= size.viewWidth + 2
+  const reason = cannotScroll ? 'not-scrollable' : atLimit(rootAfter, size) ? 'at-limit' : 'no-scrollable-area'
+  return state('none', rootBefore, rootAfter, root, reason)
 })()`
 }
+
+/**
+ * 页面状态摘要：地址、加载态、可见/焦点、滚动、弹窗、Cloudflare 验证与限流。
+ *
+ * 只读单次表达式。原生 alert/confirm 由对话框守卫记录到 window.__aaDialogs，
+ * 这里一并带回最近几条，避免 Agent 为「页面到底弹了什么」反复 evaluate。
+ */
+export const pageStateScript = (): string => `(() => {
+  const root = document.scrollingElement || document.documentElement
+  const body = document.body
+  const title = String(document.title || '')
+  const text = String((body && (body.innerText || body.textContent)) || (document.documentElement && document.documentElement.innerText) || '').slice(0, 6000)
+  const visibleDialogs = []
+  try {
+    const nodes = document.querySelectorAll('[role="dialog"],[role="alertdialog"],dialog[open]')
+    for (let i = 0; i < nodes.length && visibleDialogs.length < 5; i++) {
+      const el = nodes[i]
+      let cs = null
+      try { cs = getComputedStyle(el) } catch (e) {}
+      if (cs && (cs.display === 'none' || cs.visibility === 'hidden')) continue
+      let rect = null
+      try { rect = el.getBoundingClientRect() } catch (e) {}
+      if (rect && (rect.width <= 0 || rect.height <= 0)) continue
+      visibleDialogs.push(String((el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 300)))
+    }
+  } catch (e) {}
+  let nativeDialogs = []
+  try {
+    const records = Array.isArray(window.__aaDialogs) ? window.__aaDialogs.slice(-5) : []
+    nativeDialogs = records.map((rec) => ({
+      type: String(rec && rec.type || 'unknown'),
+      message: String(rec && rec.message || '').slice(0, 300),
+      ts: Number(rec && rec.ts) || 0
+    }))
+  } catch (e) {}
+  let challengeVisible = false
+  try {
+    challengeVisible = /just a moment|attention required|checking your browser|verify you are human|验证.{0,6}(机器人|人机)|正在进行安全验证/i.test(title) ||
+      !!document.querySelector('#challenge-form,#cf-challenge-running,#cf-please-wait,iframe[src*="challenges.cloudflare.com"],[data-translate="challenge_headline"]')
+  } catch (e) {}
+  const rateLimitHit = /(操作.{0,6}次数过多|请稍等\\s*\\d+\\s*秒|too many requests|rate limit|try again in \\s*\\d+\\s*seconds?)/i.test(text) ||
+    /rate.?limit|too many requests/i.test(title)
+  let retryAfterSeconds = null
+  try {
+    const retry = /(?:稍等|等待|after|in)\\s*(\\d{1,4})\\s*(?:秒|seconds?|s\\b)/i.exec(text)
+    if (retry) {
+      const n = Number(retry[1])
+      if (Number.isFinite(n) && n > 0 && n <= 3600) retryAfterSeconds = n
+    }
+  } catch (e) {}
+  const scrollHeight = root ? Math.max(Number(root.scrollHeight) || 0, body ? Number(body.scrollHeight) || 0 : 0) : 0
+  const scrollY = Math.round(window.scrollY || 0)
+  return {
+    url: String(location.href),
+    title,
+    readyState: String(document.readyState || 'unknown'),
+    visibilityState: String(document.visibilityState || 'unknown'),
+    hidden: document.hidden === true,
+    hasFocus: typeof document.hasFocus === 'function' ? document.hasFocus() === true : false,
+    scroll: {
+      x: Math.round(window.scrollX || 0),
+      y: scrollY,
+      scrollHeight,
+      scrollWidth: root ? Number(root.scrollWidth) || 0 : 0,
+      viewportWidth: window.innerWidth,
+      viewportHeight: window.innerHeight,
+      atEnd: scrollY + window.innerHeight >= scrollHeight - 2,
+      scrollable: scrollHeight > window.innerHeight + 2
+    },
+    dialogs: { count: visibleDialogs.length, visible: visibleDialogs, native: nativeDialogs },
+    challenge: { provider: 'cloudflare', visible: challengeVisible, requiresUserAction: challengeVisible },
+    rateLimit: { blocked: rateLimitHit, retryAfterSeconds }
+  }
+})()`
+
 
 /** 文本提取：ref 元素或整页 */
 export const extractScript = (ref?: string): string => {
@@ -362,7 +490,7 @@ export const selectorScript = (ref: string): string => {
   return `(() => {
   const el = (window.__aaRefs || {})['${ref}']
   if (!el) return { ok: false, reason: 'no-ref' }
-  function esc(s) { try { return window.CSS && CSS.escape ? CSS.escape(s) : s.replace(/([^\w-])/g, '\\$1') } catch (e) { return s } }
+  function esc(s) { try { return window.CSS && CSS.escape ? CSS.escape(s) : s.replace(/([^\\w-])/g, '\\\\$1') } catch (e) { return s } }
   function build(el) {
     if (el.id) { const s = '#' + esc(el.id); try { if (document.querySelector(s) === el) return s } catch (e) {} }
     const parts = []
@@ -389,7 +517,7 @@ export const selectorScript = (ref: string): string => {
   let verified = false
   try { verified = document.querySelector(selector) === el } catch (e) {}
   let text = ''
-  try { text = (el.innerText || el.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 80) } catch (e) {}
+  try { text = (el.innerText || el.textContent || '').replace(/\\s+/g, ' ').trim().slice(0, 80) } catch (e) {}
   return { ok: true, selector, verified, tag: el.tagName.toLowerCase(), text }
 })()`
 }

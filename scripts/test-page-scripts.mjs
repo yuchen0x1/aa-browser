@@ -272,6 +272,132 @@ try {
   }
   pass('setValue / selectOption / containsText / storage / upload')
 
+  console.log('[4] 滚动结果：真实移动、到边界、不可滚动与内部容器')
+  {
+    const makeScroller = ({ scrollY = 0, scrollHeight = 2000, innerHeight = 600, container = null }) => {
+      const root = {
+        scrollTop: scrollY,
+        scrollLeft: 0,
+        scrollHeight,
+        scrollWidth: 800,
+        clientHeight: innerHeight,
+        clientWidth: 800
+      }
+      const windowObj = {
+        __aaRefs: {},
+        innerWidth: 800,
+        innerHeight,
+        get scrollX() { return root.scrollLeft },
+        get scrollY() { return root.scrollTop },
+        scrollBy(opts) {
+          const dx = typeof opts === 'number' ? arguments[0] : opts.left || 0
+          const dy = typeof opts === 'number' ? arguments[1] : opts.top || 0
+          root.scrollLeft = Math.max(0, Math.min(root.scrollWidth - root.clientWidth, root.scrollLeft + dx))
+          root.scrollTop = Math.max(0, Math.min(root.scrollHeight - root.clientHeight, root.scrollTop + dy))
+        }
+      }
+      const documentObj = {
+        scrollingElement: root,
+        documentElement: root,
+        body: { scrollHeight, scrollWidth: 800 },
+        visibilityState: 'visible',
+        hidden: false,
+        hasFocus: () => true,
+        querySelectorAll: () => (container ? [container] : [])
+      }
+      return makeSandbox({}, {
+        window: windowObj,
+        document: documentObj,
+        getComputedStyle: (el) => (container && el === container
+          ? { overflowY: 'auto', overflowX: 'visible' }
+          : { overflowY: 'visible', overflowX: 'visible' })
+      })
+    }
+
+    const moved = plain(run(makeScroller({ scrollY: 100 }), S.scrollScript('down', 500)))
+    assert.equal(moved.didScroll, true, '窗口真实滚动必须报告 didScroll:true')
+    assert.equal(moved.where, 'window')
+    assert.deepEqual(moved.before, { x: 0, y: 100 })
+    assert.deepEqual(moved.after, { x: 0, y: 600 })
+    assert.equal(moved.atLimit, false)
+    assert.equal(moved.visibilityState, 'visible')
+
+    const atBottom = plain(run(makeScroller({ scrollY: 1400 }), S.scrollScript('down', 500)))
+    assert.equal(atBottom.didScroll, false, '已到底部时不能报告滚动成功')
+    assert.equal(atBottom.reason, 'at-limit')
+    assert.equal(atBottom.atLimit, true)
+
+    const shortPage = plain(run(makeScroller({ scrollHeight: 600, innerHeight: 600 }), S.scrollScript('down', 500)))
+    assert.equal(shortPage.didScroll, false)
+    assert.equal(shortPage.reason, 'not-scrollable')
+
+    const box = {
+      scrollTop: 0,
+      scrollLeft: 0,
+      scrollHeight: 2000,
+      scrollWidth: 800,
+      clientHeight: 500,
+      clientWidth: 800
+    }
+    const inContainer = plain(run(makeScroller({ scrollHeight: 600, innerHeight: 600, container: box }), S.scrollScript('down', 400)))
+    assert.equal(inContainer.didScroll, true, '主文档不动时必须尝试内部滚动容器并验证结果')
+    assert.equal(inContainer.where, 'element')
+    assert.deepEqual(inContainer.before, { x: 0, y: 0 })
+    assert.deepEqual(inContainer.after, { x: 0, y: 400 })
+
+    const selectorSource = S.selectorScript('e1')
+    assert.ok(selectorSource.includes('[^\\w-]'), 'selectorScript 的 CSS 转义正则被模板字符串吃掉反斜杠')
+    assert.ok(selectorSource.includes("'\\\\$1'"), 'selectorScript 的替换串丢了反斜杠')
+  }
+  pass('scrollScript 返回前后位置 / didScroll / atLimit / reason；内部容器与选择器转义')
+
+  console.log('[5] 页面状态摘要：可见性、滚动、弹窗、验证与限流')
+  {
+    const root = { scrollTop: 1200, scrollLeft: 0, scrollHeight: 3000, scrollWidth: 900 }
+    const dialog = {
+      innerText: '您执行此操作的次数过多。请稍等 15 秒后再试',
+      getBoundingClientRect: () => ({ width: 300, height: 100 })
+    }
+    const context = makeSandbox({}, {
+      location: { href: 'https://linux.do/t/topic/123' },
+      window: {
+        __aaRefs: {},
+        __aaDialogs: [{ type: 'alert', message: 'hello', ts: 1 }],
+        innerWidth: 800,
+        innerHeight: 600,
+        scrollX: 0,
+        scrollY: 1200
+      },
+      document: {
+        title: 'Just a moment...',
+        readyState: 'complete',
+        visibilityState: 'hidden',
+        hidden: true,
+        hasFocus: () => false,
+        scrollingElement: root,
+        documentElement: root,
+        body: { innerText: '您执行此操作的次数过多。请稍等 15 秒后再试', scrollHeight: 3000, scrollWidth: 900 },
+        querySelectorAll: (selector) => (String(selector).includes('dialog') ? [dialog] : []),
+        querySelector: (selector) => (String(selector).includes('challenge') ? {} : null)
+      },
+      getComputedStyle: () => ({ display: 'block', visibility: 'visible' })
+    })
+    const state = plain(run(context, S.pageStateScript()))
+    assert.equal(state.url, 'https://linux.do/t/topic/123')
+    assert.equal(state.visibilityState, 'hidden')
+    assert.equal(state.hasFocus, false)
+    assert.equal(state.scroll.y, 1200)
+    assert.equal(state.scroll.atEnd, false)
+    assert.equal(state.scroll.scrollable, true)
+    assert.equal(state.dialogs.count, 1)
+    assert.match(state.dialogs.visible[0], /次数过多/)
+    assert.equal(state.dialogs.native[0].type, 'alert')
+    assert.equal(state.challenge.visible, true)
+    assert.equal(state.rateLimit.blocked, true)
+    assert.equal(state.rateLimit.retryAfterSeconds, 15)
+  }
+  pass('pageStateScript')
+
   console.log(`\n🎉 页面脚本字面量回归：${passed} 组断言全部通过`)
 } finally {
   fs.rmSync(outDir, { recursive: true, force: true })

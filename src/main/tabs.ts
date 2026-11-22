@@ -7,6 +7,8 @@ import { installClosedShadowCapture } from './closed-shadow'
 
 export interface Tab {
   id: string
+  /** 创建时间（用于 MCP 结果里的标签溯源） */
+  createdAt: number
   partition: string
   session: Session
   view: WebContentsView
@@ -26,6 +28,8 @@ export interface Tab {
   keepRendering: () => () => void
   /** 是否使用独立会话分区（隔离标签） */
   isolated: boolean
+  /** 是否由跨会话恢复重建（沿用上次的标签 id） */
+  restored: boolean
 }
 
 /**
@@ -241,10 +245,12 @@ export class TabManager {
     const ready = Promise.resolve().then(() => this.prepareTab(wc, net, id))
     const tab: Tab = {
       id,
+      createdAt: Date.now(),
       partition,
       session: ses,
       view,
       isolated: useIsolated,
+      restored: reusable,
       title: '新建标签页',
       url: target,
       loading: false,
@@ -518,12 +524,14 @@ export class TabManager {
   infos(): TabInfo[] {
     return this.tabs.map((t) => ({
       id: t.id,
+      createdAt: t.createdAt,
       title: t.title,
       url: t.url,
       favicon: t.favicon,
       loading: t.loading,
       active: t.id === this.activeId,
       isolated: t.isolated,
+      restored: t.restored,
       canBack: this.canBack(t),
       canForward: this.canForward(t)
     }))
