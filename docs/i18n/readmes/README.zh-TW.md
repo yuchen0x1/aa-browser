@@ -22,7 +22,7 @@
 > 人像人一樣瀏覽網頁，Agent 像工程師一樣驅動它。
 
 <p align="center">
-  <img src="../../../site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
+  <img src="../../../docs/media/aa-browser-demo.webp" alt="Aa Browser — a browser built for agents" width="720" />
 </p>
 
 這是**精簡導讀**。完整、權威的文件以中文撰寫：[README.md](../../../README.md) 與 [`docs/`](../../)。
@@ -147,7 +147,7 @@ npm start          # launch the built app
 | 網路與 Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
 | 診斷與分頁 | `browser_performance`, `browser_resize`, `browser_tabs` |
 
-共用行為：多數工具會隨結果回傳一份快照（`snapshot: false` 可跳過），除 `browser_resize` 與 `browser_downloads` 外所有工具都接受 `tabId`，單次呼叫 180 秒後逾時，審批最多等待 120 秒，網路詳情預設脫敏。完整的工具手冊見 [site/tools.html](../../../site/tools.html)。
+共用行為：多數工具會隨結果回傳一份快照（`snapshot: false` 可跳過），除 `browser_resize` 與 `browser_downloads` 外所有工具都接受 `tabId`，單次呼叫 180 秒後逾時，審批最多等待 120 秒，網路詳情預設脫敏。
 
 ## 安全性
 
@@ -192,11 +192,10 @@ npm start          # launch the built app
 | [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | DeepSeek Harness 外掛安裝與驗證 |
 | [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | 發行證據、回歸紀錄與維護邊界 |
 | [版本說明](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | 各版本的變更歷史 |
-| [site/tools.html](../../../site/tools.html) | 完整的 42 工具手冊（本機開啟，無須部署） |
 
 ## 參與貢獻與授權
 
-歡迎回報 bug、討論功能、修正文件與提交 PR —— 開始前請先讀 [CONTRIBUTING.md](../../../CONTRIBUTING.md)。新增 MCP 工具時，請一併更新 `src/main/tools.ts`、`cli/mcp.mjs`、本 README 的工具表以及 `site/tools.html`；`npm run check` 會檢查前三者是否保持一致。
+歡迎回報 bug、討論功能、修正文件與提交 PR —— 開始前請先讀 [CONTRIBUTING.md](../../../CONTRIBUTING.md)。新增 MCP 工具時，請一併更新 `src/main/tools.ts`、`cli/mcp.mjs`、本 README 的工具表以及 `src/shared/tool-defs.mjs`；`npm run check` 會檢查前三者是否保持一致。
 
 MIT licensed —— 詳見 [LICENSE](../../../LICENSE) © Aa Browser contributors。
 

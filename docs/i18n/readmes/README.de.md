@@ -22,7 +22,7 @@
 > Ein Browser, den du wie ein Mensch benutzt und den ein Agent wie ein Ingenieur steuert.
 
 <p align="center">
-  <img src="../../../site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
+  <img src="../../../docs/media/aa-browser-demo.webp" alt="Aa Browser — a browser built for agents" width="720" />
 </p>
 
 Dies ist eine **gekürzte Übersetzung**. Die vollständige, maßgebliche Dokumentation ist auf Chinesisch verfasst: [README.md](../../../README.md) und [`docs/`](../../).
@@ -147,7 +147,7 @@ Eine geschriebene Konfiguration ist **keine** funktionierende Verbindung. Verifi
 | Netzwerk & Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
 | Diagnose & Tabs | `browser_performance`, `browser_resize`, `browser_tabs` |
 
-Gemeinsames Verhalten: Die meisten Tools geben zusammen mit ihrem Ergebnis einen Snapshot zurück (`snapshot: false` überspringt ihn), jedes Tool außer `browser_resize` und `browser_downloads` akzeptiert eine `tabId`, ein einzelner Aufruf läuft nach 180 Sekunden in einen Timeout, eine Freigabe wartet bis zu 120 Sekunden, und Netzwerkdetails werden standardmäßig redigiert. Das vollständige Tool-Handbuch steht in [site/tools.html](../../../site/tools.html).
+Gemeinsames Verhalten: Die meisten Tools geben zusammen mit ihrem Ergebnis einen Snapshot zurück (`snapshot: false` überspringt ihn), jedes Tool außer `browser_resize` und `browser_downloads` akzeptiert eine `tabId`, ein einzelner Aufruf läuft nach 180 Sekunden in einen Timeout, eine Freigabe wartet bis zu 120 Sekunden, und Netzwerkdetails werden standardmäßig redigiert.
 
 ## Sicherheit
 
@@ -192,11 +192,10 @@ Die ausführliche Dokumentation ist derzeit auf Chinesisch verfügbar:
 | [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | Installation und Verifikation des DeepSeek-Harness-Plugins |
 | [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | Release-Nachweise, Regressionsprotokolle und Wartungsgrenzen |
 | [Versionshinweise](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | Änderungsverlauf je Version |
-| [site/tools.html](../../../site/tools.html) | Vollständiges Handbuch der 42 Tools (lokal öffnen, kein Deployment nötig) |
 
 ## Mitwirken und Lizenz
 
-Fehlerberichte, Funktionsdiskussionen, Dokumentationskorrekturen und PRs sind willkommen — bitte lies zuerst [CONTRIBUTING.md](../../../CONTRIBUTING.md). Wenn du ein MCP-Tool hinzufügst, aktualisiere `src/main/tools.ts`, `cli/mcp.mjs`, die Tool-Tabelle in dieser README und `site/tools.html` gemeinsam; `npm run check` prüft, dass die ersten drei synchron bleiben.
+Fehlerberichte, Funktionsdiskussionen, Dokumentationskorrekturen und PRs sind willkommen — bitte lies zuerst [CONTRIBUTING.md](../../../CONTRIBUTING.md). Wenn du ein MCP-Tool hinzufügst, aktualisiere `src/main/tools.ts`, `cli/mcp.mjs`, die Tool-Tabelle in dieser README und `src/shared/tool-defs.mjs` gemeinsam; `npm run check` prüft, dass die ersten drei synchron bleiben.
 
 MIT licensed — siehe [LICENSE](../../../LICENSE) © Aa Browser contributors.
 

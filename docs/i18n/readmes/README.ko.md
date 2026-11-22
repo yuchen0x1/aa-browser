@@ -22,7 +22,7 @@
 > 사람은 사람처럼 브라우징하고, 에이전트는 엔지니어처럼 구동한다.
 
 <p align="center">
-  <img src="../../../site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
+  <img src="../../../docs/media/aa-browser-demo.webp" alt="Aa Browser — a browser built for agents" width="720" />
 </p>
 
 이 문서는 **요약 번역본**입니다. 완전하고 권위 있는 문서는 중국어로 작성되어 있습니다: [README.md](../../../README.md)와 [`docs/`](../../).
@@ -147,7 +147,7 @@ npm start          # launch the built app
 | 네트워크와 Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
 | 진단과 탭 | `browser_performance`, `browser_resize`, `browser_tabs` |
 
-공통 동작: 대부분의 도구는 결과와 함께 스냅샷을 반환합니다(`snapshot: false`로 생략). `browser_resize`와 `browser_downloads`를 제외한 모든 도구는 `tabId`를 받으며, 단일 호출은 180초 후 시간 초과되고, 승인은 최대 120초 대기하며, 네트워크 세부 정보는 기본적으로 마스킹됩니다. 전체 도구 설명서는 [site/tools.html](../../../site/tools.html)에 있습니다.
+공통 동작: 대부분의 도구는 결과와 함께 스냅샷을 반환합니다(`snapshot: false`로 생략). `browser_resize`와 `browser_downloads`를 제외한 모든 도구는 `tabId`를 받으며, 단일 호출은 180초 후 시간 초과되고, 승인은 최대 120초 대기하며, 네트워크 세부 정보는 기본적으로 마스킹됩니다.
 
 ## 보안
 
@@ -192,11 +192,10 @@ npm start          # launch the built app
 | [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | DeepSeek Harness 플러그인 설치와 검증 |
 | [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | 릴리스 증거, 회귀 기록, 유지 관리 경계 |
 | [릴리스 노트](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | 버전별 변경 이력 |
-| [site/tools.html](../../../site/tools.html) | 42개 도구 전체 설명서(로컬에서 열면 되고 배포는 필요 없음) |
 
 ## 기여와 라이선스
 
-버그 보고, 기능 논의, 문서 수정, PR을 환영합니다 — 먼저 [CONTRIBUTING.md](../../../CONTRIBUTING.md)를 읽어 주세요. MCP 도구를 추가할 때는 `src/main/tools.ts`, `cli/mcp.mjs`, 이 README의 도구 표, `site/tools.html`을 함께 갱신하세요. `npm run check`가 앞의 세 가지가 동기화되었는지 검증합니다.
+버그 보고, 기능 논의, 문서 수정, PR을 환영합니다 — 먼저 [CONTRIBUTING.md](../../../CONTRIBUTING.md)를 읽어 주세요. MCP 도구를 추가할 때는 `src/main/tools.ts`, `cli/mcp.mjs`, 이 README의 도구 표, `src/shared/tool-defs.mjs`을 함께 갱신하세요. `npm run check`가 앞의 세 가지가 동기화되었는지 검증합니다.
 
 MIT licensed — 자세한 내용은 [LICENSE](../../../LICENSE) © Aa Browser contributors.
 

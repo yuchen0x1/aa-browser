@@ -4,13 +4,12 @@
  *
  * 产物：
  *   build/icon.png                   512×512  应用图标源，electron-builder 据此生成 Windows .ico / Linux 图标
- *   site/assets/icon.png             512×512  官网 favicon 与首页图标
  *   packages/dsh/assets/icon-180.png 180×180  DeepSeek Harness 插件市场图标
  *
  * 实现说明：图标用 Canvas 2D 直接绘制并导出 PNG，不经过窗口截图，
  * 因此不会出现白底、四周白边、内容偏移或 DPI 缩放问题；圆角「方窗」
- * 以外的像素 alpha 为 0，在桌面、任务栏和网页上都不会露出白框。
- * 三个尺寸各自按目标像素渲染，小尺寸不做降采样，边缘更干净。
+ * 以外的像素 alpha 为 0，在桌面和任务栏上都不会露出白框。
+ * 两个尺寸各自按目标像素渲染，小尺寸不做降采样，边缘更干净。
  */
 const electron = require('electron')
 const fs = require('node:fs')
@@ -37,7 +36,6 @@ const { app, BrowserWindow } = electron
 const ROOT = path.join(__dirname, '..')
 const TARGETS = [
   { file: 'build/icon.png', size: 512 },
-  { file: 'site/assets/icon.png', size: 512 },
   { file: 'packages/dsh/assets/icon-180.png', size: 180 }
 ]
 

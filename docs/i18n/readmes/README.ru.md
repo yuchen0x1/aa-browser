@@ -22,7 +22,7 @@
 > Браузер, которым вы пользуетесь как человек, а агент управляет им как инженер.
 
 <p align="center">
-  <img src="../../../site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
+  <img src="../../../docs/media/aa-browser-demo.webp" alt="Aa Browser — a browser built for agents" width="720" />
 </p>
 
 Это **сокращённый перевод**. Полная и авторитетная документация написана на китайском языке: [README.md](../../../README.md) и [`docs/`](../../).
@@ -147,7 +147,7 @@ npm start          # launch the built app
 | Сеть и Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
 | Диагностика и вкладки | `browser_performance`, `browser_resize`, `browser_tabs` |
 
-Общее поведение: большинство инструментов возвращают снапшот вместе с результатом (`snapshot: false` пропускает его), каждый инструмент, кроме `browser_resize` и `browser_downloads`, принимает `tabId`, один вызов завершается по тайм-ауту через 180 секунд, подтверждение ожидается до 120 секунд, а сетевые детали по умолчанию маскируются. Полное руководство по инструментам — [site/tools.html](../../../site/tools.html).
+Общее поведение: большинство инструментов возвращают снапшот вместе с результатом (`snapshot: false` пропускает его), каждый инструмент, кроме `browser_resize` и `browser_downloads`, принимает `tabId`, один вызов завершается по тайм-ауту через 180 секунд, подтверждение ожидается до 120 секунд, а сетевые детали по умолчанию маскируются.
 
 ## Безопасность
 
@@ -192,11 +192,10 @@ npm start          # launch the built app
 | [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | Установка и проверка плагина DeepSeek Harness |
 | [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | Доказательства выпусков, записи регрессий и границы поддержки |
 | [примечания к выпуску](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | История изменений по версиям |
-| [site/tools.html](../../../site/tools.html) | Полное руководство по 42 инструментам (открывается локально, развёртывание не нужно) |
 
 ## Участие и лицензия
 
-Сообщения об ошибках, обсуждение функций, исправления документации и PR приветствуются — сначала прочитайте [CONTRIBUTING.md](../../../CONTRIBUTING.md). При добавлении инструмента MCP обновляйте `src/main/tools.ts`, `cli/mcp.mjs`, таблицу инструментов в этом README и `site/tools.html` вместе; `npm run check` проверяет, что первые три остаются синхронными.
+Сообщения об ошибках, обсуждение функций, исправления документации и PR приветствуются — сначала прочитайте [CONTRIBUTING.md](../../../CONTRIBUTING.md). При добавлении инструмента MCP обновляйте `src/main/tools.ts`, `cli/mcp.mjs`, таблицу инструментов в этом README и `src/shared/tool-defs.mjs` вместе; `npm run check` проверяет, что первые три остаются синхронными.
 
 MIT licensed — см. [LICENSE](../../../LICENSE) © Aa Browser contributors.
 

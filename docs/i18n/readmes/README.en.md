@@ -22,7 +22,7 @@
 > A browser you use like a human, driven by an agent like an engineer.
 
 <p align="center">
-  <img src="../../../site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
+  <img src="../../../docs/media/aa-browser-demo.webp" alt="Aa Browser — a browser built for agents" width="720" />
 </p>
 
 This is a **condensed translation**. The complete, authoritative documentation is written in Chinese: [README.md](../../../README.md) and [`docs/`](../../).
@@ -147,7 +147,7 @@ A written config is **not** a working connection. Verify with `node install.mjs 
 | Network & Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
 | Diagnostics & tabs | `browser_performance`, `browser_resize`, `browser_tabs` |
 
-Shared behaviour: most tools return a snapshot with their result (`snapshot: false` skips it), every tool except `browser_resize` and `browser_downloads` accepts a `tabId`, a single call times out after 180 seconds, approval waits up to 120 seconds, and network details are redacted by default. The full tool manual is [site/tools.html](../../../site/tools.html).
+Shared behaviour: most tools return a snapshot with their result (`snapshot: false` skips it), every tool except `browser_resize` and `browser_downloads` accepts a `tabId`, a single call times out after 180 seconds, approval waits up to 120 seconds, and network details are redacted by default.
 
 ## Security
 
@@ -192,11 +192,10 @@ The detailed documentation is currently in Chinese:
 | [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | DeepSeek Harness plugin install and verification |
 | [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | Release evidence, regression records and maintenance boundaries |
 | [release notes](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | Change history per version |
-| [site/tools.html](../../../site/tools.html) | Complete 42-tool manual (open locally, no deploy needed) |
 
 ## Contributing and license
 
-Bug reports, feature discussions, documentation fixes and PRs are welcome — please read [CONTRIBUTING.md](../../../CONTRIBUTING.md) first. When adding an MCP tool, update `src/main/tools.ts`, `cli/mcp.mjs`, the tool table in this README and `site/tools.html` together; `npm run check` verifies the first three stay in sync.
+Bug reports, feature discussions, documentation fixes and PRs are welcome — please read [CONTRIBUTING.md](../../../CONTRIBUTING.md) first. When adding an MCP tool, update `src/main/tools.ts`, `cli/mcp.mjs`, the tool table in this README and `src/shared/tool-defs.mjs` together; `npm run check` verifies the first three stay in sync.
 
 MIT licensed — see [LICENSE](../../../LICENSE) © Aa Browser contributors.
 

@@ -22,7 +22,7 @@
 > ऐसा ब्राउज़र जिसे आप इंसान की तरह इस्तेमाल करते हैं, और एजेंट उसे इंजीनियर की तरह चलाता है।
 
 <p align="center">
-  <img src="../../../site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
+  <img src="../../../docs/media/aa-browser-demo.webp" alt="Aa Browser — a browser built for agents" width="720" />
 </p>
 
 यह एक **संक्षिप्त अनुवाद** है। पूरा और आधिकारिक दस्तावेज़ चीनी भाषा में लिखा गया है: [README.md](../../../README.md) और [`docs/`](../../)।
@@ -147,7 +147,7 @@ npm start          # launch the built app
 | नेटवर्क और Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
 | डायग्नोस्टिक्स और टैब | `browser_performance`, `browser_resize`, `browser_tabs` |
 
-साझा व्यवहार: ज़्यादातर टूल अपने नतीजे के साथ एक स्नैपशॉट लौटाते हैं (`snapshot: false` उसे छोड़ देता है), `browser_resize` और `browser_downloads` के अलावा हर टूल `tabId` स्वीकार करता है, एक कॉल 180 सेकंड बाद टाइम-आउट हो जाती है, मंज़ूरी 120 सेकंड तक प्रतीक्षा करती है, और नेटवर्क विवरण डिफ़ॉल्ट रूप से रीडैक्ट रहते हैं। पूरा टूल मैनुअल [site/tools.html](../../../site/tools.html) में है।
+साझा व्यवहार: ज़्यादातर टूल अपने नतीजे के साथ एक स्नैपशॉट लौटाते हैं (`snapshot: false` उसे छोड़ देता है), `browser_resize` और `browser_downloads` के अलावा हर टूल `tabId` स्वीकार करता है, एक कॉल 180 सेकंड बाद टाइम-आउट हो जाती है, मंज़ूरी 120 सेकंड तक प्रतीक्षा करती है, और नेटवर्क विवरण डिफ़ॉल्ट रूप से रीडैक्ट रहते हैं।
 
 ## सुरक्षा
 
@@ -192,11 +192,10 @@ npm start          # launch the built app
 | [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | DeepSeek Harness प्लगइन का इंस्टॉल और सत्यापन |
 | [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | रिलीज़ प्रमाण, रिग्रेशन रिकॉर्ड और मेंटेनेंस सीमाएँ |
 | [रिलीज़ नोट्स](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | प्रति वर्शन बदलावों का इतिहास |
-| [site/tools.html](../../../site/tools.html) | 42 टूल का पूरा मैनुअल (स्थानीय रूप से खोलें, डिप्लॉय की ज़रूरत नहीं) |
 
 ## योगदान और लाइसेंस
 
-बग रिपोर्ट, फ़ीचर चर्चा, दस्तावेज़ सुधार और PR का स्वागत है — पहले [CONTRIBUTING.md](../../../CONTRIBUTING.md) पढ़ें। MCP टूल जोड़ते समय `src/main/tools.ts`, `cli/mcp.mjs`, इस README की टूल तालिका और `site/tools.html` को साथ-साथ अपडेट करें; `npm run check` जाँचता है कि पहले तीन तालमेल में रहें।
+बग रिपोर्ट, फ़ीचर चर्चा, दस्तावेज़ सुधार और PR का स्वागत है — पहले [CONTRIBUTING.md](../../../CONTRIBUTING.md) पढ़ें। MCP टूल जोड़ते समय `src/main/tools.ts`, `cli/mcp.mjs`, इस README की टूल तालिका और `src/shared/tool-defs.mjs` को साथ-साथ अपडेट करें; `npm run check` जाँचता है कि पहले तीन तालमेल में रहें।
 
 MIT licensed — देखें [LICENSE](../../../LICENSE) © Aa Browser contributors.
 

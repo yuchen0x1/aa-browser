@@ -22,7 +22,7 @@
 > متصفح تستخدمه أنت كإنسان، ويقوده الوكيل كمهندس.
 
 <p align="center">
-  <img src="../../../site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
+  <img src="../../../docs/media/aa-browser-demo.webp" alt="Aa Browser — a browser built for agents" width="720" />
 </p>
 
 هذه **ترجمة مختصرة**. التوثيق الكامل والمرجعي مكتوب بالصينية: [README.md](../../../README.md) و[`docs/`](../../).
@@ -147,7 +147,7 @@ npm start          # launch the built app
 | الشبكة وMock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
 | التشخيص وعلامات التبويب | `browser_performance`, `browser_resize`, `browser_tabs` |
 
-السلوك المشترك: معظم الأدوات تُعيد لقطة مع نتيجتها (`snapshot: false` يتخطاها)، وكل أداة عدا `browser_resize` و`browser_downloads` تقبل `tabId`، وينتهي الاستدعاء الواحد بمهلة بعد 180 ثانية، وتنتظر الموافقة حتى 120 ثانية، وتُعقَّم تفاصيل الشبكة افتراضيًا. الدليل الكامل للأدوات في [site/tools.html](../../../site/tools.html).
+السلوك المشترك: معظم الأدوات تُعيد لقطة مع نتيجتها (`snapshot: false` يتخطاها)، وكل أداة عدا `browser_resize` و`browser_downloads` تقبل `tabId`، وينتهي الاستدعاء الواحد بمهلة بعد 180 ثانية، وتنتظر الموافقة حتى 120 ثانية، وتُعقَّم تفاصيل الشبكة افتراضيًا.
 
 ## الأمان
 
@@ -192,11 +192,10 @@ npm start          # launch the built app
 | [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | تثبيت إضافة DeepSeek Harness والتحقق منها |
 | [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | أدلة الإصدار وسجلات الاختبارات وحدود الصيانة |
 | [ملاحظات الإصدار](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | سجل التغييرات حسب الإصدار |
-| [site/tools.html](../../../site/tools.html) | الدليل الكامل للأدوات الـ42 (يُفتح محليًا دون حاجة إلى نشر) |
 
 ## المساهمة والترخيص
 
-نرحّب بتقارير الأخطاء ونقاشات الميزات وتصحيحات التوثيق وطلبات السحب (PR) — يُرجى قراءة [CONTRIBUTING.md](../../../CONTRIBUTING.md) أولًا. وعند إضافة أداة MCP، حدّث `src/main/tools.ts` و`cli/mcp.mjs` وجدول الأدوات في هذا الملف و`site/tools.html` معًا؛ ويتحقق `npm run check` من بقاء الثلاثة الأولى متزامنة.
+نرحّب بتقارير الأخطاء ونقاشات الميزات وتصحيحات التوثيق وطلبات السحب (PR) — يُرجى قراءة [CONTRIBUTING.md](../../../CONTRIBUTING.md) أولًا. وعند إضافة أداة MCP، حدّث `src/main/tools.ts` و`cli/mcp.mjs` وجدول الأدوات في هذا الملف و`src/shared/tool-defs.mjs` معًا؛ ويتحقق `npm run check` من بقاء الثلاثة الأولى متزامنة.
 
 MIT licensed — راجع [LICENSE](../../../LICENSE) © Aa Browser contributors.
 

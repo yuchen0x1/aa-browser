@@ -22,7 +22,7 @@
 > 人が人のようにページを閲覧し、エージェントがエンジニアのように操作する。
 
 <p align="center">
-  <img src="../../../site/assets/og-image.png" alt="Aa Browser — a browser built for agents" width="720" />
+  <img src="../../../docs/media/aa-browser-demo.webp" alt="Aa Browser — a browser built for agents" width="720" />
 </p>
 
 これは**要約版の翻訳**です。完全で正式なドキュメントは中国語で書かれています：[README.md](../../../README.md) と [`docs/`](../../)。
@@ -147,7 +147,7 @@ npm start          # launch the built app
 | ネットワークと Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
 | 診断とタブ | `browser_performance`, `browser_resize`, `browser_tabs` |
 
-共通の動作：ほとんどのツールは結果と一緒にスナップショットを返します（`snapshot: false` で省略できます）。`browser_resize` と `browser_downloads` を除くすべてのツールは `tabId` を受け付け、1 回の呼び出しは 180 秒でタイムアウトし、承認は最大 120 秒待機し、ネットワーク詳細は既定でマスキングされます。ツールの完全なマニュアルは [site/tools.html](../../../site/tools.html) にあります。
+共通の動作：ほとんどのツールは結果と一緒にスナップショットを返します（`snapshot: false` で省略できます）。`browser_resize` と `browser_downloads` を除くすべてのツールは `tabId` を受け付け、1 回の呼び出しは 180 秒でタイムアウトし、承認は最大 120 秒待機し、ネットワーク詳細は既定でマスキングされます。
 
 ## セキュリティ
 
@@ -192,11 +192,10 @@ npm start          # launch the built app
 | [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | DeepSeek Harness プラグインのインストールと検証 |
 | [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | リリース証跡、回帰記録、保守の境界 |
 | [リリースノート](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | バージョンごとの変更履歴 |
-| [site/tools.html](../../../site/tools.html) | 42 ツールの完全なマニュアル（ローカルで開けばよく、デプロイ不要） |
 
 ## コントリビューションとライセンス
 
-バグ報告、機能の議論、ドキュメント修正、PR を歓迎します —— まず [CONTRIBUTING.md](../../../CONTRIBUTING.md) をお読みください。MCP ツールを追加するときは、`src/main/tools.ts`、`cli/mcp.mjs`、この README のツール表、`site/tools.html` をまとめて更新してください。`npm run check` が最初の 3 つが同期しているかを検証します。
+バグ報告、機能の議論、ドキュメント修正、PR を歓迎します —— まず [CONTRIBUTING.md](../../../CONTRIBUTING.md) をお読みください。MCP ツールを追加するときは、`src/main/tools.ts`、`cli/mcp.mjs`、この README のツール表、`src/shared/tool-defs.mjs` をまとめて更新してください。`npm run check` が最初の 3 つが同期しているかを検証します。
 
 MIT licensed —— 詳細は [LICENSE](../../../LICENSE) © Aa Browser contributors。
 

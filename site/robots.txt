@@ -1,5 +1,0 @@
-User-agent: *
-Allow: /
-Disallow: /assets/og-source.html
-
-Sitemap: https://yuchen0x1.github.io/aa-browser/sitemap.xml

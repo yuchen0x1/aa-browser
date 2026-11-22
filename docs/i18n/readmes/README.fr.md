@@ -22,7 +22,7 @@
 > Un navigateur que vous utilisez comme un humain, piloté par un agent comme un ingénieur.
 
 <p align="center">
-  <img src="../../../site/assets/og-image.png" alt="Aa Browser — un navigateur conçu pour les agents" width="720" />
+  <img src="../../../docs/media/aa-browser-demo.webp" alt="Aa Browser — un navigateur conçu pour les agents" width="720" />
 </p>
 
 Il s'agit d'une **traduction condensée**. La documentation complète et de référence est rédigée en chinois : [README.md](../../../README.md) et [`docs/`](../../).
@@ -147,7 +147,7 @@ Une configuration écrite **n'est pas** une connexion qui fonctionne. Vérifiez 
 | Réseau et Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
 | Diagnostic et onglets | `browser_performance`, `browser_resize`, `browser_tabs` |
 
-Comportement commun : la plupart des outils renvoient un snapshot avec leur résultat (`snapshot: false` l'omet), tous les outils sauf `browser_resize` et `browser_downloads` acceptent un `tabId`, un appel unique expire après 180 secondes, l'approbation attend jusqu'à 120 secondes, et les détails réseau sont expurgés par défaut. Le manuel complet des outils est dans [site/tools.html](../../../site/tools.html).
+Comportement commun : la plupart des outils renvoient un snapshot avec leur résultat (`snapshot: false` l'omet), tous les outils sauf `browser_resize` et `browser_downloads` acceptent un `tabId`, un appel unique expire après 180 secondes, l'approbation attend jusqu'à 120 secondes, et les détails réseau sont expurgés par défaut.
 
 ## Sécurité
 
@@ -192,11 +192,10 @@ La documentation détaillée est actuellement en chinois :
 | [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | Installation et vérification du plugin DeepSeek Harness |
 | [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | Preuves de publication, registres de régression et limites de maintenance |
 | [release notes](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | Historique des changements par version |
-| [site/tools.html](../../../site/tools.html) | Manuel complet des 42 outils (à ouvrir en local, aucun déploiement nécessaire) |
 
 ## Contribution et licence
 
-Les rapports de bugs, discussions de fonctionnalités, corrections de documentation et PR sont bienvenus — lisez d'abord [CONTRIBUTING.md](../../../CONTRIBUTING.md). Lors de l'ajout d'un outil MCP, mettez à jour ensemble `src/main/tools.ts`, `cli/mcp.mjs`, le tableau des outils de ce README et `site/tools.html` ; `npm run check` vérifie que les trois premiers restent synchronisés.
+Les rapports de bugs, discussions de fonctionnalités, corrections de documentation et PR sont bienvenus — lisez d'abord [CONTRIBUTING.md](../../../CONTRIBUTING.md). Lors de l'ajout d'un outil MCP, mettez à jour ensemble `src/main/tools.ts`, `cli/mcp.mjs`, le tableau des outils de ce README et `src/shared/tool-defs.mjs` ; `npm run check` vérifie que les trois premiers restent synchronisés.
 
 MIT licensed — voir [LICENSE](../../../LICENSE) © contributeurs d'Aa Browser.
 

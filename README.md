@@ -25,7 +25,7 @@
 > 其他语言版本是精简导读，安装、接入、安全与工具的权威细节以本文件为准。语言清单见 [`docs/i18n/readme-languages.json`](./docs/i18n/readme-languages.json)。
 
 <p align="center">
-  <img src="./site/assets/og-image.png" alt="Aa Browser —— 为 Agent 而生的浏览器" width="720" />
+  <img src="./docs/media/aa-browser-demo.webp" alt="Aa Browser —— 为 Agent 而生的浏览器" width="720" />
 </p>
 
 ## 最新更新
@@ -72,7 +72,6 @@
 - [故障排查](#故障排查)
 - [项目结构](#项目结构)
 - [开发与测试](#开发与测试)
-- [宣传站](#宣传站)
 - [文档](#文档)
 - [常见问题](#常见问题)
 - [贡献](#贡献)
@@ -427,7 +426,7 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 
 > 开发者注意：工具的名称、说明、参数 schema 与 MCP annotations 只维护在 [`src/shared/tool-defs.mjs`](./src/shared/tool-defs.mjs)。主进程只写 `name` + `handler`，桥直接导入同一份定义。`npm run check` 会断言唯一来源、主进程、桥与文档四方一致，并阻止任何一方重新手写 schema。
 
-完整的参数说明、返回示例与风险标注见[工具手册](./site/tools.html)（本地打开 `site/tools.html` 即可，无需部署）。
+完整参数与返回示例见上方工具表；名称、schema 与 annotations 以 [`src/shared/tool-defs.mjs`](./src/shared/tool-defs.mjs) 为准。
 
 ## 界面与快捷键
 
@@ -553,7 +552,6 @@ aa-browser/
 │   └── workbuddy.mjs  # WorkBuddy Connector 生成
 ├── installer/         # 通用安装 / 接入提示词源文件（生成 PROMPT.md 与新标签页）
 ├── packages/dsh/      # DeepSeek Harness 插件（插件市场接入）
-├── site/              # 静态宣传站 + MCP 工具手册（零依赖）
 ├── docs/              # 接入、平台、自动更新、发行与维护文档
 │   └── media/         # README 演示录屏与动图预览
 ├── scripts/           # 冒烟 / 回归 / 安装器与接入校验 / 图标与 SBOM 生成
@@ -590,18 +588,6 @@ node scripts/live-test.mjs   # 实战示例：MCP 驱动必应搜索全流程
 
 CI 在 Windows x64 与 Linux x64 上执行 `check`、工具与客户端接入校验、构建、SBOM、Electron 桌面回归、安装 / 卸载和打包产物连接验证。贡献流程见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
-## 宣传站
-
-仓库内附带一个零依赖静态宣传站，介绍产品定位、快照流程、42 个工具与接入方式，并包含完整的[工具手册](./site/tools.html)：
-
-```bash
-python -m http.server 4321 --directory site
-# 或：npx --yes serve site -l 4321
-# 打开 http://127.0.0.1:4321/
-```
-
-源文件在 `site/`，无需构建即可部署到 GitHub Pages / Netlify / Vercel / Nginx。部署步骤、内容维护清单与已验证范围见 [site/README.md](./site/README.md)。
-
 ## 文档
 
 | 文档 | 内容 |
@@ -615,7 +601,6 @@ python -m http.server 4321 --directory site
 | [CHANGELOG](./CHANGELOG.md) | 工程与产品变更摘要 |
 | [竞品与生态调研](./docs/RESEARCH.md) | 开源项目对标、平台可行性依据 |
 | [README 多语言](./docs/i18n/README.md) | 12 种语言的 README 索引与新增语言步骤 |
-| [宣传站说明](./site/README.md) | 静态站部署与内容维护 |
 | [贡献指南](./CONTRIBUTING.md) | 开发环境、提交约定与 PR 要求 |
 
 ## 常见问题
@@ -662,7 +647,7 @@ Windows 安装版与 Linux AppImage 都可以在「设置 → 软件更新」检
 
 ## 贡献
 
-欢迎 bug 报告、功能讨论、文档改进与代码 PR。开始前请读 [CONTRIBUTING.md](./CONTRIBUTING.md)；新增 MCP 工具时请同步更新 `src/main/tools.ts`、`cli/mcp.mjs`、本文档的工具表（`npm run check` 会校验这三处一致）以及 `site/tools.html` 的工具手册。
+欢迎 bug 报告、功能讨论、文档改进与代码 PR。开始前请读 [CONTRIBUTING.md](./CONTRIBUTING.md)；新增 MCP 工具时请同步更新 [`src/shared/tool-defs.mjs`](./src/shared/tool-defs.mjs)、`src/main/tools.ts`、`cli/mcp.mjs` 与本文档的工具表（`npm run check` 会校验一致性）。
 
 安全问题请走[私密安全报告](https://github.com/yuchen0x1/aa-browser/security/advisories/new)，不要公开披露未修复的漏洞。
 

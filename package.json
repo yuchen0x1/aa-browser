@@ -54,8 +54,6 @@
     "test:main-diagnostics": "node scripts/test-main-diagnostics.mjs",
     "test:client-config": "node scripts/test-client-config.mjs",
     "test:printing": "node scripts/test-printing.mjs",
-    "test:site-ui": "node scripts/test-site-ui.mjs",
-    "test:site-interactions": "node scripts/test-site-interactions.mjs",
     "test:display-matrix": "node scripts/test-display-matrix.mjs",
     "test:update-ui": "node scripts/test-desktop.mjs --update-ui",
     "test:stores": "node scripts/test-stores.mjs",

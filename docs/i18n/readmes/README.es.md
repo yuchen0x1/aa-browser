@@ -22,7 +22,7 @@
 > Un navegador que usas como un humano y que un agente conduce como un ingeniero.
 
 <p align="center">
-  <img src="../../../site/assets/og-image.png" alt="Aa Browser: un navegador creado para agentes" width="720" />
+  <img src="../../../docs/media/aa-browser-demo.webp" alt="Aa Browser: un navegador creado para agentes" width="720" />
 </p>
 
 Esta es una **traducción resumida**. La documentación completa y autoritativa está escrita en chino: [README.md](../../../README.md) y [`docs/`](../../).
@@ -147,7 +147,7 @@ Una configuración escrita **no** es una conexión funcional. Verifícala con `n
 | Red y Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
 | Diagnóstico y pestañas | `browser_performance`, `browser_resize`, `browser_tabs` |
 
-Comportamiento común: la mayoría de las herramientas devuelven un snapshot junto con su resultado (`snapshot: false` lo omite), todas las herramientas excepto `browser_resize` y `browser_downloads` aceptan un `tabId`, una llamada individual expira a los 180 segundos, la aprobación espera hasta 120 segundos y los detalles de red se redactan por defecto. El manual completo de herramientas está en [site/tools.html](../../../site/tools.html).
+Comportamiento común: la mayoría de las herramientas devuelven un snapshot junto con su resultado (`snapshot: false` lo omite), todas las herramientas excepto `browser_resize` y `browser_downloads` aceptan un `tabId`, una llamada individual expira a los 180 segundos, la aprobación espera hasta 120 segundos y los detalles de red se redactan por defecto.
 
 ## Seguridad
 
@@ -192,11 +192,10 @@ La documentación detallada está actualmente en chino:
 | [docs/MARKETPLACE.md](../../../docs/MARKETPLACE.md) | Instalación y verificación del plugin de DeepSeek Harness |
 | [docs/MAINTENANCE.md](../../../docs/MAINTENANCE.md) | Evidencia de versiones, registros de regresión y límites de mantenimiento |
 | [release notes](../../../docs/releases/release-notes.md) / [CHANGELOG](../../../CHANGELOG.md) | Historial de cambios por versión |
-| [site/tools.html](../../../site/tools.html) | Manual completo de las 42 herramientas (ábrelo en local, sin despliegue) |
 
 ## Contribuir y licencia
 
-Se agradecen informes de errores, debates de funcionalidades, correcciones de documentación y PR. Lee antes [CONTRIBUTING.md](../../../CONTRIBUTING.md). Al añadir una herramienta MCP, actualiza a la vez `src/main/tools.ts`, `cli/mcp.mjs`, la tabla de herramientas de este README y `site/tools.html`; `npm run check` verifica que los tres primeros sigan sincronizados.
+Se agradecen informes de errores, debates de funcionalidades, correcciones de documentación y PR. Lee antes [CONTRIBUTING.md](../../../CONTRIBUTING.md). Al añadir una herramienta MCP, actualiza a la vez `src/main/tools.ts`, `cli/mcp.mjs`, la tabla de herramientas de este README y `src/shared/tool-defs.mjs`; `npm run check` verifica que los tres primeros sigan sincronizados.
 
 MIT licensed — consulta [LICENSE](../../../LICENSE) © colaboradores de Aa Browser.
 
