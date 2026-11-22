@@ -6,6 +6,7 @@
 
 | 版本 | 完整 Release 正文 |
 | --- | --- |
+| v0.9.0 | [bodies/v0.9.0.md](./bodies/v0.9.0.md) |
 | v0.8.0 | [bodies/v0.8.0.md](./bodies/v0.8.0.md) |
 | v0.7.0 | [bodies/v0.7.0.md](./bodies/v0.7.0.md) |
 | v0.6.12 | [bodies/v0.6.12.md](./bodies/v0.6.12.md) |
@@ -27,6 +28,15 @@
 | v0.0.3 | [bodies/v0.0.3.md](./bodies/v0.0.3.md) |
 | v0.0.2 | [bodies/v0.0.2.md](./bodies/v0.0.2.md) |
 | v0.0.1 | [bodies/v0.0.1.md](./bodies/v0.0.1.md) |
+
+## v0.9.0 — 2026-11-22
+
+- 窗口最小化或位于后台时，MCP 仍可导航、点击、输入、按键、滚动、快照、元素/整页截图与视觉基线保存/对比；不显示、不恢复、不抢焦点，任务栏点击回到原标签。只有新增人工确认请求会唤起窗口。
+- 用 CDP 设备度量覆盖修复最小化后视口 0×0 导致的空快照；后台整页截图改为「临时扩展视口 + capturePage」并恢复，避开 Electron 45 在最小化时 `Page.captureScreenshot` 永久等待。视觉基线共用同一策略。
+- 静默冷启动；重复启动不再创建第二个实例，拿不到单实例锁的一次性进程直接以 0 退出。修复独立 DevTools 获焦后 F12 无法收起，以及后台/非活动页误弹原生右键菜单。
+- 新增真实 Electron + stdio MCP 后台回归并接入 Windows 与 Ubuntu（Xvfb + Openbox）CI；本机 `test:background` 4/4、桌面回归 55/55，Linux 标签 CI 4/4 通过。
+- 第一次标签 CI 在 Linux 上因重复启动子进程被单实例关闭路径以信号结束而误判失败；修正退出方式与回归判据后，新旧提交的 Linux 作业均通过，未放宽功能断言。
+- 保持 42 个 MCP 工具与既有客户端入口，无新增运行依赖或数据迁移。Windows 安装包仍未配置 Authenticode 签名。
 
 ## v0.8.0 — 2026-11-21
 
