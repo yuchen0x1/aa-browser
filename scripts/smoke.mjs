@@ -1210,16 +1210,23 @@ async function main() {
       }
       // 重试：重新发起一个下载，生成带“重试自”标记的新记录
       const completedId = /\[(d\w+)\] aa-smoke-download\.txt — completed/.exec(downloads)?.[1]
+      // 已完成的下载不可重试（结构化报错）；重试只适用于 cancelled/interrupted 的记录
       if (completedId) {
         const retried = await mcp.call('browser_downloads', { action: 'retry', id: completedId })
-        check('重试已完成的下载', !retried.isError, mcp.text(retried).slice(0, 200))
+        check('已完成下载重试返回结构化错误', retried.isError && mcp.text(retried).includes('不能重试'), mcp.text(retried).slice(0, 200))
+      }
+      if (slowId) {
+        // 取消过的下载可以重试：生成带“重试自”标记的新记录，原文件不被覆盖
+        const retried = await mcp.call('browser_downloads', { action: 'retry', id: slowId })
+        check('重试已取消的下载', !retried.isError, mcp.text(retried).slice(0, 200))
         let retryList = ''
         const retryDeadline = Date.now() + 10000
         do {
           await sleep(250)
           retryList = mcp.text(await mcp.call('browser_downloads', {}))
-        } while (!retryList.includes(`重试自 ${completedId}`) && Date.now() < retryDeadline)
-        check('重试生成新记录且不覆盖原文件', retryList.includes(`重试自 ${completedId}`), retryList.slice(0, 600))
+        } while (!retryList.includes(`重试自 ${slowId}`) && Date.now() < retryDeadline)
+        check('重试生成新记录且不覆盖原文件', retryList.includes(`重试自 ${slowId}`), retryList.slice(0, 600))
+        await mcp.call('browser_downloads', { action: 'cancel', id: slowId }).catch(() => {})
       }
 
       const pdf = await mcp.call('browser_pdf', {})
