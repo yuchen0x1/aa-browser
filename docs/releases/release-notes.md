@@ -6,6 +6,7 @@
 
 | 版本 | 完整 Release 正文 |
 | --- | --- |
+| v0.10.0 | [bodies/v0.10.0.md](./bodies/v0.10.0.md) |
 | v0.9.1 | [bodies/v0.9.1.md](./bodies/v0.9.1.md) |
 | v0.9.0 | [bodies/v0.9.0.md](./bodies/v0.9.0.md) |
 | v0.8.0 | [bodies/v0.8.0.md](./bodies/v0.8.0.md) |
@@ -29,6 +30,15 @@
 | v0.0.3 | [bodies/v0.0.3.md](./bodies/v0.0.3.md) |
 | v0.0.2 | [bodies/v0.0.2.md](./bodies/v0.0.2.md) |
 | v0.0.1 | [bodies/v0.0.1.md](./bodies/v0.0.1.md) |
+
+## v0.10.0 — 2026-11-22
+
+- `browser_scroll` 返回真实前后位置、`didScroll`、`atLimit` 与未滚动原因；主文档不动时按请求方向尝试最大滚动容器并复核位移，不再把静默无操作报告为成功。
+- 新增 `browser_page_state`：一次返回 URL / 标题 / `readyState` / 可见性与焦点 / 滚动位置与可滚动性 / 弹窗与被拦截的原生对话框 / Cloudflare 验证 / 限流提示，并附带实例、PID、版本与标签创建/恢复信息。
+- `browser_tabs list` 显示实例与标签身份；`select` 支持 `bringToFront: true`。`browser_navigate` 支持 `waitFor` 等待 SPA 渲染；`browser_evaluate` 对循环引用等不可序列化值返回结构化诊断。
+- 修复 `browser_get_selector` 模板字符串吞掉反斜杠导致文本压缩正则与 `CSS.escape` 兜底失效；MCP 工具 42 → 43，无新增运行依赖或数据迁移。
+- 本地 `check`、页面脚本 5 组、真实 Electron 冒烟 170 项、桌面 55/55、后台回归与新增 12 项专项通过；标签 CI 双平台通过（Linux 首次聚焦断言瞬态失败，仅重跑失败作业后通过），发布作业与 7 项不可变资产核验通过。
+- 按用户要求移除静态宣传网页及其测试与 CI 步骤；历史发行正文保留原样。
 
 ## v0.9.1 — 2026-11-22
 
