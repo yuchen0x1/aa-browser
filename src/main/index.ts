@@ -957,7 +957,9 @@ app.on('window-all-closed', () => {
 // 单实例：再次启动聚焦已有窗口
 const gotLock = app.requestSingleInstanceLock({ startInBackground })
 if (!gotLock) {
-  app.quit()
+  // 启动意图已通过单实例通道转交给已有实例；当前进程还没有窗口或服务，
+  // 直接以 0 退出，避免在 ready 之前走完整退出流程。
+  app.exit(0)
 } else {
   app.on('second-instance', (_event, _argv, _cwd, data) => {
     // 多个桥同时自动启动，后来的实例不应唤起最先启动的窗口。

@@ -89,6 +89,7 @@ async function runElectron() {
   let id = 0
   let exitCode = 1
   let liveResult
+  const duplicateExitSignals = []
   try {
     app.setAppPath(ROOT)
     await import(pathToFileURL(path.join(ROOT, 'out/main/index.js')).href)
@@ -99,6 +100,10 @@ async function runElectron() {
     const state = () => ui('window.aa.getState()')
     const awakened = []
     for (const event of ['show', 'restore', 'focus']) win.on(event, () => awakened.push(event))
+    // 第二个实例是否真的把启动意图交给了主实例，用主进程收到的事件判定，
+    // 而不是用这个一次性进程的退出方式判定。
+    const secondInstanceData = []
+    app.on('second-instance', (_event, _argv, _cwd, data) => secondInstanceData.push(data))
     const stillHidden = () => { assert.equal(win.isVisible(), false); assert.equal(win.isFocused(), false); assert.deepEqual(awakened, []) }
     // 程序化最小化在 Windows 上可能保留前台状态；以最小化当时的焦点为基线，
     // 断言工具既没有唤起窗口，也没有把焦点从用户所在窗口抢回来。
@@ -151,18 +156,31 @@ async function runElectron() {
     stillHidden()
     pass('cold-start window stays hidden through navigation, trusted click and capture')
 
+    // 第二个实例只负责把启动意图转交给已有实例并立刻退出。转交是否成功由主进程
+    // 收到的 second-instance 数据判断；Linux/Xvfb 下 Chromium 的单例关闭路径偶尔
+    // 会用信号终止这个一次性进程（Windows 本地不复现），主实例和转交结果不受影响，
+    // 因此信号退出记录在案但不判失败；主动的非零退出码仍然失败。
     const launchAgain = async (background) => {
       const env = { ...process.env }
       if (background) env.AA_BROWSER_START_IN_BACKGROUND = '1'
-      const child = spawn(process.execPath, [ROOT], { cwd: ROOT, env, stdio: 'ignore' })
+      const before = secondInstanceData.length
+      const child = spawn(process.execPath, [ROOT], { cwd: ROOT, env, stdio: ['ignore', 'ignore', 'pipe'] })
+      let stderr = ''
+      child.stderr.setEncoding('utf8')
+      child.stderr.on('data', (chunk) => { if (stderr.length < 8000) stderr += chunk })
       let timer
-      try {
-        await new Promise((resolve, reject) => {
-          timer = setTimeout(() => { child.kill(); reject(new Error('Second browser instance did not exit')) }, 7000)
-          child.once('error', reject)
-          child.once('exit', (code) => code === 0 ? resolve() : reject(new Error(`Second browser exit ${code}`)))
-        })
-      } finally { clearTimeout(timer) }
+      const exited = await new Promise((resolve, reject) => {
+        timer = setTimeout(() => { child.kill(); reject(new Error('Second browser instance did not exit')) }, 15_000)
+        child.once('error', reject)
+        child.once('exit', (code, signal) => resolve({ code, signal }))
+      }).finally(() => clearTimeout(timer))
+      if (exited.code !== null && exited.code !== 0) {
+        throw new Error(`Second browser exit ${exited.code}${stderr.trim() ? `: ${stderr.trim()}` : ''}`)
+      }
+      if (exited.signal) duplicateExitSignals.push(exited.signal)
+      await until(() => secondInstanceData.length > before, 'second-instance handoff', 5000)
+      assert.equal(secondInstanceData.at(-1)?.startInBackground, background === true,
+        `second-instance did not carry startInBackground=${background}`)
     }
     await launchAgain(true)
     stillHidden()
@@ -254,7 +272,7 @@ async function runElectron() {
     bridge?.kill()
     for (const item of pending.values()) clearTimeout(item.timer)
     server.close()
-    fs.writeFileSync(path.join(run, 'result.json'), JSON.stringify({ exitCode, checks, live: liveResult }, null, 2))
+    fs.writeFileSync(path.join(run, 'result.json'), JSON.stringify({ exitCode, checks, live: liveResult, duplicateExitSignals }, null, 2))
     console.log(`Background verification: ${path.join(run, 'result.json')}`)
     if (exitCode === 0) app.quit()
   }
