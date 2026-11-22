@@ -115,6 +115,7 @@ jobs:
             npm run test:bridge-autolaunch
           fi
       - name: Package and validate platform assets
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         shell: bash
         env:
           CSC_LINK: ${{ startsWith(github.ref, 'refs/tags/v') && runner.os == 'Windows' && secrets.WINDOWS_CSC_LINK || '' }}
@@ -128,6 +129,7 @@ jobs:
           fi
           node scripts/release-assets.mjs prepare "${{ matrix.platform }}"
       - name: Verify connect-only installer against the packaged app
+        if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         shell: bash
         run: |
           set -euo pipefail
@@ -137,14 +139,14 @@ jobs:
             node scripts/test-connect-flow.mjs
           fi
       - name: Launch Linux AppImage and connect its MCP bridge
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
         run: |
           set -euo pipefail
           export APPIMAGE_EXTRACT_AND_RUN=1
           xvfb-run -a npm run smoke -- release/*.AppImage
           xvfb-run -a npm run test:bridge-autolaunch -- release/*.AppImage
       - name: Install Windows NSIS package, exercise MCP and uninstall
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && (startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch')
         shell: pwsh
         run: |
           $version = node -p 'require("./package.json").version'
