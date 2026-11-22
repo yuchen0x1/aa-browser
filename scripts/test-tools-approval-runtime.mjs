@@ -46,7 +46,7 @@ function createFixture({ requireOperationApproval = false } = {}) {
   const calls = { type: [], frameType: [], frameEvaluate: [], pageEvaluate: [], sensitive: [], operation: [], actions: [], cookies: [] }
   const pending = []
   const tab = {
-    id: 'tab-1', title: 'Fixture page',
+    id: 'tab-1', title: 'Fixture page', keepRendering: () => () => {},
     view: { webContents: {
       getURL: () => 'https://merchant.example/page',
       isDestroyed: () => false,

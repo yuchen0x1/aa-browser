@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-globalThis.__AA_BRIDGE_VERSION__ = "0.8.0";
+globalThis.__AA_BRIDGE_VERSION__ = "0.9.0";
 // \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -5419,7 +5419,8 @@ async function ensureBrowserStarted() {
 			let settled = false;
 			const launchEnv = {
 				...node_process.default.env,
-				AA_BROWSER_CONNECTION_FILE: CONNECT_FILE
+				AA_BROWSER_CONNECTION_FILE: CONNECT_FILE,
+				AA_BROWSER_START_IN_BACKGROUND: "1"
 			};
 			delete launchEnv.ELECTRON_RUN_AS_NODE;
 			const child = (0, node_child_process.spawn)(spec.command, spec.args, {

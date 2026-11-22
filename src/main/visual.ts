@@ -64,15 +64,56 @@ function pngDimensions(buf: Buffer): { width: number; height: number } {
   return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) }
 }
 
-/** 与 doScreenshot 的 captureFullPage 相同的 CDP 附加/释放模式：只 detach 自己 attach 的调试器。 */
-export async function captureVisual(wc: WebContents, opts?: { fullPage?: boolean }): Promise<VisualCapture> {
+/**
+ * 与 doScreenshot 的 captureFullPage 相同的 CDP 附加/释放模式：只 detach 自己 attach 的调试器。
+ * 窗口不可见时 CDP Page.captureScreenshot 可能永久等待合成表面，因此后台统一改走
+ * capturePage：整页先临时把 CSS 视口扩到文档高度，截完立即恢复。
+ */
+export async function captureVisual(wc: WebContents, opts?: { fullPage?: boolean; background?: boolean; isWindowMinimized?: () => boolean }): Promise<VisualCapture> {
   const dbg = wc.debugger
+  const background = opts?.background === true
   let attachedHere = false
+  let restoreViewport: { width: number; height: number } | null = null
+  const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
   try {
     if (!dbg.isAttached()) {
       dbg.attach('1.3')
       attachedHere = true
     }
+    if (background) {
+      if (opts?.fullPage) {
+        const dimensions = (await wc.executeJavaScript(`(() => {
+          const root = document.documentElement
+          const body = document.body
+          return {
+            viewportWidth: window.innerWidth,
+            viewportHeight: window.innerHeight,
+            contentWidth: Math.max(root?.scrollWidth || 0, body?.scrollWidth || 0, window.innerWidth || 0),
+            contentHeight: Math.max(root?.scrollHeight || 0, body?.scrollHeight || 0, window.innerHeight || 0)
+          }
+        })()`, false)) as {
+          viewportWidth?: number
+          viewportHeight?: number
+          contentWidth?: number
+          contentHeight?: number
+        }
+        const originalWidth = Math.max(1, Math.ceil(dimensions.viewportWidth ?? 0) || 1280)
+        const originalHeight = Math.max(1, Math.ceil(dimensions.viewportHeight ?? 0) || 720)
+        const width = Math.max(originalWidth, Math.ceil(dimensions.contentWidth ?? 0) || 1280)
+        const height = Math.min(Math.max(originalHeight, Math.ceil(dimensions.contentHeight ?? 0) || 720), MAX_FULL_PAGE_HEIGHT)
+        restoreViewport = { width: originalWidth, height: originalHeight }
+        await dbg.sendCommand('Emulation.setDeviceMetricsOverride', {
+          width, height, deviceScaleFactor: 1, mobile: false, screenWidth: width, screenHeight: height
+        })
+        await delay(100)
+      }
+      const image = await wc.capturePage(undefined, { stayHidden: true })
+      if (image.isEmpty()) throw new ActionError('截图失败：页面合成器未返回图像数据')
+      const size = image.getSize()
+      return { base64: image.toPNG().toString('base64'), width: size.width, height: size.height }
+    }
+    // 最小化/隐藏时合成器可能没有首帧；先请求一次不改变可见性的捕获激活渲染。
+    if (opts?.fullPage) await wc.capturePage(undefined, { stayHidden: true })
     const metrics = (await dbg.sendCommand('Page.getLayoutMetrics')) as {
       cssContentSize?: { width?: number; height?: number }
       cssVisualViewport?: { width?: number; height?: number }
@@ -114,6 +155,25 @@ export async function captureVisual(wc: WebContents, opts?: { fullPage?: boolean
     if (error instanceof ActionError) throw error
     throw new ActionError(`截图失败：${error instanceof Error ? error.message : String(error)}`)
   } finally {
+    if (restoreViewport && dbg.isAttached()) {
+      try {
+        if (opts?.isWindowMinimized?.() ?? false) {
+          await dbg.sendCommand('Emulation.setDeviceMetricsOverride', {
+            width: restoreViewport.width,
+            height: restoreViewport.height,
+            deviceScaleFactor: 1,
+            mobile: false,
+            screenWidth: restoreViewport.width,
+            screenHeight: restoreViewport.height
+          })
+        } else {
+          // 截图中用户已恢复窗口：清除覆盖，避免模拟视口留在前台页面。
+          await dbg.sendCommand('Emulation.clearDeviceMetricsOverride')
+        }
+      } catch {
+        /* 页面已销毁或调试通道已关闭 */
+      }
+    }
     if (attachedHere) {
       try {
         dbg.detach()
@@ -297,7 +357,7 @@ function readBaseline(name: string): BaselineMeta {
 export async function visualSave(tab: Tab, name: string, opts?: { fullPage?: boolean }): Promise<BaselineMeta> {
   assertName(name)
   const fullPage = opts?.fullPage === true
-  const capture = await captureVisual(tab.view.webContents, { fullPage })
+  const capture = await captureVisual(tab.view.webContents, { fullPage, background: !tab.canUseWindowInput(), isWindowMinimized: () => tab.isWindowMinimized?.() ?? false })
   const png = Buffer.from(capture.base64, 'base64')
   // 确认字节流确实是 PNG 且尺寸与 IHDR 一致后再落盘，避免存进坏基线。
   const size = pngDimensions(png)
@@ -335,7 +395,7 @@ export async function visualCompare(
   const baseline = readBaseline(name)
   // 默认沿用基线当时的截图范围，保证对比口径一致。
   const fullPage = opts?.fullPage ?? baseline.fullPage
-  const current = await captureVisual(tab.view.webContents, { fullPage })
+  const current = await captureVisual(tab.view.webContents, { fullPage, background: !tab.canUseWindowInput(), isWindowMinimized: () => tab.isWindowMinimized?.() ?? false })
 
   let basePng: Buffer
   try {

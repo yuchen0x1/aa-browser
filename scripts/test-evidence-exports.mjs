@@ -72,7 +72,7 @@ try {
   })
   let revision = 0
   const tab = {
-    id: 'fixture-tab', title: 'Fixture', url: 'https://fixture.test/',
+    id: 'fixture-tab', title: 'Fixture', url: 'https://fixture.test/', keepRendering: () => () => {},
     view: { webContents: { isDestroyed: () => false, printToPDF: async () => Buffer.from(`fixture PDF ${++revision}`) } },
     net: { ensure: async () => {}, toHar: () => ({ log: { version: '1.2', comment: `fixture HAR ${++revision}` } }) }
   }

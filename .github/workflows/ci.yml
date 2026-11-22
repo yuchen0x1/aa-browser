@@ -47,7 +47,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb libfuse2t64 libgtk-3-0t64 libnss3 libgbm1 libasound2t64
+          sudo apt-get install -y xvfb openbox x11-utils libfuse2t64 libgtk-3-0t64 libnss3 libgbm1 libasound2t64
           # Enable Chromium user namespaces on this ephemeral CI runner.
           if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
@@ -60,6 +60,22 @@ jobs:
           if [ "$RUNNER_OS" = Linux ]; then display=(xvfb-run -a); fi
           "${display[@]}" npm run smoke
           "${display[@]}" npm run test:desktop
+          if [ "$RUNNER_OS" = Linux ]; then
+            # Real minimize/restore needs a window manager, not only an X server.
+            xvfb-run -a bash -c '
+              openbox >/dev/null 2>&1 &
+              wm=$!
+              trap "kill $wm 2>/dev/null || true" EXIT
+              for attempt in {1..50}; do
+                if xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id"; then break; fi
+                sleep 0.1
+              done
+              xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id" || exit 1
+              npm run test:background
+            '
+          else
+            npm run test:background
+          fi
           "${display[@]}" npm run test:update-ui
           "${display[@]}" npm run test:ui-ux
           "${display[@]}" npm run test:settings-safety

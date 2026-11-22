@@ -217,7 +217,7 @@ async function ensureBrowserStarted() {
     log('Aa Browser 未运行，正在自动启动…')
     await new Promise((resolve, reject) => {
       let settled = false
-      const launchEnv = { ...process.env, AA_BROWSER_CONNECTION_FILE: CONNECT_FILE }
+      const launchEnv = { ...process.env, AA_BROWSER_CONNECTION_FILE: CONNECT_FILE, AA_BROWSER_START_IN_BACKGROUND: '1' }
       delete launchEnv.ELECTRON_RUN_AS_NODE
       const child = spawn(spec.command, spec.args, {
         cwd: spec.cwd,

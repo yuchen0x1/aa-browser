@@ -36,7 +36,7 @@ function fixture(id = 'tab-1') {
     stop() {}
   }
   return {
-    tab: { id, view: { webContents: wc } },
+    tab: { id, view: { webContents: wc }, keepRendering: () => () => {} },
     close: () => { destroyed = true }
   }
 }
@@ -329,7 +329,7 @@ try {
         reload() { loading = true; entered.resolve() },
         stop() {} // Native stop is asynchronous; release it with a controlled event below.
       })
-      const tab = { view: { webContents: wc } }
+      const tab = { view: { webContents: wc }, keepRendering: () => () => {} }
       const ctrl = new AbortController()
       const work = withTabLock(tab, ctrl.signal, () => doReload(tab, false, ctrl.signal))
       const rejected = assert.rejects(work, cancelled)
@@ -371,7 +371,7 @@ try {
       loadURL() { entered.resolve(); return raw.promise },
       stop() { stopCalls++ }
     }
-    const tab = { ready: Promise.resolve(), view: { webContents: wc } }
+    const tab = { ready: Promise.resolve(), view: { webContents: wc }, keepRendering: () => () => {} }
     const work = withTabLock(tab, undefined, () => manager.navigate(tab, 'https://fixture.test/'))
     const rejected = assert.rejects(work, /目标页面导航 超时/)
     await entered.promise

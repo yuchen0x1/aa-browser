@@ -18,6 +18,12 @@ export interface Tab {
   net: NetworkCapture
   ready: Promise<void>
   initialNavigation: Promise<void>
+  /** 仅主窗口在前台且此页可见时，才走窗口输入管线。 */
+  canUseWindowInput: () => boolean
+  /** 主窗口当前是否最小化；截图收尾据此决定恢复还是清除虚拟视口。 */
+  isWindowMinimized?: () => boolean
+  /** 调用期间保持计时器与合成帧，不改变闲置网页的节能策略。 */
+  keepRendering: () => () => void
   /** 是否使用独立会话分区（隔离标签） */
   isolated: boolean
 }
@@ -134,6 +140,18 @@ export class TabManager {
   /** 仅当前进程内保存普通标签 URL；隔离标签和退出清理不进入恢复记录。 */
   private recentlyClosed: string[] = []
   activeId: string | null = null
+  private agentConnected = false
+  private renderUsers = new WeakMap<WebContents, number>()
+
+  setAgentConnected(connected: boolean): void {
+    this.agentConnected = connected
+    this.forEachWebView((wc) => this.syncRendering(wc))
+  }
+
+  private syncRendering(wc: WebContents): void {
+    if (!wc.isDestroyed()) wc.setBackgroundThrottling(!this.agentConnected && !this.renderUsers.get(wc))
+  }
+
   onChange: () => void = () => {}
   /** 由主进程注入：为页面 WebContents 注册右键菜单（需访问 owner window） */
   onContextMenu: ((wc: WebContents) => void) | null = null
@@ -141,6 +159,8 @@ export class TabManager {
   onNavigate: ((url: string, title: string) => void) | null = null
   /** 由主进程注入：为每个分区安装下载监听 */
   onSession: ((ses: Session) => void) | null = null
+  isWindowForeground: () => boolean = () => false
+  isWindowMinimized: () => boolean = () => false
   /**
    * 由主进程注入：把视图从窗口移除。
    *
@@ -196,12 +216,24 @@ export class TabManager {
         partition,
         contextIsolation: true,
         nodeIntegration: false,
+        backgroundThrottling: !this.agentConnected,
         spellcheck: false
         // 页面视图永不挂 preload：这个 WebContents 会继续导航到任意站点，
         // 任何注入的桥都会随导航泄漏给网页脚本。接入/设置等特权 UI 只在外壳 chrome 视图。
       }
     })
     const wc = view.webContents
+    const keepRendering = (): (() => void) => {
+      this.renderUsers.set(wc, (this.renderUsers.get(wc) ?? 0) + 1)
+      this.syncRendering(wc)
+      let released = false
+      return () => {
+        if (released) return
+        released = true
+        this.renderUsers.set(wc, Math.max(0, (this.renderUsers.get(wc) ?? 1) - 1))
+        this.syncRendering(wc)
+      }
+    }
     const net = new NetworkCapture(wc)
     const ready = Promise.resolve().then(() => this.prepareTab(wc, net, id))
     const tab: Tab = {
@@ -217,7 +249,10 @@ export class TabManager {
       net,
       ready,
       // MCP 导航可先发布 Tab 再在 tab 锁内显式 navigate；其它创建入口保持既有自动首载。
-      initialNavigation: deferInitialNavigation ? ready : ready.then(() => this.loadPage(wc, target))
+      initialNavigation: deferInitialNavigation ? ready : ready.then(() => this.loadPage(wc, target)),
+      canUseWindowInput: () => this.activeId === id && this.isWindowForeground(),
+      isWindowMinimized: () => this.isWindowMinimized(),
+      keepRendering
     }
     this.attachEvents(tab)
     this.tabs.push(tab)

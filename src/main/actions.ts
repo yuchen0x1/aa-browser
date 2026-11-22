@@ -125,29 +125,23 @@ export async function withTabLock<T>(
     if (tab.view.webContents.isDestroyed()) throw new ActionError('页面已关闭')
 
     const context = { inFlight: new Set<Promise<unknown>>() }
-    const runPromise = tabQueueContext.run(context, () => Promise.resolve().then(() => {
+    const runPromise = tabQueueContext.run(context, () => Promise.resolve().then(async () => {
       throwIfAborted(signal)
-      return run()
+      // 渲染租约由 TabManager 计数管理；即使本调用被取消，
+      // 清理也通过 releaseRendering 无条件归还，不会把节能策略留在关闭状态。
+      const releaseRendering = tab.keepRendering()
+      try {
+        return await run()
+      } finally {
+        await drainTabOperations(context)
+        releaseRendering()
+      }
     }))
     started = true
     const finished = runPromise.then(
-      async (value) => {
-        try {
-          await drainTabOperations(context)
-        } finally {
-          release()
-        }
-        return { ok: true as const, value }
-      },
-      async (error: unknown) => {
-        try {
-          await drainTabOperations(context)
-        } finally {
-          release()
-        }
-        return { ok: false as const, error }
-      }
-    )
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error })
+    ).finally(release)
     const result = await awaitWithAbort(finished, signal)
     if (!result.ok) throw result.error
     return result.value
@@ -215,6 +209,61 @@ export function snapshotText(snap: SnapshotSummary): string {
 }
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+type MouseEvent = { type: 'mouseMove' | 'mouseDown' | 'mouseUp'; x: number; y: number; button?: 'left' | 'middle' | 'right'; clickCount?: number }
+
+/** CDP 与现有抓包/对话框守卫共用通道；attach 幂等，成功后保持挂载。 */
+async function withPageDebugger<T>(wc: WebContents, run: (dbg: Electron.Debugger) => Promise<T>): Promise<T> {
+  const dbg = wc.debugger
+  if (!dbg.isAttached()) {
+    try {
+      dbg.attach('1.3')
+    } catch {
+      throw new ActionError('无法在后台操作页面：调试通道不可用，请关闭该页的开发者工具后重试。')
+    }
+  }
+  return await run(dbg)
+}
+
+/** 整个手势期间持有一条 CDP 连接；send 不做取消判断，调用点显式检查（拖拽清理必须无条件释放）。 */
+async function gestureSender(tab: Tab): Promise<(event: MouseEvent, held?: boolean) => Promise<unknown>> {
+  const wc = tab.view.webContents
+  if (tab.canUseWindowInput()) {
+    return async (event) => { wc.sendInputEvent(event) }
+  }
+  const shared = gestureSenders.get(wc)
+  if (shared) return shared
+  return await withPageDebugger(wc, (dbg) => {
+    const send = (event: MouseEvent, held = false): Promise<unknown> => {
+      const { type, x, y, button, clickCount } = event
+      return dbg.sendCommand('Input.dispatchMouseEvent', {
+        type: type === 'mouseMove' ? 'mouseMoved' : type === 'mouseDown' ? 'mousePressed' : 'mouseReleased',
+        x, y, button: button ?? 'none', clickCount: clickCount ?? 0,
+        buttons: type === 'mouseDown' ? (button === 'right' ? 2 : button === 'middle' ? 4 : 1) : held ? 1 : 0
+      })
+    }
+    gestureSenders.set(wc, send)
+    return Promise.resolve(send)
+  })
+}
+
+const gestureSenders = new WeakMap<Electron.WebContents, (event: MouseEvent, held?: boolean) => Promise<unknown>>()
+
+/** 未预先建立连接时的单事件兜底路径（悬停等无取消语义的调用）。 */
+function pageMouse(tab: Tab): (event: MouseEvent, held?: boolean) => unknown {
+  const wc = tab.view.webContents
+  if (tab.canUseWindowInput()) return (event) => wc.sendInputEvent(event)
+  const shared = gestureSenders.get(wc)
+  if (shared) return shared
+  return (event, held = false) => {
+    const { type, x, y, button, clickCount } = event
+    return withPageDebugger(wc, (dbg) => dbg.sendCommand('Input.dispatchMouseEvent', {
+      type: type === 'mouseMove' ? 'mouseMoved' : type === 'mouseDown' ? 'mousePressed' : 'mouseReleased',
+      x, y, button: button ?? 'none', clickCount: clickCount ?? 0,
+      buttons: type === 'mouseDown' ? (button === 'right' ? 2 : button === 'middle' ? 4 : 1) : held ? 1 : 0
+    }))
+  }
+}
 
 /** 等待页面加载稳定（导航结束 + 小缓冲），供动作后调用 */
 async function settle(wc: WebContents): Promise<void> {
@@ -393,10 +442,18 @@ export async function doClick(
   const probeArmed = button === 'left' && (await armClickProbe(wc, ref))
   throwIfAborted(signal)
   if (loc.hitOk) {
-    // 优先走真实输入事件（isTrusted=true，兼容防爬站点）
-    wc.sendInputEvent({ type: 'mouseMove', x, y })
-    wc.sendInputEvent({ type: 'mouseDown', x, y, button, clickCount })
-    wc.sendInputEvent({ type: 'mouseUp', x, y, button, clickCount })
+    // 优先走真实输入事件（isTrusted=true，兼容防爬站点）。
+    // 后台 CDP 路径整个手势共用一条连接；取消发生在按下与抬起之间时，
+    // 不再补发 mouseUp——宁可让页面停在按下态，也不能在取消后提交点击。
+    const send = await gestureSender(tab)
+    try {
+      await send({ type: 'mouseMove', x, y })
+      await send({ type: 'mouseDown', x, y, button, clickCount })
+      throwIfAborted(signal)
+      await send({ type: 'mouseUp', x, y, button, clickCount })
+    } finally {
+      gestureSenders.delete(wc)
+    }
   } else {
     // 元素被遮挡 → 页面内合成事件兜底
     if (button === 'left' && (loc.type === 'checkbox' || loc.type === 'radio')) {
@@ -477,14 +534,16 @@ export async function doDrag(
   void wc.executeJavaScript(laserCursorScript(x1, y1, 'drag'), false).catch(() => {})
   void wc.executeJavaScript(laserCursorScript(x2, y2, 'drag'), false).catch(() => {})
 
-  // 模拟真实轨迹平滑拖动（5 步插值）
+  // 模拟真实轨迹平滑拖动（5 步插值）。拖拽的释放属于语义完成动作：
+  // 取消时必须补发 mouseUp，否则页面停在“按住不放”状态（与点击相反）。
   let mouseDown = false
+  const send = await gestureSender(tab)
   try {
     throwIfAborted(opts.signal)
-    wc.sendInputEvent({ type: 'mouseMove', x: x1, y: y1 })
+    await send({ type: 'mouseMove', x: x1, y: y1 })
     throwIfAborted(opts.signal)
-    wc.sendInputEvent({ type: 'mouseDown', x: x1, y: y1, button: 'left', clickCount: 1 })
     mouseDown = true
+    await send({ type: 'mouseDown', x: x1, y: y1, button: 'left', clickCount: 1 })
     await delay(50)
     throwIfAborted(opts.signal)
 
@@ -493,18 +552,19 @@ export async function doDrag(
       throwIfAborted(opts.signal)
       const curX = Math.round(x1 + ((x2 - x1) * i) / steps)
       const curY = Math.round(y1 + ((y2 - y1) * i) / steps)
-      wc.sendInputEvent({ type: 'mouseMove', x: curX, y: curY })
+      await send({ type: 'mouseMove', x: curX, y: curY }, true)
       await delay(20)
     }
 
     throwIfAborted(opts.signal)
-    wc.sendInputEvent({ type: 'mouseUp', x: x2, y: y2, button: 'left', clickCount: 1 })
+    await send({ type: 'mouseUp', x: x2, y: y2, button: 'left', clickCount: 1 })
     mouseDown = false
   } finally {
+    gestureSenders.delete(wc)
     // 中断/异常路径也必须释放鼠标，否则页面可能停在“按住不放”状态
     if (mouseDown) {
       try {
-        wc.sendInputEvent({ type: 'mouseUp', x: x2, y: y2, button: 'left', clickCount: 1 })
+        await send({ type: 'mouseUp', x: x2, y: y2, button: 'left', clickCount: 1 })
       } catch {
         /* 页面已关闭 */
       }
@@ -560,7 +620,8 @@ export async function doType(
   // 首选 insertText（走真实输入管线），失败则用原生 setter 兜底（React 受控输入兼容）
   let inserted = false
   try {
-    await wc.insertText(text)
+    if (tab.canUseWindowInput()) await wc.insertText(text)
+    else await withPageDebugger(wc, (dbg) => dbg.sendCommand('Input.insertText', { text }))
     throwIfAborted(signal)
     const check = (await wc.executeJavaScript(readValueScript(ref), false)) as {
       ok: boolean
@@ -580,8 +641,7 @@ export async function doType(
   // 提交是新的高危副作用：输入期间被取消/中断时不得再回车。
   throwIfAborted(signal)
   if (opts.submit) {
-    wc.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' })
-    wc.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' })
+    await sendPageKey(tab, 'Enter', [])
   }
 
   await settle(wc)
@@ -859,25 +919,49 @@ export async function doReload(tab: Tab, hard = false, signal?: AbortSignal): Pr
   return { url: wc.getURL(), title: wc.getTitle() }
 }
 
-export async function doPressKey(tab: Tab, key: string, modifiers: string[] = []): Promise<{ pressed: string; modifiers: InputModifier[] }> {
+const KEY_CODES: Record<string, number> = {
+  Enter: 13, Escape: 27, Tab: 9, Backspace: 8, Delete: 46, Insert: 45, Home: 36, End: 35,
+  PageUp: 33, PageDown: 34, ArrowUp: 38, ArrowDown: 40, ArrowLeft: 37, ArrowRight: 39, Space: 32
+}
+const CDP_MODIFIERS: Record<InputModifier, number> = { alt: 1, control: 2, meta: 4, shift: 8 }
+
+async function sendPageKey(tab: Tab, key: string, modifiers: InputModifier[]): Promise<void> {
   const wc = tab.view.webContents
+  const printable = /^[a-zA-Z0-9]$/.test(key)
+  if (tab.canUseWindowInput()) {
+    const keyCode = key === 'Space' ? ' ' : key
+    wc.sendInputEvent({ type: 'keyDown', keyCode, modifiers })
+    if (printable && !modifiers.length) wc.sendInputEvent({ type: 'char', keyCode, modifiers })
+    wc.sendInputEvent({ type: 'keyUp', keyCode, modifiers })
+    return
+  }
+  const letter = /^[a-zA-Z]$/.test(key)
+  const upper = key.toUpperCase()
+  const domKey = key === 'Space' ? ' ' : letter && modifiers.includes('shift') ? upper : key
+  const code = letter ? `Key${upper}` : printable ? `Digit${key}` : key
+  const windowsVirtualKeyCode = printable ? upper.charCodeAt(0) : KEY_CODES[key] ?? 111 + Number(key.slice(1))
+  // Shift+符号产生上档字符（美式布局）；字母由 text 传大写形式。
+  const shifted: Record<string, string> = { '`': '~', '1': '!', '2': '@', '3': '#', '4': '$', '5': '%', '6': '^', '7': '&', '8': '*', '9': '(', '0': ')', '-': '_', '=': '+', '[': '{', ']': '}', '\\': '|', ';': ':', "'": '"', ',': '<', '.': '>', '/': '?' }
+  const domChar = modifiers.includes('shift') && !letter ? shifted[key] ?? key : key
+  const event = { key: domKey, code, windowsVirtualKeyCode, modifiers: modifiers.reduce((mask, mod) => mask | CDP_MODIFIERS[mod], 0) }
+  const text = modifiers.every((mod) => mod === 'shift')
+    ? key === 'Enter' ? '\r' : printable || key === 'Space' ? domChar : ''
+    : ''
+  await withPageDebugger(wc, async (dbg) => {
+    await dbg.sendCommand('Input.dispatchKeyEvent', { ...event, type: text ? 'keyDown' : 'rawKeyDown', ...(text ? { text } : {}) })
+    await dbg.sendCommand('Input.dispatchKeyEvent', { ...event, type: 'keyUp' })
+  })
+}
+
+export async function doPressKey(tab: Tab, key: string, modifiers: string[] = []): Promise<{ pressed: string; modifiers: InputModifier[] }> {
   const parsed = normalizePressKey(key.trim(), modifiers)
   const k = parsed.key
-  if (VALID_KEYS.has(k)) {
-    const keyCode = k === 'Space' ? ' ' : k
-    wc.sendInputEvent({ type: 'keyDown', keyCode, modifiers: parsed.modifiers })
-    wc.sendInputEvent({ type: 'keyUp', keyCode, modifiers: parsed.modifiers })
-    await delay(120)
-    return { pressed: k, modifiers: parsed.modifiers }
+  if (!VALID_KEYS.has(k) && !/^[a-zA-Z0-9]$/.test(k)) {
+    throw new ActionError(`不支持的按键: ${key}（支持 Enter/Escape/Tab/Arrow*/F1-F12/单字符及 Ctrl/Alt/Shift/Meta 组合）`)
   }
-  if (/^[a-zA-Z0-9]$/.test(k)) {
-    wc.sendInputEvent({ type: 'keyDown', keyCode: k, modifiers: parsed.modifiers })
-    if (!parsed.modifiers.length) wc.sendInputEvent({ type: 'char', keyCode: k })
-    wc.sendInputEvent({ type: 'keyUp', keyCode: k, modifiers: parsed.modifiers })
-    await delay(120)
-    return { pressed: k, modifiers: parsed.modifiers }
-  }
-  throw new ActionError(`不支持的按键: ${key}（支持 Enter/Escape/Tab/Arrow*/F1-F12/单字符及 Ctrl/Alt/Shift/Meta 组合）`)
+  await sendPageKey(tab, k, parsed.modifiers)
+  await delay(120)
+  return { pressed: k, modifiers: parsed.modifiers }
 }
 
 /**
@@ -886,14 +970,51 @@ export async function doPressKey(tab: Tab, key: string, modifiers: string[] = []
  * UI 评审必须能一次看到长页面的页脚、折叠区、首屏之外的内容；
  * 高度上限 8000px，避免超长页面生成几十 MB 的图片。
  */
-async function captureFullPage(wc: WebContents): Promise<{ base64: string; width: number; height: number; capped: boolean }> {
+async function captureFullPage(wc: WebContents, background: boolean, minimized: () => boolean): Promise<{ base64: string; width: number; height: number; capped: boolean }> {
   const dbg = wc.debugger
   let attachedHere = false
+  let restoreViewport: { width: number; height: number } | null = null
   try {
     if (!dbg.isAttached()) {
       dbg.attach('1.3')
       attachedHere = true
     }
+
+    if (background) {
+      // Electron 45 在最小化状态下 CDP Page.captureScreenshot 可能一直不返回。
+      // 临时把 CSS 视口扩大到文档高度，再用普通 capturePage 合成整页，结束后恢复。
+      const dimensions = (await wc.executeJavaScript(`(() => {
+        const root = document.documentElement
+        const body = document.body
+        return {
+          viewportWidth: window.innerWidth,
+          viewportHeight: window.innerHeight,
+          contentWidth: Math.max(root?.scrollWidth || 0, body?.scrollWidth || 0, window.innerWidth || 0),
+          contentHeight: Math.max(root?.scrollHeight || 0, body?.scrollHeight || 0, window.innerHeight || 0)
+        }
+      })()`, false)) as {
+        viewportWidth?: number
+        viewportHeight?: number
+        contentWidth?: number
+        contentHeight?: number
+      }
+      const originalWidth = Math.max(1, Math.ceil(dimensions.viewportWidth ?? 0) || 1280)
+      const originalHeight = Math.max(1, Math.ceil(dimensions.viewportHeight ?? 0) || 720)
+      const width = Math.max(originalWidth, Math.ceil(dimensions.contentWidth ?? 0) || 1280)
+      const fullHeight = Math.max(originalHeight, Math.ceil(dimensions.contentHeight ?? 0) || 720)
+      const MAX_HEIGHT = 8000
+      const height = Math.min(fullHeight, MAX_HEIGHT)
+      restoreViewport = { width: originalWidth, height: originalHeight }
+      await dbg.sendCommand('Emulation.setDeviceMetricsOverride', {
+        width, height, deviceScaleFactor: 1, mobile: false, screenWidth: width, screenHeight: height
+      })
+      await delay(100)
+      const image = await wc.capturePage(undefined, { stayHidden: true })
+      if (image.isEmpty()) throw new ActionError('整页截图失败：页面合成器未返回图像数据')
+      const size = image.getSize()
+      return { base64: image.toPNG().toString('base64'), width: size.width, height: size.height, capped: fullHeight > MAX_HEIGHT }
+    }
+
     const metrics = (await dbg.sendCommand('Page.getLayoutMetrics')) as {
       cssContentSize?: { width?: number; height?: number }
       contentSize?: { width?: number; height?: number }
@@ -905,6 +1026,7 @@ async function captureFullPage(wc: WebContents): Promise<{ base64: string; width
     const height = Math.min(fullHeight, MAX_HEIGHT)
     const shot = (await dbg.sendCommand('Page.captureScreenshot', {
       format: 'png',
+      fromSurface: true,
       captureBeyondViewport: true,
       clip: { x: 0, y: 0, width, height, scale: 1 }
     })) as { data?: string }
@@ -914,6 +1036,26 @@ async function captureFullPage(wc: WebContents): Promise<{ base64: string; width
     if (error instanceof ActionError) throw error
     throw new ActionError(`整页截图失败：${error instanceof Error ? error.message : String(error)}`)
   } finally {
+    if (restoreViewport && dbg.isAttached()) {
+      try {
+        if (minimized()) {
+          // 仍最小化：回到索引层维持的后台视口，快照与后续输入继续可用。
+          await dbg.sendCommand('Emulation.setDeviceMetricsOverride', {
+            width: restoreViewport.width,
+            height: restoreViewport.height,
+            deviceScaleFactor: 1,
+            mobile: false,
+            screenWidth: restoreViewport.width,
+            screenHeight: restoreViewport.height
+          })
+        } else {
+          // 截图中用户已恢复窗口：清除覆盖，不能把模拟视口留在前台页面上。
+          await dbg.sendCommand('Emulation.clearDeviceMetricsOverride')
+        }
+      } catch {
+        /* 页面已销毁或调试通道已关闭 */
+      }
+    }
     if (attachedHere) {
       try {
         dbg.detach()
@@ -928,13 +1070,12 @@ export async function doScreenshot(tab: Tab, signal?: AbortSignal, opts?: { full
   throwIfAborted(signal)
   const wc = tab.view.webContents
   if (opts?.fullPage) {
-    try {
-      wc.focus()
-    } catch {
-      /* 忽略 */
-    }
+    const background = !tab.canUseWindowInput()
+    // 最小化时 capturePage 可能等待永远不会产生的合成帧；后台直接走 CDP，
+    // 这样整页截图不依赖窗口是否能被桌面合成器显示。
+    if (!background) await raceAbort(wc.capturePage(undefined, { stayHidden: true }), signal)
     reportProgress(0.5, 1, '正在捕获整页')
-    const full = await raceAbort(captureFullPage(wc), signal)
+    const full = await raceAbort(captureFullPage(wc, background, () => tab.isWindowMinimized?.() ?? false), signal)
     throwIfAborted(signal)
     let img = nativeImage.createFromBuffer(Buffer.from(full.base64, 'base64'))
     if (img.isEmpty()) throw new ActionError('整页截图失败：图像为空')
@@ -942,17 +1083,12 @@ export async function doScreenshot(tab: Tab, signal?: AbortSignal, opts?: { full
     reportProgress(1, 1, '截图完成')
     return { type: 'image', data: img.toPNG().toString('base64'), mimeType: 'image/png' }
   }
-  // capturePage 偶发 UnknownVizError（合成器首帧未就绪）：聚焦 + 重试
+  // 合成器首帧可能未就绪；等待而不聚焦桌面窗口。
   let image: Electron.NativeImage | null = null
-  try {
-    wc.focus()
-  } catch {
-    /* 忽略 */
-  }
   for (let i = 0; i < 3; i++) {
     throwIfAborted(signal)
     try {
-      image = await wc.capturePage()
+      image = await wc.capturePage(undefined, { stayHidden: true })
       if (!image.isEmpty()) break
     } catch {
       image = null
@@ -1019,7 +1155,7 @@ export async function doHover(tab: Tab, ref: string): Promise<{ hovered: string 
   const x = Math.max(0, loc.x ?? 0)
   const y = Math.max(0, loc.y ?? 0)
   void wc.executeJavaScript(laserCursorScript(x, y, 'hover'), false).catch(() => {})
-  wc.sendInputEvent({ type: 'mouseMove', x, y })
+  await pageMouse(tab)({ type: 'mouseMove', x, y })
   await delay(150)
   return { hovered: `${loc.tag} @(${x},${y})` }
 }
@@ -1113,15 +1249,10 @@ export async function doElementScreenshot(tab: Tab, ref: string): Promise<ToolCo
         : `无法定位元素 ${ref}（${rect?.reason ?? 'unknown'}）`
     )
   }
-  try {
-    wc.focus()
-  } catch {
-    /* 忽略 */
-  }
   let image: Electron.NativeImage | null = null
   for (let i = 0; i < 3; i++) {
     try {
-      image = await wc.capturePage()
+      image = await wc.capturePage(undefined, { stayHidden: true })
       if (!image.isEmpty()) break
     } catch {
       image = null

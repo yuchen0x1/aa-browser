@@ -2,6 +2,14 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
+## v0.9.0
+
+- **最小化后台运行**：窗口最小化后 MCP 仍可导航、点击、输入、按键、滚动、快照、元素/整页截图与视觉基线对比；不显示、不恢复、不抢焦点，任务栏点击即可回到原标签。只有新增人工确认请求会唤起窗口。
+- **静默冷启动**：MCP 桥冷启动以隐藏方式运行；用户手动启动应用会显示已在运行的同一窗口，不产生第二个实例。
+- **后台视口与截图**：用 CDP 设备度量覆盖修复最小化后渲染视口为 0×0 导致的空快照；后台整页截图改为「临时扩展视口 + capturePage」并在结束后恢复，避免 `Page.captureScreenshot` 在最小化时永久挂起。视觉基线保存/对比走同一策略。
+- 修复独立 DevTools 获得焦点后 F12 无法收起调试器，以及后台/非活动页误弹原生右键菜单；新增真实 Electron + stdio MCP 的后台回归并接入双平台 CI。
+- 保持 42 个 MCP 工具与既有客户端入口；没有新增运行依赖或要求用户迁移配置。
+
 ## v0.8.0
 
 - **同标签并发协调**：为受保护的 MCP 页面操作增加独立标签队列，补充排队取消边界与多项目接入说明。队列不是项目身份隔离或跨调用事务；各项目应始终显式使用自己的 `tabId`，不同登录态使用隔离标签，窗口和普通会话级资源仍共享。

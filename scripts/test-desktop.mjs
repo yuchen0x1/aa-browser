@@ -851,13 +851,14 @@ if (!process.versions.electron) {
     let contextLabels = []
     Menu.prototype.popup = function () {
       contextLabels = this.items.map((item) => item.label)
-      contextItem = this.items.find((item) => item.label === '在新标签页打开链接')
+      // 图片菜单里没有链接项；保留第一次捕获的链接项，供最后点击使用。
+      contextItem = this.items.find((item) => item.label === '在新标签页打开链接') ?? contextItem
     }
     try {
       contextSource.emit('context-menu', {}, { linkURL: base + '/private-context-child', selectionText: '', isEditable: false })
       assert.ok(contextItem)
-      contextItem.click()
-      // 右键菜单的图片项与打印项（原有测试只覆盖了链接项）
+      // 右键菜单的图片项与打印项（原有测试只覆盖了链接项）。
+      // 原生菜单只服务活动页，因此必须在切走标签前完成这几项检查。
       contextSource.emit('context-menu', {}, { mediaType: 'image', srcURL: base + '/pic.png', selectionText: '', isEditable: false })
       assert.ok(contextLabels.includes('复制图片地址') && contextLabels.includes('图片另存为') && contextLabels.includes('打印'),
         `missing image/print items: ${JSON.stringify(contextLabels)}`)
@@ -866,6 +867,8 @@ if (!process.versions.electron) {
       contextSource.emit('context-menu', {}, { mediaType: 'image', srcURL: base + '/pic2.png', selectionText: '', isEditable: false })
       assert.ok(contextLabels.includes('Copy Image Address') && contextLabels.includes('Print'),
         `English menu labels missing: ${JSON.stringify(contextLabels)}`)
+      // 最后点击链接项会把子标签变为活动页，后面的隔离断言依赖这一点。
+      contextItem.click()
     } finally {
       Menu.prototype.popup = originalPopup
       await ui(`window.aa.settingsSet({locale:${jsLiteral(originalMenuLocale)}})`)

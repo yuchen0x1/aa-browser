@@ -117,6 +117,7 @@ try {
     }
     const tab = {
       id: 'tab-1', title: 'Fixture', url, view: { webContents: wc },
+      canUseWindowInput: () => true, keepRendering: () => () => {},
       net: {
         ensure: () => step('ensure'),
         toHar: (version, includeSensitive) => {

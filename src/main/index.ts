@@ -29,6 +29,7 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const VERSION = app.getVersion()
 
 const CHROME_HEIGHT = 84
+let lastContentSize = { width: 1280, height: 840 }
 
 /** 默认搜索引擎基址：优先读取用户设置 */
 function searchUrlBase(): string {
@@ -38,6 +39,9 @@ function searchUrlBase(): string {
 // 开发版使用独立 userData：避免与安装版争单实例锁/登录态/connection.json。
 // ⚠️ 必须在 requestSingleInstanceLock() 之前调用（锁按 userData 路径区分）。
 const profileOverride = process.env['AA_BROWSER_USER_DATA_DIR']
+// 桥冷启动只创建窗口和连接服务，不打断桌面操作；普通启动仍显示窗口。
+const startInBackground = process.env['AA_BROWSER_START_IN_BACKGROUND'] === '1'
+delete process.env['AA_BROWSER_START_IN_BACKGROUND']
 if (profileOverride || !app.isPackaged) {
   const userData = profileOverride || path.join(app.getPath('appData'), 'aa-browser-dev')
   app.setPath('userData', userData)
@@ -96,16 +100,22 @@ function rendererAssets(): { preload: string; index: string } {
 
 function layout(): void {
   if (!win || !chromeView) return
-  const { width, height } = win.getContentBounds()
+  const currentSize = win.getContentBounds()
+  if (!win.isMinimized() && currentSize.width > 0 && currentSize.height > CHROME_HEIGHT) lastContentSize = currentSize
+  const { width, height } = lastContentSize
   const panelHeight = (approvals.list().length ? 180 : 0) + (finder?.getState().open ? 48 : 0) + (updater?.getState().noticeVisible ? 44 : 0)
   const showActivityOverlay = agentActivity.active || agentActivity.paused
   const chromeHeight = settingsOpen || showActivityOverlay
     ? height
     : Math.min(height, Math.max(CHROME_HEIGHT + panelHeight, overlayHeight))
   chromeView.setBounds({ x: 0, y: 0, width, height: chromeHeight })
-  const active = tabManager?.active()
-  if (active) {
-    active.view.setBounds({ x: 0, y: CHROME_HEIGHT + panelHeight, width, height: Math.max(0, height - CHROME_HEIGHT - panelHeight) })
+  const pageTop = CHROME_HEIGHT + panelHeight
+  if (width <= 0 || height <= pageTop) return // 某些桌面在最小化时不给出可用的内容区。
+  const bounds = { x: 0, y: pageTop, width, height: height - pageTop }
+  // 未挂到窗口的标签也有可用视口，MCP 可以定向操作而不切换用户正在看的标签。
+  for (const tab of tabManager?.tabs ?? []) {
+    const previous = tab.view.getBounds()
+    if (previous.y !== bounds.y || previous.width !== bounds.width || previous.height !== bounds.height) tab.view.setBounds(bounds)
   }
 }
 
@@ -113,9 +123,66 @@ function detachTabView(tabView: WebContentsView): void {
   win?.contentView.removeChildView(tabView)
 }
 
+/**
+ * 最小化时 Chromium 会把渲染器视口压成 0×0，页面快照为空、整页截图挂起。
+ * 此时用 CDP 设备度量覆盖维持一个记忆尺寸的虚拟视口；恢复前台后清除。
+ * 按 WebContents 记录已覆盖的标签，确保最小化期间新建的标签也能补上。
+ * 与 viewport 工具共用同一覆盖通道：工具收尾后的 pushState 会重新触发本函数，
+ * 恢复后台覆盖，因此短暂互相覆盖是安全的。
+ */
+const backgroundViewportTabs = new Set<Electron.WebContents>()
+let backgroundMetricsRunning = false
+let backgroundMetricsRerun = false
+
+async function syncBackgroundViewports(): Promise<void> {
+  if (!tabManager || !win || win.isDestroyed()) return
+  const minimized = win.isMinimized()
+  const width = lastContentSize.width
+  const height = Math.max(300, lastContentSize.height - CHROME_HEIGHT)
+  if (!minimized) {
+    for (const wc of [...backgroundViewportTabs]) {
+      backgroundViewportTabs.delete(wc)
+      if (wc.isDestroyed() || !wc.debugger.isAttached()) continue
+      try { await wc.debugger.sendCommand('Emulation.clearDeviceMetricsOverride') } catch { /* 已销毁 */ }
+    }
+    return
+  }
+  if (width <= 0 || height <= 0) return
+  for (const tab of [...tabManager.tabs]) {
+    const wc = tab.view.webContents
+    if (wc.isDestroyed() || backgroundViewportTabs.has(wc) || !wc.debugger.isAttached()) continue
+    try {
+      await wc.debugger.sendCommand('Emulation.setDeviceMetricsOverride', {
+        width, height, deviceScaleFactor: 1, mobile: false, screenWidth: width, screenHeight: height
+      })
+      backgroundViewportTabs.add(wc)
+    } catch { /* 已销毁或通道占用 */ }
+  }
+}
+
+/** 合并并发调用：布局或状态推送很频繁，但只需按最后一次窗口状态收敛。 */
+function updateBackgroundViewports(): void {
+  if (backgroundMetricsRunning) {
+    backgroundMetricsRerun = true
+    return
+  }
+  backgroundMetricsRunning = true
+  void (async () => {
+    try {
+      do {
+        backgroundMetricsRerun = false
+        await syncBackgroundViewports()
+      } while (backgroundMetricsRerun)
+    } finally {
+      backgroundMetricsRunning = false
+    }
+  })()
+}
+
 function pushState(): void {
   if (!chromeView) return
   layout()
+  updateBackgroundViewports()
   const state: UiState = {
     tabs: tabManager?.infos() ?? [],
     activeId: tabManager?.activeId ?? null,
@@ -130,8 +197,9 @@ function pushState(): void {
     update: updater?.getState(),
     find: finder?.getState(),
     canReopenClosed: tabManager?.canReopenClosed ?? false,
-    windowHeight: win?.getContentBounds().height
-  }
+  // windowHeight 反映真实窗口（最小化时为 0）；后台布局使用记忆中的最后有效尺寸。
+  windowHeight: win?.getContentBounds().height
+}
   chromeView.webContents.send('aa:state', state)
 }
 
@@ -139,8 +207,14 @@ function handleBeforeInput(wc: Electron.WebContents): void {
   wc.on('before-input-event', (event, input) => {
     const ctrl = input.control || input.meta
     if (input.type !== 'keyDown') return
-    // 模态设置不允许浏览器快捷键改变背后的网页或夺走表单焦点。
     const key = input.key.toLowerCase()
+    // 后台/最小化时忽略按键，避免 AI 注入的按键触发浏览器快捷键。
+    // 例外：独立 DevTools 窗口获得焦点时主窗口不算前台，但当前页仍需能用 F12 收起调试器。
+    if (!win?.isFocused() || win.isMinimized()) {
+      const togglesDevTools = (ctrl && input.shift && key === 'i') || key === 'f12'
+      if (!togglesDevTools || !wc.isDevToolsOpened()) return
+    }
+    // 模态设置不允许浏览器快捷键改变背后的网页或夺走表单焦点。
     if (settingsOpen && ((ctrl && ['t', 'w', 'l', 'f', 'r', 'p'].includes(key)) || (ctrl && input.shift && key === 'i') || key === 'f5' || key === 'f12' || (input.alt && ['arrowleft', 'arrowright'].includes(key)))) {
       event.preventDefault()
       return
@@ -231,6 +305,10 @@ function togglePageDevTools(origin: Electron.WebContents): void {
 /** 为单个页面 WebContents 注册右键菜单（普通网页浏览器基本操作） */
 function installPageContextMenu(wc: Electron.WebContents): void {
   wc.on('context-menu', (_e, params) => {
+    // 原生菜单只属于用户正在看的活动页；最小化/隐藏的后台页与其他标签交给网页自身处理。
+    // 不要求 isFocused：可见窗口的点击会先获得焦点，而焦点可能因 DevTools 等独立窗口暂时不在主窗口上。
+    const activeView = tabManager?.active()?.view.webContents
+    if (!win?.isVisible() || win.isMinimized() || activeView !== wc) return
     const menu = new Menu()
     const L = contextMenuLabels(getMainLocale() === 'en-US' ? 'en' : 'zh')
     const hasLink = /^https?:|^file:/i.test(params.linkURL)
@@ -339,8 +417,18 @@ function applyTitleBarOverlay(): void {
   }
 }
 
+function revealWindow(): void {
+  const current = win
+  if (!current || current.isDestroyed()) return
+  if (current.isMinimized()) current.restore()
+  else if (!current.isVisible()) current.show()
+  if (!current.isFocused()) current.focus()
+  // 某些桌面环境不允许应用主动获取焦点；仍可从任务栏恢复。
+  if (!current.isFocused()) current.flashFrame(true)
+}
+
 function createWindow(): void {
-  win = new BaseWindow({
+  const window = new BaseWindow({
     width: 1280,
     height: 840,
     minWidth: 960,
@@ -354,6 +442,7 @@ function createWindow(): void {
     },
     title: 'Aa Browser'
   })
+  win = window
   nativeTheme.on('updated', () => {
     applyTitleBarOverlay()
     syncInternalAppearance()
@@ -361,8 +450,14 @@ function createWindow(): void {
   applyTitleBarOverlay()
 
   // chrome UI 加载完成后再显示窗口，避免白闪（见下方 chromeView 创建处）
-  win.on('resize', pushState)
-  win.on('focus', () => { void updater?.checkIfDue() })
+  window.on('resize', pushState)
+  // Windows 最小化不一定伴随 resize；显式接住，让后台视口覆盖及时生效。
+  window.on('minimize', pushState)
+  window.on('restore', pushState)
+  window.on('focus', () => {
+    window.flashFrame(false)
+    void updater?.checkIfDue()
+  })
   win.on('closed', () => {
     // 两种退出路径都会关闭窗口；在清理 WebContentsView 之前保留最终标签快照。
     try { flushSessionRecord?.(true) } catch { /* 会话记录是尽力而为，不阻塞退出 */ }
@@ -389,8 +484,17 @@ function createWindow(): void {
   const cv = chromeView
   cv.setBackgroundColor('#00000000')
   // chrome UI 加载完成后再显示窗口，避免白闪
-  cv.webContents.once('did-finish-load', () => win?.show())
-  setTimeout(() => win?.show(), 2500) // 兜底：加载卡住也要出窗口
+  if (!startInBackground) {
+    const showInitially = (): void => {
+      clearTimeout(fallback)
+      cv.webContents.removeListener('did-finish-load', showInitially)
+      // 启动兜底只能执行一次；不要在用户已最小化后重新显示窗口。
+      if (!window.isDestroyed() && !window.isVisible() && !window.isMinimized()) window.show()
+    }
+    const fallback = setTimeout(showInitially, 2500)
+    cv.webContents.once('did-finish-load', showInitially)
+    window.once('closed', () => clearTimeout(fallback))
+  }
   // 外壳视图是唯一带 preload 的 WebContents：禁止它离开应用自身的 UI 文件，
   // 否则一次导航就会把特权桥暴露给任意站点（与页面视图同类的泄漏路径）。
   const chromeEntryUrl = /^[a-z]+:/i.test(assets.index) ? assets.index : pathToFileURL(assets.index).toString()
@@ -549,7 +653,9 @@ function registerIpc(): void {
       agentServer?.resume()
     }
     pushState()
+    if (!approvals.list().length) win?.flashFrame(false)
   }
+  approvals.onRequest = revealWindow
   ipcMain.handle('aa:clients-detect', (event) => {
     return guard(event, [], () => detectClients())
   })
@@ -715,6 +821,8 @@ app.whenReady().then(() => {
   tabManager = new TabManager(newtabUrl(), searchUrlBase())
   finder = new PageFinder(tabManager, pushState)
   tabManager.onChange = onTabChange
+  tabManager.isWindowForeground = () => !!win && win.isVisible() && !win.isMinimized() && win.isFocused()
+  tabManager.isWindowMinimized = () => !!win && win.isMinimized()
   tabManager.onContextMenu = (wc) => {
     handleBeforeInput(wc)
     installPageContextMenu(wc)
@@ -814,6 +922,7 @@ app.whenReady().then(() => {
     tools,
     (n, verifiedCount) => {
       agentCount = n
+      tabManager?.setAgentConnected(n > 0)
       agentVerifiedCount = verifiedCount
       bridgeState = n > 0 ? 'connected' : 'waiting'
       pushState()
@@ -846,16 +955,15 @@ app.on('window-all-closed', () => {
 })
 
 // 单实例：再次启动聚焦已有窗口
-const gotLock = app.requestSingleInstanceLock()
+const gotLock = app.requestSingleInstanceLock({ startInBackground })
 if (!gotLock) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
-    if (win) {
-      if (win.isMinimized()) win.restore()
-      win.focus()
-    }
+  app.on('second-instance', (_event, _argv, _cwd, data) => {
+    // 多个桥同时自动启动，后来的实例不应唤起最先启动的窗口。
+    if ((data as { startInBackground?: boolean } | null)?.startInBackground !== true) revealWindow()
   })
+  if (process.platform === 'darwin') app.on('activate', revealWindow)
 }
 
 // 未捕获异常写日志，避免静默崩溃

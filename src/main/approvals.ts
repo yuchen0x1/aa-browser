@@ -30,6 +30,8 @@ export class ApprovalManager {
   private resumeTimer: NodeJS.Timeout | null = null
   private resumeAtValue: number | undefined
   onChange: () => void = () => {}
+  /** 只有新增请求时才通知桌面层；解决、超时或暂停不会再次唤起窗口。 */
+  onRequest: () => void = () => {}
 
   list(): PendingApproval[] {
     return [...this.pending.values()].map(({ resolve: _resolve, timer: _timer, ...item }) => item)
@@ -71,6 +73,7 @@ export class ApprovalManager {
         timer
       })
       this.onChange()
+      this.onRequest()
     })
   }
 
