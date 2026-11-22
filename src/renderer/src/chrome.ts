@@ -1,4 +1,4 @@
-import type { TabInfo, UiState, DownloadInfo, HistoryEntry, AppSettings, SettingsView, AgentInfo, UpdateState } from '@shared/types'
+import type { TabInfo, UiState, DownloadInfo, HistoryEntry, AppSettings, SettingsView, AgentInfo, UpdateState, PagePointerForward } from '@shared/types'
 import { resolveLocale, translate, type Locale, type LocaleKey } from '@shared/locale'
 
 /** 与主进程 clients.ts 的 ClientDetectResult / ClientSetupResult 对应 */
@@ -45,6 +45,7 @@ declare global {
       find: (query: string, forward?: boolean, next?: boolean) => Promise<void>
       findClose: () => Promise<void>
       overlayHeight: (height: number) => Promise<void>
+      forwardPagePointer: (payload: PagePointerForward) => void
       tabSelect: (id: string, focusPage?: boolean) => Promise<void>
       back: () => Promise<void>
       forward: () => Promise<void>
@@ -56,7 +57,7 @@ declare global {
       resumeAgent: () => Promise<boolean>
       cancelAgentCall: (id: number, client?: number) => Promise<boolean>
       downloadsList: () => Promise<DownloadInfo[]>
-      downloadOpen: (id: string) => Promise<void>
+      downloadOpen: (id: string) => Promise<{ ok: boolean; reason?: string }>
       downloadShow: (id: string) => Promise<void>
       downloadCancel: (id: string) => Promise<boolean>
       downloadRetry: (id: string) => Promise<{ ok: boolean; reason?: string }>
@@ -68,7 +69,7 @@ declare global {
       agentInfo: () => Promise<AgentInfo | null>
       copyConnectionDiagnostics: () => Promise<boolean>
       clientsDetect: () => Promise<ClientDetectResult[]>
-      clientsSetup: (ids: string[]) => Promise<ClientSetupResult[]>
+      clientsSetup: (ids: string[], locale?: Locale) => Promise<ClientSetupResult[]>
       updateCheck: () => Promise<UpdateState>
       updateDownload: () => Promise<UpdateState>
       updateInstall: () => Promise<boolean>
@@ -83,7 +84,9 @@ declare global {
 }
 
 let state: UiState = { tabs: [], activeId: null, agentCount: 0, agentVerifiedCount: 0, bridgeState: 'waiting', pendingApprovals: [], agentInterrupted: false, agentActivity: { active: false, paused: false } }
-
+/** 用户正在编辑地址栏时，普通状态刷新不能覆盖草稿；真正切换标签仍应换成新地址。 */
+let omniboxDirty = false
+let omniboxEditTabId: string | null = null
 const tabsEl = document.getElementById('tabs') as HTMLDivElement
 const omnibox = document.getElementById('omnibox') as HTMLInputElement
 const agentPill = document.getElementById('agent-pill') as HTMLButtonElement
@@ -131,6 +134,9 @@ let diagnosticsCopying = false
 let diagnosticsFeedback: 'copied' | 'failed' | null = null
 let agentInfoRequest = 0
 let lastClients: ClientDetectResult[] | null = null
+/** 最近一次写入配置的结果；切换界面语言时按当前语言重绘状态徽标。 */
+let lastClientSetupResults: ClientSetupResult[] | null = null
+let lastClientSetupError = ''
 let lastAgentInfo: AgentInfo | null = null
 let hasAgentInfo = false
 const settingsStatus = document.getElementById('settings-status') as HTMLSpanElement | null
@@ -165,14 +171,32 @@ function resolveUiLocale(setting: AppSettings['locale'] = 'auto'): Locale {
   return resolveLocale(setting, navigator.languages?.length ? navigator.languages : [navigator.language])
 }
 
-let savedLocale = resolveUiLocale()
+function cachedAppearance(key: 'aa.theme' | 'aa.locale'): string | null {
+  try {
+    return localStorage.getItem(key)
+  } catch {
+    return null
+  }
+}
+function rememberAppearance(key: 'aa.theme' | 'aa.locale', value: string): void {
+  try {
+    localStorage.setItem(key, value)
+  } catch {
+    /* 隐私模式 / 存储禁用时仅失去首帧缓存 */
+  }
+}
+
+const cachedLocale = cachedAppearance('aa.locale')
+let savedLocale = cachedLocale === 'zh-CN' || cachedLocale === 'en-US' ? cachedLocale : resolveUiLocale()
 let activeLocale = savedLocale
 const t = (key: LocaleKey): string => translate(activeLocale, key)
 const uiText = (zh: string, en: string): string => activeLocale === 'en-US' ? en : zh
 
 type ThemeSetting = AppSettings['theme']
+const cachedTheme = cachedAppearance('aa.theme')
 let activeThemeSetting: ThemeSetting = 'light'
-let savedThemeSetting: ThemeSetting = 'light'
+let savedThemeSetting: ThemeSetting =
+  cachedTheme === 'light' || cachedTheme === 'dark' || cachedTheme === 'system' ? cachedTheme : 'light'
 const systemThemeMedia = window.matchMedia?.('(prefers-color-scheme: dark)')
 function resolveUiTheme(setting: ThemeSetting = 'light'): 'light' | 'dark' {
   if (setting === 'dark') return 'dark'
@@ -184,8 +208,9 @@ function applyTheme(setting: ThemeSetting = 'light'): void {
   const resolved = resolveUiTheme(setting)
   document.documentElement.dataset.theme = resolved
   document.documentElement.style.colorScheme = resolved
+  rememberAppearance('aa.theme', setting)
 }
-applyTheme('light')
+applyTheme(savedThemeSetting)
 systemThemeMedia?.addEventListener('change', () => {
   if (activeThemeSetting === 'system') applyTheme('system')
 })
@@ -243,6 +268,7 @@ function renderSearchPresetLabels(): void {
 
 function applyLocale(locale: Locale): void {
   activeLocale = locale
+  rememberAppearance('aa.locale', locale)
   document.documentElement.lang = locale
   document.title = t('appTitle')
   setAttr('tabs', 'aria-label', 'tabs')
@@ -322,6 +348,17 @@ function applyLocale(locale: Locale): void {
   // 语言预览只翻译已缓存的数据，不重新扫描客户端，也不写任何配置。
   if (lastClients && setClientList && setClientList.getAttribute('aria-busy') !== 'true') renderClients(lastClients, true)
   renderToolbar(); renderFind(); renderUpdate(state.update)
+  renderDownloads()
+  renderAgentActivity()
+  renderClientSetupResult()
+  const feedTitle = document.getElementById('feed-title')
+  if (feedTitle) feedTitle.textContent = uiText('Agent 实时活动日志', 'Agent activity log')
+  const downloadTitle = document.getElementById('download-title')
+  if (downloadTitle) downloadTitle.textContent = uiText('下载记录', 'Download history')
+  const closeFeed = document.getElementById('btn-close-feed')
+  if (closeFeed) closeFeed.setAttribute('aria-label', uiText('关闭 Agent 活动记录', 'Close agent activity log'))
+  const closeDownloads = document.getElementById('btn-close-dl')
+  if (closeDownloads) closeDownloads.setAttribute('aria-label', uiText('关闭下载列表', 'Close download list'))
 }
 
 function renderFind(): void {
@@ -413,6 +450,77 @@ for (const panel of [suggestPanel, dlPanel, feedDrawer]) {
 }
 window.addEventListener('resize', syncOverlayExtent)
 
+/* ── 活动 HUD 期间把页面区域的指针事件转发给网页 ─────────────
+ * 活动 HUD 会把外壳视图展开到整窗，透明视图仍参与命中测试，而页面视图在外壳
+ * 下面，所以网页收不到点击/滚轮。这里只转发落在页面区域（y > --page-top）、
+ * 且不在 HUD 卡片上的事件；主进程校验坐标并换算成页面视图坐标。 */
+let pointerMoveFrame = 0
+let pendingPointerMove: { x: number; y: number } | null = null
+
+function overlayCoversPage(): boolean {
+  const activity = state.agentActivity
+  if (!activity || (!activity.active && !activity.paused)) return false
+  return !(settingsModal && !settingsModal.hidden)
+}
+
+function pageTopPx(): number {
+  const raw = document.documentElement.style.getPropertyValue('--page-top')
+  const value = Number.parseFloat(raw)
+  return Number.isFinite(value) ? value : 84
+}
+
+function isHudCardTarget(target: EventTarget | null): boolean {
+  return target instanceof Element && !!target.closest('#agent-activity-card')
+}
+
+/** 只有页面区域才会转发；HUD 卡片和工具栏保留外壳自己的点击行为。 */
+function shouldForwardPointer(event: MouseEvent | WheelEvent): boolean {
+  if (!overlayCoversPage()) return false
+  if (isHudCardTarget(event.target)) return false
+  return event.clientY > pageTopPx()
+}
+
+function forwardPointer(event: MouseEvent | WheelEvent, type: PagePointerForward['type']): void {
+  const payload: PagePointerForward = { type, x: event.clientX, y: event.clientY }
+  if (event instanceof WheelEvent) {
+    // 主进程按像素投递 wheel；行/页模式的 delta 需要先换算。
+    const unit = event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? (window.innerHeight || 800) : 1
+    payload.deltaX = event.deltaX * unit
+    payload.deltaY = event.deltaY * unit
+  } else if (type === 'mouseDown' || type === 'mouseUp') {
+    payload.button = event.button === 2 ? 'right' : event.button === 1 ? 'middle' : 'left'
+    payload.clickCount = Math.max(1, Math.min(3, event.detail || 1))
+  }
+  window.aa.forwardPagePointer(payload)
+}
+
+document.addEventListener('mousedown', (event) => {
+  if (!shouldForwardPointer(event)) return
+  event.preventDefault()
+  forwardPointer(event, 'mouseDown')
+}, true)
+document.addEventListener('mouseup', (event) => {
+  if (!shouldForwardPointer(event)) return
+  event.preventDefault()
+  forwardPointer(event, 'mouseUp')
+}, true)
+document.addEventListener('mousemove', (event) => {
+  if (!shouldForwardPointer(event)) return
+  pendingPointerMove = { x: event.clientX, y: event.clientY }
+  if (pointerMoveFrame) return
+  pointerMoveFrame = requestAnimationFrame(() => {
+    pointerMoveFrame = 0
+    const point = pendingPointerMove
+    pendingPointerMove = null
+    if (point) window.aa.forwardPagePointer({ type: 'mouseMove', x: point.x, y: point.y })
+  })
+}, true)
+document.addEventListener('wheel', (event) => {
+  if (!shouldForwardPointer(event)) return
+  event.preventDefault()
+  forwardPointer(event, 'mouseWheel')
+}, { capture: true, passive: false })
+
 function formatUpdateBytes(value?: number): string {
   if (!value || value < 1024) return value ? `${value} B` : uiText('未知大小', 'Unknown size')
   const units = ['KB', 'MB', 'GB']
@@ -420,6 +528,12 @@ function formatUpdateBytes(value?: number): string {
   let i = 0
   while (n >= 1024 && i < units.length - 1) { n /= 1024; i++ }
   return `${n.toFixed(n >= 10 ? 0 : 1)} ${units[i]}`
+}
+
+function shortUpdateError(error: string | undefined, max = 160): string {
+  if (!error) return ''
+  const oneLine = error.replace(/\s+/g, ' ').trim()
+  return oneLine.length > max ? `${oneLine.slice(0, max - 1)}…` : oneLine
 }
 
 function renderUpdate(update?: UpdateState): void {
@@ -430,7 +544,8 @@ function renderUpdate(update?: UpdateState): void {
     downloading: activeLocale === 'en-US' ? `Downloading ${update.version ?? ''} · ${Math.max(0, Math.round(update.progress ?? 0))}%` : `正在下载 ${update.version ?? ''} · ${Math.max(0, Math.round(update.progress ?? 0))}%`,
     downloaded: activeLocale === 'en-US' ? `${update.version ?? ''} downloaded; restart to install` : `已下载 ${update.version ?? ''}，可以重启安装`, error: uiText('更新失败', 'Update failed')
   }
-  updateStatus.textContent = labels[update.status]
+  const shortError = update.status === 'error' ? shortUpdateError(update.error) : ''
+  updateStatus.textContent = shortError ? `${labels[update.status]}：${shortError}` : labels[update.status]
   const navVersion = document.getElementById('settings-nav-version')
   if (navVersion) navVersion.textContent = `v${update.currentVersion}`
   const releaseNotesLabel = uiText('发行说明（发布者原文）', 'Release notes (publisher original language)')
@@ -450,7 +565,10 @@ function renderUpdate(update?: UpdateState): void {
   document.documentElement.style.setProperty('--notice-height', update.noticeVisible ? '44px' : '0px')
   updateNotice.classList.toggle('error', update.status === 'error')
   const failedOperation = { check: ['check', '检查'], download: ['download', '下载'], install: ['installation', '安装'] }[update.failedOperation ?? 'check']
-  updateNoticeText.textContent = update.status === 'downloaded' ? (activeLocale === 'en-US' ? `${update.version} downloaded. Restart to install.` : `新版 ${update.version} 已下载完成，重启即可安装。`) : update.status === 'available' ? (activeLocale === 'en-US' ? `Version ${update.version} is available; current version is ${update.currentVersion}.` : `发现新版本 ${update.version}，当前为 ${update.currentVersion}。`) : update.status === 'error' ? (activeLocale === 'en-US' ? `Update ${failedOperation[0]} failed. ${update.retryAt ? 'It will retry automatically.' : 'Retry now or review settings.'}` : `更新${failedOperation[1]}失败，${update.retryAt ? '将自动重试，也可立即重试。' : '点击重试或在设置中查看原因。'}`) : labels[update.status]
+  const noticeBase = update.status === 'downloaded' ? (activeLocale === 'en-US' ? `${update.version} downloaded. Restart to install.` : `新版 ${update.version} 已下载完成，重启即可安装。`) : update.status === 'available' ? (activeLocale === 'en-US' ? `Version ${update.version} is available; current version is ${update.currentVersion}.` : `发现新版本 ${update.version}，当前为 ${update.currentVersion}。`) : update.status === 'error' ? (activeLocale === 'en-US' ? `Update ${failedOperation[0]} failed. ${update.retryAt ? 'It will retry automatically.' : 'Retry now or review settings.'}` : `更新${failedOperation[1]}失败，${update.retryAt ? '将自动重试，也可立即重试。' : '点击重试或在设置中查看原因。'}`) : labels[update.status]
+  const errorSuffix = update.status === 'error' && shortError ? (activeLocale === 'en-US' ? ` (${shortError})` : `（${shortError}）`) : ''
+  updateNoticeText.textContent = `${noticeBase}${errorSuffix}`
+  updateNoticeText.title = update.status === 'error' && update.error ? update.error : ''
   updateNoticeProgress.hidden = update.status !== 'downloading'
   updateNoticeProgress.value = Math.max(0, Math.min(100, update.progress ?? 0))
   updateNoticeAction.hidden = !['available', 'downloaded', 'error'].includes(update.status)
@@ -492,6 +610,14 @@ function focusOmnibox(): void {
 let renderedTabs: readonly TabInfo[] = []
 let renderedTabLocale: Locale | undefined
 
+/** 标签条溢出时，新建/激活的标签可能在可视区外；渲染后把它滚进来。 */
+function revealActiveTab(): void {
+  requestAnimationFrame(() => {
+    const active = tabsEl.querySelector<HTMLElement>('.tab.active')
+    active?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  })
+}
+
 /** 活动状态和 Agent 进度不替换标签节点，保留正在使用的键盘焦点。 */
 function renderTabs(): void {
   const next = state.tabs
@@ -513,6 +639,7 @@ function renderTabs(): void {
       const close = el.querySelector<HTMLButtonElement>('.close')
       if (close) close.tabIndex = el.tabIndex
     }
+    revealActiveTab()
     return
   }
   tabsEl.textContent = ''
@@ -587,6 +714,7 @@ function renderTabs(): void {
 
     tabsEl.appendChild(el)
   }
+  revealActiveTab()
 }
 
 let agentActivityTimer: ReturnType<typeof setInterval> | undefined
@@ -596,36 +724,60 @@ function renderAgentCallList(activity: AgentActivityState, paused: boolean): voi
   if (!agentActivityCalls) return
   const calls = paused ? [] : (activity.calls ?? [])
   agentActivityCalls.hidden = calls.length === 0
-  agentActivityCalls.replaceChildren()
+  // 按 (client, id) 复用行：进度推送很频繁，整表重建会让用户按下鼠标后
+  // 的 click 落到新节点的另一行，从而停止错误的调用。
+  const existing = new Map<string, HTMLElement>()
+  for (const row of Array.from(agentActivityCalls.querySelectorAll<HTMLElement>('.agent-call-row'))) {
+    existing.set(`${row.dataset['client']}:${row.dataset['callId']}`, row)
+  }
+  agentActivityCalls.querySelectorAll('.agent-call-more').forEach((node) => { node.remove() })
+  const keep = new Set<string>()
+  let position = 0
   for (const call of calls.slice(0, 6)) {
-    const row = document.createElement('div')
-    row.className = 'agent-call-row'
-    row.dataset['callId'] = String(call.id)
-    row.dataset['client'] = String(call.client)
+    const key = `${call.client}:${call.id}`
+    keep.add(key)
+    let row = existing.get(key)
+    if (!row) {
+      row = document.createElement('div')
+      row.className = 'agent-call-row'
+      row.dataset['callId'] = String(call.id)
+      row.dataset['client'] = String(call.client)
 
-    const label = document.createElement('span')
-    label.className = 'agent-call-label'
-    label.textContent = `#${call.id} · ${uiText('客户端', 'Client')} ${call.client} · ${call.tool}`
-    row.appendChild(label)
+      const label = document.createElement('span')
+      label.className = 'agent-call-label'
+      label.textContent = `#${call.id} · ${uiText('客户端', 'Client')} ${call.client} · ${call.tool}`
+      row.appendChild(label)
 
-    const detail = document.createElement('span')
-    detail.className = 'agent-call-detail'
-    if (call.message) detail.textContent = call.message
-    else if (typeof call.progress === 'number' && typeof call.total === 'number' && call.total > 0) {
-      detail.textContent = `${Math.round((call.progress / call.total) * 100)}%`
+      const detail = document.createElement('span')
+      detail.className = 'agent-call-detail'
+      row.appendChild(detail)
+
+      const stop = document.createElement('button')
+      stop.type = 'button'
+      stop.className = 'agent-call-stop'
+      stop.dataset['focusKey'] = `call-stop:${call.client}:${call.id}`
+      stop.textContent = uiText('停止', 'Stop')
+      stop.title = uiText(`只停止客户端 ${call.client} 的调用 #${call.id}`, `Stop client ${call.client} call #${call.id} only`)
+      stop.setAttribute('aria-label', stop.title)
+      stop.addEventListener('click', () => void window.aa.cancelAgentCall(call.id, call.client))
+      row.appendChild(stop)
     }
-    if (detail.textContent) row.appendChild(detail)
-
-    const stop = document.createElement('button')
-    stop.type = 'button'
-    stop.className = 'agent-call-stop'
-    stop.dataset['focusKey'] = `call-stop:${call.client}:${call.id}`
-    stop.textContent = uiText('停止', 'Stop')
-    stop.title = uiText(`只停止客户端 ${call.client} 的调用 #${call.id}`, `Stop client ${call.client} call #${call.id} only`)
-    stop.setAttribute('aria-label', stop.title)
-    stop.addEventListener('click', () => void window.aa.cancelAgentCall(call.id, call.client))
-    row.appendChild(stop)
-    agentActivityCalls.appendChild(row)
+    const detail = row.querySelector<HTMLElement>('.agent-call-detail')
+    if (detail) {
+      if (call.message) detail.textContent = call.message
+      else if (typeof call.progress === 'number' && typeof call.total === 'number' && call.total > 0) {
+        detail.textContent = `${Math.round((call.progress / call.total) * 100)}%`
+      } else {
+        detail.textContent = ''
+      }
+    }
+    // 顺序未变时不要移动节点：appendChild 会先摘除再插入，正在聚焦的“停止”按钮会因此失焦。
+    const target = agentActivityCalls.children[position] ?? null
+    if (target !== row) agentActivityCalls.insertBefore(row, target)
+    position++
+  }
+  for (const [key, row] of existing) {
+    if (!keep.has(key)) row.remove()
   }
   if (calls.length > 6) {
     const more = document.createElement('div')
@@ -721,21 +873,25 @@ function renderToolbar(): void {
   renderApprovals()
 }
 
+let knownApprovalIds = new Set<string>()
+
 function renderApprovals(): void {
   const pending = state.pendingApprovals ?? []
   approvalPanel.hidden = pending.length === 0
   approvalPanel.textContent = ''
-  for (const item of pending) {
+  for (const [index, item] of pending.entries()) {
     const isOp = item.kind === 'operation'
     const isPermission = item.kind === 'permission'
     const title = document.createElement('div')
     title.className = 'approval-title'
+    if (index === 0) title.id = 'approval-title'
     title.textContent = isPermission ? uiText('网站请求设备权限', 'Website requests device permission') : isOp ? uiText('Agent 请求执行高危操作', 'Agent requests a high-risk action') : uiText('需要你亲自填写敏感信息', 'Sensitive information requires your input')
     const meta = document.createElement('div')
     meta.className = 'approval-meta'
     meta.textContent = `${uiText('网站：', 'Site: ')}${item.site} · ${uiText('标签：', 'Tab: ')}${item.tabTitle} · ${uiText('操作：', 'Action: ')}${item.fieldLabel}`
     const help = document.createElement('div')
     help.className = 'approval-help'
+    if (index === 0) help.id = 'approval-help'
     help.textContent = isPermission
       ? (item.detail || uiText('允许后该站点仅在本次浏览器会话内可使用此权限；拒绝则保持阻断。', 'After allowing, this site may use the permission only in this browser session; denying keeps it blocked.'))
       : isOp
@@ -755,6 +911,18 @@ function renderApprovals(): void {
     allow.addEventListener('click', () => void window.aa.decideApproval(item.id, true))
     actions.append(deny, allow)
     approvalPanel.append(title, meta, help, actions)
+  }
+  // 新审批到达时把焦点移到“允许”按钮，屏幕阅读器可立即读到 alertdialog；
+  // 敏感输入例外：焦点应留在网页输入框，由用户亲自填写。
+  const ids = new Set(pending.map((item) => item.id))
+  const fresh = pending.find((item) => !knownApprovalIds.has(item.id))
+  knownApprovalIds = ids
+  if (fresh && fresh.kind !== 'sensitive' && document.hasFocus()) {
+    requestAnimationFrame(() => {
+      approvalPanel
+        .querySelector<HTMLButtonElement>(`[data-focus-key="approval-allow:${CSS.escape(fresh.id)}"]`)
+        ?.focus({ preventScroll: true })
+    })
   }
 }
 
@@ -859,6 +1027,21 @@ async function retryDownload(id: string): Promise<void> {
   }
 }
 
+async function openDownload(id: string): Promise<void> {
+  const record = state.downloads?.find((d) => d.id === id)
+  const name = record?.filename ? uiText(`，文件：${record.filename}`, ` — ${record.filename}`) : ''
+  try {
+    const result = await window.aa.downloadOpen(id)
+    if (!result?.ok) {
+      const reason = result?.reason?.trim() || uiText('未知原因', 'Unknown reason')
+      setDownloadStatus(uiText(`打开失败${name}：${reason}`, `Open failed${name}: ${reason}`), 'error')
+    }
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    setDownloadStatus(uiText(`打开失败${name}：${reason}`, `Open failed${name}: ${reason}`), 'error')
+  }
+}
+
 function renderDownloads(): void {
   if (!dlList) return
   const items = state.downloads || []
@@ -906,17 +1089,20 @@ function renderDownloads(): void {
 
     const actions = document.createElement('div')
     actions.className = 'dl-actions'
+    const completed = d.state === 'completed'
     const open = document.createElement('button')
     open.className = 'dl-act'
     open.dataset['focusKey'] = `download-open:${d.id}`
     open.textContent = uiText('打开', 'Open')
-    open.addEventListener('click', () => void window.aa.downloadOpen(d.id))
+    open.addEventListener('click', () => void openDownload(d.id))
     const show = document.createElement('button')
     show.className = 'dl-act'
     show.dataset['focusKey'] = `download-show:${d.id}`
     show.textContent = uiText('在文件夹中显示', 'Show in folder')
     show.addEventListener('click', () => void window.aa.downloadShow(d.id))
-    actions.append(open, show)
+    // 未完成的文件不提供“打开”（可能是半截文件），但可以定位或重试。
+    if (completed) actions.append(open)
+    if (d.state !== 'progressing') actions.append(show)
     if (d.state === 'progressing') {
       const cancel = document.createElement('button')
       cancel.className = 'dl-act dl-act-danger'
@@ -924,7 +1110,7 @@ function renderDownloads(): void {
       cancel.textContent = uiText('取消', 'Cancel')
       cancel.addEventListener('click', () => void window.aa.downloadCancel(d.id))
       actions.appendChild(cancel)
-    } else {
+    } else if (d.state === 'cancelled' || d.state === 'interrupted') {
       const retry = document.createElement('button')
       retry.className = 'dl-act'
       retry.dataset['focusKey'] = `download-retry:${d.id}`
@@ -997,6 +1183,8 @@ function renderSuggest(items: HistoryEntry[]): void {
 }
 
 function onOmniboxInput(): void {
+  omniboxDirty = true
+  omniboxEditTabId = state.activeId
   const request = ++suggestRequest
   const q = omnibox.value.trim()
   if (!q) {
@@ -1059,6 +1247,18 @@ function findFocusFallback(key: string): HTMLElement | null {
   return isFocusable(btnFeed) ? btnFeed : omnibox
 }
 
+function renderClientSetupResult(): void {
+  if (!setClientResult) return
+  if (lastClientSetupError) {
+    setClientResult.textContent = `${uiText('写入失败：', 'Write failed: ')}${lastClientSetupError}`
+    return
+  }
+  if (!lastClientSetupResults) return
+  setClientResult.textContent = lastClientSetupResults.length
+    ? lastClientSetupResults.map((r) => `${clientStatusBadge(r.status)} ${clientDisplayName(r.id, r.name)} — ${r.message}`).join('　')
+    : uiText('没有可写入的客户端。', 'No clients available to configure.')
+}
+
 function applyState(next: UiState): void {
   // 状态流会重建列表；只恢复外壳内同一业务控件，不能抢走网页的焦点。
   const focused = document.hasFocus() ? document.activeElement as HTMLElement | null : null
@@ -1073,9 +1273,14 @@ function applyState(next: UiState): void {
   }
   if (activeChanged) {
     hideSuggest()
-    if (document.activeElement === omnibox) {
+    // 同一标签的迟到状态不能覆盖草稿；已知标签真正切换时才重置地址栏。
+    const editingKnownTab = omniboxDirty && omniboxEditTabId !== null && previous.activeId === omniboxEditTabId
+    const resetOmnibox = document.activeElement === omnibox && (!omniboxDirty || (editingKnownTab && next.activeId !== omniboxEditTabId))
+    if (resetOmnibox) {
       omnibox.value = editableUrl(activeTab()?.url ?? '')
       omnibox.select()
+      omniboxDirty = false
+      omniboxEditTabId = next.activeId
     }
   }
   if (typeof next.windowHeight === 'number') document.documentElement.style.setProperty('--window-height', `${next.windowHeight}px`)
@@ -1093,6 +1298,18 @@ function applyState(next: UiState): void {
 }
 
 /* ── 事件绑定 ─────────────────────── */
+
+// 标签条隐藏了滚动条；用滚轮横向滚动，避免只能拖触控板。
+tabsEl.addEventListener('wheel', (e) => {
+  if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return
+  const max = tabsEl.scrollWidth - tabsEl.clientWidth
+  if (max <= 0) return
+  const next = Math.max(0, Math.min(max, tabsEl.scrollLeft + e.deltaY))
+  if (next !== tabsEl.scrollLeft) {
+    e.preventDefault()
+    tabsEl.scrollLeft = next
+  }
+}, { passive: false })
 
 btnBack.addEventListener('click', () => void window.aa.back())
 btnForward.addEventListener('click', () => void window.aa.forward())
@@ -1316,15 +1533,20 @@ function renderClients(clients: ClientDetectResult[], preserveSelection = false)
     const checkbox = document.createElement('input')
     checkbox.type = 'checkbox'
     checkbox.dataset['id'] = client.id
-    checkbox.disabled = client.configured
-    checkbox.checked = client.configured ? false : (preserveSelection && existing.length ? checkedIds.has(client.id) : true)
+    const needsRepair = client.outdated === true
+    checkbox.disabled = client.configured && !needsRepair
+    checkbox.checked = needsRepair ? true : client.configured ? false : (preserveSelection && existing.length ? checkedIds.has(client.id) : true)
     if (focusedId === client.id) checkbox.dataset['focusPending'] = 'true'
     const name = document.createElement('span')
     name.className = 'client-name'
     name.textContent = clientDisplayName(client.id, client.name)
     const badge = document.createElement('span')
-    badge.className = client.configured ? 'client-pill ok' : client.outdated ? 'client-pill warn' : 'client-pill'
-    badge.textContent = client.configured ? uiText('已配置', 'Configured') : client.outdated ? uiText('路径待修复', 'Path needs repair') : uiText('未配置', 'Not configured')
+    badge.className = needsRepair ? 'client-pill warn' : client.configured ? 'client-pill ok' : 'client-pill'
+    badge.textContent = needsRepair
+      ? uiText('路径待修复', 'Path needs repair')
+      : client.configured
+        ? uiText('已配置', 'Configured')
+        : uiText('未配置', 'Not configured')
     label.append(checkbox, name, badge)
     fragment.appendChild(label)
   }
@@ -1377,16 +1599,18 @@ btnClientSetup?.addEventListener('click', async () => {
   btnClientSetup.setAttribute('aria-busy', 'true')
   if (setClientResult) setClientResult.textContent = uiText('正在写入接入配置…', 'Writing connection configuration…')
   try {
-    const results = await window.aa.clientsSetup(ids)
+    const results = await window.aa.clientsSetup(ids, activeLocale)
     if (!currentSettingsRequest(request)) return
-    if (setClientResult) {
-      setClientResult.textContent = results.length
-        ? results.map((r) => `${clientStatusBadge(r.status)} ${clientDisplayName(r.id, r.name)} — ${r.message}`).join('　')
-        : uiText('没有可写入的客户端。', 'No clients available to configure.')
-    }
+    lastClientSetupError = ''
+    lastClientSetupResults = results
+    renderClientSetupResult()
     await Promise.all([refreshClients(), refreshAgentInfo()])
   } catch (err) {
-    if (currentSettingsRequest(request) && setClientResult) setClientResult.textContent = `${uiText('写入失败：', 'Write failed: ')}${err instanceof Error ? err.message : String(err)}`
+    if (currentSettingsRequest(request)) {
+      lastClientSetupResults = null
+      lastClientSetupError = err instanceof Error ? err.message : String(err)
+      renderClientSetupResult()
+    }
   } finally {
     if (currentSettingsRequest(request)) {
       btnClientSetup.removeAttribute('aria-busy')
@@ -1710,11 +1934,15 @@ function selectSuggest(el: HTMLElement): void {
 }
 omnibox.addEventListener('focus', () => {
   // 缩略显示不能作为导航输入；编辑时恢复协议、查询与 hash，但不暴露 URL 凭证。
+  omniboxDirty = false
+  omniboxEditTabId = state.activeId
   omnibox.value = editableUrl(activeTab()?.url ?? '')
   omnibox.select()
 })
 omnibox.addEventListener('blur', () => {
   // 只恢复地址；重绘工具栏会在 mousedown 和 click 之间替换审批/停止按钮。
+  omniboxDirty = false
+  omniboxEditTabId = state.activeId
   omnibox.value = shortenUrl(activeTab()?.url ?? '')
   setTimeout(() => {
     if (document.activeElement !== omnibox) hideSuggest()
@@ -1791,6 +2019,8 @@ window.addEventListener('keydown', (e) => {
 })
 
 /* 初始化读取也参与保存基线排序，不因打开/关闭过模态而丢失有效外观。 */
+// 先用同步缓存（上次选择或系统语言）套一次文案，避免首帧中文再跳到英文。
+applyLocale(savedLocale)
 setSettingsReady(false)
 const initialSettingsOperation = ++settingsOperation
 void window.aa.settingsGet().then((view) => {

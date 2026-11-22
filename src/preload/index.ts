@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { DownloadInfo, HistoryEntry, AppSettings, SettingsView, AgentInfo, UpdateState } from '@shared/types'
+import type { DownloadInfo, HistoryEntry, AppSettings, SettingsView, AgentInfo, UpdateState, PagePointerForward } from '@shared/types'
 
 /** 浏览器外壳 UI 与主进程的桥（chromeView 专用，页面视图不带 preload） */
 contextBridge.exposeInMainWorld('aa', {
@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('aa', {
   find: (query: string, forward = true, next = false): Promise<void> => ipcRenderer.invoke('aa:find', query, forward, next),
   findClose: (): Promise<void> => ipcRenderer.invoke('aa:find-close'),
   overlayHeight: (height: number): Promise<void> => ipcRenderer.invoke('aa:overlay-height', height),
+  forwardPagePointer: (payload: PagePointerForward): void => ipcRenderer.send('aa:page-pointer', payload),
   tabSelect: (id: string, focusPage = true): Promise<void> => ipcRenderer.invoke('aa:tab-select', id, focusPage),
   back: (): Promise<void> => ipcRenderer.invoke('aa:back'),
   forward: (): Promise<void> => ipcRenderer.invoke('aa:forward'),
@@ -22,7 +23,7 @@ contextBridge.exposeInMainWorld('aa', {
   resumeAgent: (): Promise<boolean> => ipcRenderer.invoke('aa:agent-resume'),
   cancelAgentCall: (id: number, client?: number): Promise<boolean> => ipcRenderer.invoke('aa:agent-cancel-call', id, client),
   downloadsList: (): Promise<unknown> => ipcRenderer.invoke('aa:downloads-list'),
-  downloadOpen: (id: string): Promise<void> => ipcRenderer.invoke('aa:download-open', id),
+  downloadOpen: (id: string): Promise<{ ok: boolean; reason?: string }> => ipcRenderer.invoke('aa:download-open', id),
   downloadShow: (id: string): Promise<void> => ipcRenderer.invoke('aa:download-show', id),
   downloadCancel: (id: string): Promise<boolean> => ipcRenderer.invoke('aa:download-cancel', id),
   downloadRetry: (id: string): Promise<{ ok: boolean; reason?: string }> => ipcRenderer.invoke('aa:download-retry', id),
@@ -34,7 +35,7 @@ contextBridge.exposeInMainWorld('aa', {
   agentInfo: (): Promise<AgentInfo | null> => ipcRenderer.invoke('aa:agent-info'),
   copyConnectionDiagnostics: (): Promise<boolean> => ipcRenderer.invoke('aa:connection-diagnostics-copy'),
   clientsDetect: (): Promise<unknown> => ipcRenderer.invoke('aa:clients-detect'),
-  clientsSetup: (ids: string[]): Promise<unknown> => ipcRenderer.invoke('aa:clients-setup', ids),
+  clientsSetup: (ids: string[], locale?: string): Promise<unknown> => ipcRenderer.invoke('aa:clients-setup', ids, locale),
   updateCheck: (): Promise<UpdateState> => ipcRenderer.invoke('aa:update-check'),
   updateDownload: (): Promise<UpdateState> => ipcRenderer.invoke('aa:update-download'),
   updateInstall: (): Promise<boolean> => ipcRenderer.invoke('aa:update-install'),

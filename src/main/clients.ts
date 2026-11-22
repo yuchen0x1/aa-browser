@@ -412,8 +412,8 @@ export function detectClients(): ClientDetectResult[] {
  * 把 aa-browser 条目写入指定客户端配置。
  * 返回逐个结果；绝不触碰 aa-browser 以外的键；写前备份。
  */
-export function setupClients(ids: string[]): ClientSetupResult[] {
-  const locale = getMainLocale()
+export function setupClients(ids: string[], localeOverride?: 'zh-CN' | 'en-US'): ClientSetupResult[] {
+  const locale = localeOverride ?? getMainLocale()
   const results: ClientSetupResult[] = []
   try {
     if (isAppImage() && !findSystemNode()) throw new Error(diagnosticMessage(locale, 'clients.nodeRequired'))
@@ -463,12 +463,39 @@ export function setupClients(ids: string[]): ClientSetupResult[] {
         continue
       }
       const entry = entryFor(def)
+      const bridgeOf = (candidate: unknown): string | null => {
+        const obj = candidate as Record<string, unknown> | undefined
+        const args = Array.isArray(obj?.['args'])
+          ? obj['args']
+          : Array.isArray(obj?.['command']) ? obj['command'].slice(1) : []
+        return typeof args[0] === 'string' ? args[0] : null
+      }
+      const missingBridge = bridgeOf(existing)
       if (sameEntry(existing, entry)) {
+        if (missingBridge && !fs.existsSync(missingBridge)) {
+          results.push({
+            id: def.id,
+            name: def.name,
+            status: 'error',
+            message: diagnosticMessage(locale, 'clients.bridgeMissing', missingBridge)
+          })
+          continue
+        }
         results.push({
           id: def.id,
           name: def.name,
           status: 'skipped',
           message: diagnosticMessage(locale, 'clients.configured', file)
+        })
+        continue
+      }
+      const targetBridge = bridgeOf(entry)
+      if (targetBridge && !fs.existsSync(targetBridge)) {
+        results.push({
+          id: def.id,
+          name: def.name,
+          status: 'error',
+          message: diagnosticMessage(locale, 'clients.bridgeMissing', targetBridge)
         })
         continue
       }

@@ -251,16 +251,35 @@ export async function frameType(wc: WebContents, frameId: string, selector: stri
       if (!el) return { ok: false, reason: 'not-found' };
       const value = ${jsLiteral(text)};
       el.focus();
-      const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-      const desc = Object.getOwnPropertyDescriptor(proto, 'value');
-      if (desc && desc.set) desc.set.call(el, value); else el.value = value;
+      const tag = String(el.tagName || '').toUpperCase();
+      const type = String(el.type || '').toLowerCase();
+      if (!el.isContentEditable) {
+        if (tag !== 'TEXTAREA' && !(tag === 'INPUT' && !['checkbox', 'radio', 'button', 'submit', 'file', 'image', 'reset'].includes(type))) {
+          return { ok: false, reason: 'not-editable', tag: tag.toLowerCase(), type };
+        }
+      }
+      try {
+        if (el.isContentEditable) el.textContent = value;
+        else {
+          const proto = tag === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+          const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+          if (desc && desc.set) desc.set.call(el, value); else el.value = value;
+        }
+      } catch (e) { return { ok: false, reason: 'set-failed', tag: tag.toLowerCase(), type } }
       el.dispatchEvent(new Event('input', { bubbles: true }));
       el.dispatchEvent(new Event('change', { bubbles: true }));
       return { ok: true, typed: describe(el) };
     })()`,
     signal
-  )) as { ok: boolean; reason?: string; typed?: string }
-  if (!result?.ok) throw new Error(result?.reason === 'invalid-selector' ? `选择器无效: ${selector}` : `在 ${frameId} 内找不到输入元素: ${selector}`)
+  )) as { ok: boolean; reason?: string; typed?: string; tag?: string; type?: string }
+  if (!result?.ok) {
+    if (result?.reason === 'invalid-selector') throw new Error(`选择器无效: ${selector}`)
+    if (result?.reason === 'not-editable') {
+      throw new Error(`元素 ${selector} 不可输入（${result.tag ?? 'unknown'}${result.type ? `[type=${result.type}]` : ''}）；请改用 click/select`)
+    }
+    if (result?.reason === 'set-failed') throw new Error(`无法写入 ${selector}（set-failed）`)
+    throw new Error(`在 ${frameId} 内找不到输入元素: ${selector}`)
+  }
   return { typed: result.typed ?? selector }
 }
 

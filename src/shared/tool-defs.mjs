@@ -305,7 +305,7 @@ export const TOOL_DEFS = [
       type: 'object',
       properties: {
         action: { type: 'string', enum: ['get', 'set', 'clear'], description: 'Operation' },
-        url: { type: 'string', description: '(get/set) Cookie belongs to this URL' },
+        url: { type: 'string', description: '(get/set/clear) Cookie belongs to this URL; with clear, only cookies for this site are removed' },
         name: { type: 'string', description: '(get: filter by name; set: cookie name; clear: only clear this name)' },
         value: { type: 'string', description: '(set) Cookie value' },
         domain: { type: 'string', description: '(set/clear filter) Cookie domain' },
@@ -354,7 +354,7 @@ export const TOOL_DEFS = [
     inputSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Output file path (default ~/.aabrowser/downloads/aa-page-<ts>.pdf)' },
+        path: { type: 'string', description: 'Output file path inside the browser export dirs (~/.aabrowser/downloads, har, screenshots or AA_BROWSER_EXPORT_DIR; default ~/.aabrowser/downloads/aa-page-<ts>.pdf). Symlinks and paths outside those dirs are rejected.' },
         landscape: { type: 'boolean', description: 'Landscape orientation (default false)' },
         tabId: { type: 'string', description: 'Tab id (default: active tab)' }
       }
@@ -443,7 +443,7 @@ export const TOOL_DEFS = [
     inputSchema: {
       type: 'object',
       properties: {
-        path: { type: 'string', description: 'Output file path (default ~/.aabrowser/har/aa-<timestamp>.har)' },
+        path: { type: 'string', description: 'Output file path inside the browser export dirs (~/.aabrowser/downloads, har, screenshots or AA_BROWSER_EXPORT_DIR; default ~/.aabrowser/har/aa-<timestamp>.har). Symlinks and paths outside those dirs are rejected.' },
         includeSensitive: { type: 'boolean', description: 'Include authentication headers and credential-like URL parameters (default false; handle the exported file as sensitive)' },
         tabId: { type: 'string', description: 'Tab id (default: active tab)' }
       }

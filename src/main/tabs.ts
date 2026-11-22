@@ -82,10 +82,16 @@ function siteRuleMatches(url: URL, rawRule: string): boolean {
     return false
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false
-  if (parsed.username || parsed.password || parsed.hash || parsed.search || parsed.pathname !== '/') return false
+  if (parsed.username || parsed.password || parsed.hash || parsed.search) return false
   if (parsed.port && parsed.port !== (url.port || defaultPort(url.protocol))) return false
   if (!hostMatches(url.hostname, parsed.hostname)) return false
-  return parsed.protocol === url.protocol
+  if (parsed.protocol !== url.protocol) return false
+  // 支持路径前缀规则（example.com/admin）：旧实现直接拒绝非根路径，
+  // 导致规则静默失效或整站被误封。比较时忽略大小写与末尾斜杠差异。
+  const rulePath = parsed.pathname.replace(/\/+$/, '')
+  if (!rulePath) return true
+  const targetPath = url.pathname.replace(/\/+$/, '')
+  return targetPath === rulePath || targetPath.startsWith(`${rulePath}/`)
 }
 
 export function isUrlAllowed(url: string, rules: string[], newtabUrl: string): boolean {
@@ -314,6 +320,24 @@ export class TabManager {
     } catch (error) {
       console.warn(`[aa-browser] 标签 ${id} 抓包初始化失败: ${error instanceof Error ? error.message : String(error)}`)
     }
+    // 打开 DevTools 会抢占调试通道并 detach，对话框守卫、closed-shadow 捕获和抓包
+    // 都随调试会话一起失效（守卫尤其危险：后续页面的 alert() 会让 Agent 永久卡死）。
+    // 关闭 DevTools 后按同样顺序重新安装，恢复到打开前的状态。
+    wc.on('devtools-closed', () => {
+      if (wc.isDestroyed()) return
+      void (async () => {
+        try {
+          await withTimeout(installDialogGuard(wc), 2500, '页面对话框守卫恢复')
+          if (wc.isDestroyed()) return
+          await withTimeout(installClosedShadowCapture(wc), 2500, 'closed shadow 捕获恢复')
+          if (wc.isDestroyed()) return
+          await withTimeout(net.ensure(), 3000, 'Network.enable 恢复')
+          if (net.mockEnabled) await net.ensureMockInterception()
+        } catch (error) {
+          console.warn(`[aa-browser] 标签 ${id} DevTools 关闭后恢复页面守卫失败: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      })()
+    })
   }
 
   private async loadPage(wc: WebContents, url: string): Promise<void> {
@@ -385,6 +409,11 @@ export class TabManager {
     }
     if (this.activeId === id) {
       this.activeId = this.tabs.length ? this.tabs[Math.min(idx, this.tabs.length - 1)].id : null
+    }
+    // 用户关闭最后一个标签时保留一个可输入的新标签页，而不是留下空窗口；
+    // closeAll() 传 remember=false，退出时不会反向创建标签。
+    if (remember && this.tabs.length === 0) {
+      this.createTab(this.newtabUrl, true, false)
     }
     // 隔离分区是一次性的：关闭标签后连同 Cookie/Storage/缓存一起清掉，
     // 否则每个隔离标签都会在 Partitions/ 下留一个永久目录。

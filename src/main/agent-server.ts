@@ -12,6 +12,8 @@ import { writeJsonAtomic } from './atomic-json'
 
 const CONNECT_DIR = path.join(os.homedir(), '.aabrowser')
 const DEFAULT_CONNECT_FILE = path.join(CONNECT_DIR, 'connection.json')
+/** 单连接待发送队列上限；超过说明桥已跟不上，继续排队只会占内存。 */
+const MAX_BUFFERED_BYTES = 64 * 1024 * 1024
 
 type ActiveTool = AgentCallInfo
 
@@ -213,7 +215,9 @@ export class AgentServer {
     this.onStatusChange(this.clients.size, this.verifiedClients.size)
 
     ws.on('message', (raw) => {
-      void this.handleMessage(ws, raw.toString())
+      void this.handleMessage(ws, raw.toString()).catch((error: unknown) => {
+        console.warn(`[aa-browser] 处理桥请求失败: ${error instanceof Error ? error.message : String(error)}`)
+      })
     })
     const dropClient = (): void => {
       const calls = this.active.get(ws)
@@ -235,6 +239,8 @@ export class AgentServer {
     try {
       req = JSON.parse(raw) as WsRequest
     } catch {
+      // 没有 id 无法回错误帧；记录截断样本，便于排查桥或代理写入的坏帧。
+      console.warn(`[aa-browser] 忽略无法解析的桥消息: ${raw.slice(0, 200)}`)
       return
     }
     if (typeof req?.id !== 'number') return
@@ -249,7 +255,15 @@ export class AgentServer {
       this.reply(ws, { id: req.id, ok: false, error: 'Agent 已被用户中断；请在浏览器工具栏点击“恢复”后重试。' })
       return
     }
-    if (typeof req.tool !== 'string') return
+    if (typeof req.tool !== 'string' || !req.tool.trim()) {
+      // 有 id 却不带工具名：立即回错误，否则桥只能等到超时。
+      this.reply(ws, { id: req.id, ok: false, error: 'invalid request: 缺少工具名' })
+      return
+    }
+    if (req.args !== undefined && (req.args === null || typeof req.args !== 'object' || Array.isArray(req.args))) {
+      this.reply(ws, { id: req.id, ok: false, error: 'invalid request: args 必须是对象' })
+      return
+    }
 
     const tool = this.tools.find((t) => t.name === req.tool)
     if (!tool) {
@@ -310,8 +324,18 @@ export class AgentServer {
   }
 
   private reply(ws: WebSocket, resp: unknown): void {
-    if (ws.readyState === WebSocket.OPEN) {
+    if (ws.readyState !== WebSocket.OPEN) return
+    // 结果可能带大截图；慢客户端积压过多时断开重连，避免主进程内存被无界排队拖垮。
+    if (ws.bufferedAmount > MAX_BUFFERED_BYTES) {
+      console.warn(`[aa-browser] 桥客户端发送积压 ${ws.bufferedAmount} 字节，主动断开`)
+      ws.close(1011, 'client too slow')
+      return
+    }
+    try {
       ws.send(JSON.stringify(resp))
+    } catch (error) {
+      // 序列化失败或连接在检查后关闭：记录并放弃这一帧，不能让异常逃出消息处理。
+      console.warn(`[aa-browser] 回复桥消息失败: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 

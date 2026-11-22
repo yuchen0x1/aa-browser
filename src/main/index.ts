@@ -18,7 +18,7 @@ import { getSessionStore } from './session-store'
 import { ApprovalManager } from './approvals'
 import { applyPermissionPolicy, clearIsolatedPartition, sweepStalePartitions } from './sessions'
 import { session } from 'electron'
-import type { UiState } from '@shared/types'
+import type { PagePointerForward, UiState } from '@shared/types'
 import { contextMenuLabels } from '@shared/menu-labels'
 import { UpdateManager } from './updater'
 import { clearUpdateRestartMarker, writeUpdateRestartMarker } from './update-restart'
@@ -36,6 +36,8 @@ function discoveryFile(): string {
 
 const CHROME_HEIGHT = 84
 let lastContentSize = { width: 1280, height: 840 }
+/** 页面视图在窗口内容区里的顶部偏移；外壳转发指针事件时用它区分工具栏与页面。 */
+let lastPageTop = CHROME_HEIGHT
 
 /** 默认搜索引擎基址：优先读取用户设置 */
 function searchUrlBase(): string {
@@ -116,6 +118,7 @@ function layout(): void {
     : Math.min(height, Math.max(CHROME_HEIGHT + panelHeight, overlayHeight))
   chromeView.setBounds({ x: 0, y: 0, width, height: chromeHeight })
   const pageTop = CHROME_HEIGHT + panelHeight
+  lastPageTop = pageTop
   if (width <= 0 || height <= pageTop) return // 某些桌面在最小化时不给出可用的内容区。
   const bounds = { x: 0, y: pageTop, width, height: height - pageTop }
   // 未挂到窗口的标签也有可用视口，MCP 可以定向操作而不切换用户正在看的标签。
@@ -522,10 +525,10 @@ function registerIpc(): void {
    * 这里再做一次显式校验，防止将来有人给页面视图加回 preload 时静默放宽权限。
    * 注意 approvals/downloads 等 handler 原本就逐项比对 sender，统一后语义不变。
    */
-  function isTrustedSender(event: Electron.IpcMainInvokeEvent): boolean {
+  function isTrustedSender(event: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean {
     return !!chromeView && event.sender === chromeView.webContents
   }
-  function guard<T>(event: Electron.IpcMainInvokeEvent, fallback: T, fn: () => T): T {
+  function guard<T>(event: Electron.IpcMainInvokeEvent, fallback: T, fn: () => T | Promise<T>): T | Promise<T> {
     if (!isTrustedSender(event)) return fallback
     return fn()
   }
@@ -574,6 +577,59 @@ function registerIpc(): void {
       layout()
     })
   })
+  /**
+   * 活动 HUD 把外壳视图展开到整窗后，透明区域仍会截获鼠标事件，网页看起来“点不动”。
+   * 渲染层只转发落在页面区域的指针事件；主进程再校验来源、窗口状态与坐标范围，
+   * 换算成页面视图本地坐标后投递给活动页。
+   */
+  ipcMain.on('aa:page-pointer', (event, payload: unknown) => {
+    if (!isTrustedSender(event) || !win || win.isDestroyed() || !tabManager) return
+    if (win.isMinimized() || !win.isVisible() || settingsOpen) return
+    if (!agentActivity.active && !agentActivity.paused) return
+    const input = payload as Partial<PagePointerForward> | null
+    if (!input || typeof input !== 'object') return
+    const type = input.type
+    if (type !== 'mouseDown' && type !== 'mouseUp' && type !== 'mouseMove' && type !== 'mouseWheel') return
+    const x = Number(input.x)
+    const y = Number(input.y)
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return
+    const bounds = win.getContentBounds()
+    if (bounds.width <= 0 || bounds.height <= 0) return
+    if (x < 0 || y < 0 || x >= bounds.width || y >= bounds.height) return
+    if (y < lastPageTop) return
+    const active = tabManager.active()
+    const wc = active?.view.webContents
+    if (!active || !wc || wc.isDestroyed()) return
+    const point = { x: Math.round(x), y: Math.round(y - lastPageTop) }
+    if (type === 'mouseMove') {
+      wc.sendInputEvent({ type, ...point })
+      return
+    }
+    if (type === 'mouseWheel') {
+      const deltaX = Number(input.deltaX) || 0
+      const deltaY = Number(input.deltaY) || 0
+      // DOM 的 delta 正方向是“内容向上/向右”，Chromium wheel delta 的正方向相反。
+      wc.sendInputEvent({
+        type,
+        ...point,
+        deltaX: Math.round(-deltaX),
+        deltaY: Math.round(-deltaY),
+        wheelTicksX: Math.round(-deltaX / 120),
+        wheelTicksY: Math.round(-deltaY / 120),
+        hasPreciseScrollingDeltas: true,
+        canScroll: true
+      })
+      return
+    }
+    // 用户主动点击页面：把焦点还给网页，键盘与后续输入才会落到页面上。
+    wc.focus()
+    wc.sendInputEvent({
+      type,
+      ...point,
+      button: input.button === 'right' ? 'right' : input.button === 'middle' ? 'middle' : 'left',
+      clickCount: Math.max(1, Math.min(3, Math.trunc(Number(input.clickCount) || 1)))
+    })
+  })
   ipcMain.handle('aa:tab-close', (event, id: string) => {
     return guard(event, undefined, () => {
       const tab = tabManager?.get(id)
@@ -611,13 +667,18 @@ function registerIpc(): void {
   })
   ipcMain.handle('aa:omnibox-submit', (event, value: string) => {
     return guard(event, false, () => {
-      const active = tabManager?.active()
-      if (!active || !tabManager) return false
+      if (!tabManager) return false
       const target = normalizeUrl(value, searchUrlBase(), newtabUrl())
       try {
         tabManager.assertUrlAllowed(target)
       } catch {
         return false
+      }
+      const active = tabManager.active()
+      if (!active) {
+        // 最后一个标签已关闭时地址栏仍应可用：直接开一个新标签。
+        tabManager.createTab(target, true, false)
+        return true
       }
       void tabManager.navigate(active, target).catch(() => {
         // 页面加载失败由 WebContents 呈现，地址栏 IPC 只确认是否接受输入。
@@ -661,18 +722,28 @@ function registerIpc(): void {
     pushState()
     if (!approvals.list().length) win?.flashFrame(false)
   }
-  approvals.onRequest = revealWindow
+  approvals.onRequest = () => {
+    revealWindow()
+    // 敏感输入审批发生在当前活动页面上；恢复窗口后把焦点还给网页，
+    // 否则焦点停在外壳 UI，用户点“允许”后无法继续在页面上输入。
+    const pending = approvals.list()
+    const latest = pending[pending.length - 1]
+    if (latest && (latest.kind === undefined || latest.kind === 'sensitive')) {
+      const wc = tabManager?.active()?.view.webContents
+      if (wc && !wc.isDestroyed()) wc.focus()
+    }
+  }
   ipcMain.handle('aa:clients-detect', (event) => {
     return guard(event, [], () => detectClients())
   })
-  ipcMain.handle('aa:clients-setup', (event, ids: string[]) => {
-    return guard(event, [], () => setupClients(Array.isArray(ids) ? ids : []))
+  ipcMain.handle('aa:clients-setup', (event, ids: string[], locale?: string) => {
+    return guard(event, [], () => setupClients(Array.isArray(ids) ? ids : [], locale === 'en-US' || locale === 'zh-CN' ? locale : undefined))
   })
   ipcMain.handle('aa:downloads-list', (event) => {
     return guard(event, [], () => getDownloadTracker().list(20))
   })
   ipcMain.handle('aa:download-open', (event, id: string) => {
-    return guard(event, undefined, () => getDownloadTracker().open(String(id)))
+    return guard(event, { ok: false }, () => getDownloadTracker().open(String(id)))
   })
   ipcMain.handle('aa:download-show', (event, id: string) => {
     return guard(event, undefined, () => getDownloadTracker().showInFolder(String(id)))

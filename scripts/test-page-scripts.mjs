@@ -398,6 +398,42 @@ try {
   }
   pass('pageStateScript')
 
+  console.log('[6] 定位脚本：快照后被隐藏/折叠的元素必须拒绝点击')
+  {
+    const makeLocateElement = ({ style = {}, rect = { x: 10, y: 20, width: 30, height: 40 }, connected = true } = {}) => {
+      const documentObj = {
+        defaultView: { getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1', ...style }) }
+      }
+      documentObj.body = documentObj.documentElement = documentObj
+      return makeEl({
+        ownerDocument: documentObj,
+        isConnected: connected,
+        getBoundingClientRect: () => rect
+      })
+    }
+    const runLocate = (el) => {
+      const documentObj = el.ownerDocument
+      return plain(run(makeSandbox({ e5: el }, { document: documentObj }), S.locateScript('e5')))
+    }
+    const visible = runLocate(makeLocateElement())
+    assert.equal(visible.ok, true)
+    assert.deepEqual([visible.x, visible.y], [25, 40], 'visible element keeps using its center point')
+
+    for (const [label, style] of [
+      ['display:none', { display: 'none' }],
+      ['visibility:hidden', { visibility: 'hidden' }],
+      ['opacity:0', { opacity: '0' }]
+    ]) {
+      const result = runLocate(makeLocateElement({ style }))
+      assert.deepEqual(result, { ok: false, reason: 'hidden' }, `${label} must not be clickable through a stale ref`)
+    }
+    const collapsed = runLocate(makeLocateElement({ rect: { x: 10, y: 20, width: 0, height: 40 } }))
+    assert.deepEqual(collapsed, { ok: false, reason: 'not-visible' }, 'zero-size element must not be clicked')
+    assert.deepEqual(runLocate(makeLocateElement({ connected: false })), { ok: false, reason: 'detached' })
+    assert.deepEqual(plain(run(makeSandbox({}), S.locateScript('e404'))), { ok: false, reason: 'no-ref' })
+  }
+  pass('locateScript rejects hidden / collapsed / detached refs before dispatch')
+
   console.log(`\n🎉 页面脚本字面量回归：${passed} 组断言全部通过`)
 } finally {
   fs.rmSync(outDir, { recursive: true, force: true })

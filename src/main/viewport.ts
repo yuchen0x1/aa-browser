@@ -110,7 +110,7 @@ function readPngSize(base64: string): { width: number; height: number } {
 export async function captureViewportMatrix(
   tab: Tab,
   specs: ViewportSpec[],
-  opts?: { signal?: AbortSignal }
+  opts?: { signal?: AbortSignal; isMinimized?: () => boolean }
 ): Promise<ViewportResult[]> {
   const signal = opts?.signal
   throwIfAborted(signal)
@@ -131,6 +131,27 @@ export async function captureViewportMatrix(
   const usedFiles = new Set<string>()
   const results: ViewportResult[] = []
   let attachedHere = false
+  // 最小化时窗口后台会维持一个虚拟视口；矩阵工具结束后必须把它恢复，
+  // 否则 backgroundViewportTabs 仍认为已覆盖，后续快照会读到 0×0。
+  const wasMinimized = opts?.isMinimized?.() === true
+  let restoreViewport: { width: number; height: number; deviceScaleFactor: number } | null = null
+  if (wasMinimized) {
+    try {
+      const size = (await wc.executeJavaScript(
+        '({ width: window.innerWidth, height: window.innerHeight, deviceScaleFactor: window.devicePixelRatio || 1 })',
+        false
+      )) as { width?: number; height?: number; deviceScaleFactor?: number } | null
+      if ((size?.width ?? 0) > 0 && (size?.height ?? 0) > 0) {
+        restoreViewport = {
+          width: Math.round(size!.width!),
+          height: Math.round(size!.height!),
+          deviceScaleFactor: size?.deviceScaleFactor ?? 1
+        }
+      }
+    } catch {
+      /* 页面可能尚未就绪 */
+    }
+  }
 
   try {
     if (!dbg.isAttached()) {
@@ -217,6 +238,16 @@ export async function captureViewportMatrix(
       await dbg.sendCommand('Emulation.clearDeviceMetricsOverride')
       // Linux 上 renderer 应用“恢复原尺寸”比 CDP 响应略慢，留一帧避免后续 evaluate 读到旧尺寸。
       await delay(150)
+      if (wasMinimized && restoreViewport) {
+        await dbg.sendCommand('Emulation.setDeviceMetricsOverride', {
+          width: restoreViewport.width,
+          height: restoreViewport.height,
+          deviceScaleFactor: restoreViewport.deviceScaleFactor,
+          mobile: false,
+          screenWidth: restoreViewport.width,
+          screenHeight: restoreViewport.height
+        })
+      }
     } catch {
       /* 调试器可能已分离或页面已销毁 */
     }

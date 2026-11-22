@@ -96,6 +96,17 @@ if (!process.versions.electron) {
     res.setHeader('Content-Type', 'text/html; charset=utf-8')
     if (req.url === '/new-tab') newTabRequests++
     if (req.url === '/frame') { res.end('<p>Child frame</p>'); return }
+    if (req.url === '/hud-pointer') {
+      res.end(`<title>HUD pointer</title><button id="hud-target" style="margin:40px;padding:20px">HUD target</button>
+        <div style="height:3000px"></div>
+        <script>window.__hudClicks = 0; document.querySelector('#hud-target').addEventListener('click', () => { window.__hudClicks++ })</script>`)
+      return
+    }
+    if (req.url === '/ref-fixture') {
+      res.end(`<title>Ref fixture</title><ul id="ref-list"><li><button>One</button></li><li><button>Two</button></li><li><button>Three</button></li></ul>
+        <button id="hidden-target" onclick="window.__hiddenClicks = (window.__hiddenClicks || 0) + 1">Hidden target</button>`)
+      return
+    }
     res.end(`<title>Desktop fixture</title><h1>Aa desktop regression</h1><p>needle needle needle</p><input aria-label="Fixture input"><a href="/popup-private" target="_blank">Open child</a><iframe src="about:blank"></iframe>`)
   })
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -519,6 +530,47 @@ if (!process.versions.electron) {
     assert.equal(await ui(`getComputedStyle(document.querySelector('.tab')).getPropertyValue('-webkit-app-region')`), 'no-drag')
     pass('clicking a tab selects its page without moving the window')
 
+    // ── P1-1：活动 HUD 把外壳视图铺满整窗时，页面区域仍必须能点 ──
+    const hudTabId = (await state()).activeId
+    await tool('browser_navigate', { url: base + '/hud-pointer', tabId: hudTabId, snapshot: false })
+    const hudPage = await until(
+      () => webContents.getAllWebContents().find((wc) => wc !== chrome && wc.getURL() === base + '/hud-pointer'),
+      'hud pointer fixture page'
+    )
+    await until(() => hudPage.executeJavaScript('!!document.querySelector("#hud-target")', false), 'hud pointer fixture DOM')
+    const hudWait = tool('browser_wait', { tabId: hudTabId, text: 'HUD指针测试_永不出现', timeoutMs: 6000 }).catch(() => undefined)
+    await until(async () => (await state()).agentActivity?.active === true, 'activity HUD active for pointer forwarding', 5000)
+    const hudView = BaseWindow.getAllWindows()[0].contentView.children.find((view) => view.webContents === hudPage)
+    assert.ok(hudView, 'activity HUD still keeps the page view attached')
+    const hudPageTop = hudView.getBounds().y
+    assert.equal(parseFloat(await ui('document.documentElement.style.getPropertyValue("--page-top")')), hudPageTop, 'renderer page-top mirrors the native page bounds')
+    const hudPoint = await hudPage.executeJavaScript(`(() => {
+      const r = document.querySelector('#hud-target').getBoundingClientRect()
+      return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }
+    })()`, false)
+    chrome.focus()
+    let forwarded = false
+    for (let attempt = 0; attempt < 4 && !forwarded; attempt++) {
+      chrome.sendInputEvent({ type: 'mouseMove', x: hudPoint.x, y: hudPoint.y + hudPageTop })
+      chrome.sendInputEvent({ type: 'mouseDown', x: hudPoint.x, y: hudPoint.y + hudPageTop, button: 'left', clickCount: 1 })
+      chrome.sendInputEvent({ type: 'mouseUp', x: hudPoint.x, y: hudPoint.y + hudPageTop, button: 'left', clickCount: 1 })
+      await pause(200)
+      forwarded = await hudPage.executeJavaScript('window.__hudClicks >= 1', false)
+    }
+    assert.equal(forwarded, true, 'click in the page area must be forwarded through the full-window HUD shell')
+    // 页面内的 DOM wheel（deltaY 正 = 向下）也应被转发；直接派发可绕开原生输入的符号不确定性。
+    await chrome.executeJavaScript(`(() => {
+      const x = 40, y = ${hudPageTop + 300}
+      const event = new WheelEvent('wheel', { deltaY: 300, clientX: x, clientY: y, bubbles: true, cancelable: true })
+      document.elementFromPoint(x, y)?.dispatchEvent(event) ?? document.body.dispatchEvent(event)
+    })()`, true)
+    await until(() => hudPage.executeJavaScript('window.scrollY > 0', false), 'wheel forwarded through the activity HUD', 5000)
+    await hudWait
+    pass('activity HUD forwards page-area mouse clicks and wheel scrolling instead of swallowing them')
+    // 恢复原地址：后续地址栏用例按会话记录里的 restored-a URL 断言。
+    await tool('browser_navigate', { url: base + '/restored-a', tabId: hudTabId, snapshot: false })
+    await until(() => hudPage.getURL() === base + '/restored-a', 'hud fixture tab restored to its session URL')
+
     // ── F12 / Ctrl+Shift+I：当前网页 DevTools（v0.8.0）──
     const activePageNow = await until(async () => {
       const s = await state()
@@ -545,6 +597,19 @@ if (!process.versions.electron) {
     await until(() => !activePageNow.isDevToolsOpened(), 'shell Ctrl+Shift+I closes the DevTools again')
     pass('Ctrl+Shift+I from the shell toggles DevTools closed')
     assert.equal(chrome.isDevToolsOpened(), false)
+
+    // ── P1-2：DevTools 断开调试通道后，守卫必须自动重新挂载 ──
+    await until(() => activePageNow.debugger.isAttached(), 'debugger reattaches after DevTools closes', 10_000)
+    await activePageNow.reload()
+    await until(
+      () => activePageNow.executeJavaScript(
+        '!!window.__aaDialogGuardInstalled && typeof window[Symbol.for("aa.closedRoots")] === "function"',
+        false
+      ).catch(() => false),
+      'dialog and closed-shadow guards restored for a new document',
+      10_000
+    )
+    pass('DevTools close reinstalls dialog/closed-shadow guards for subsequent documents')
     await click('#btn-settings')
     await until(() => ui('document.activeElement?.id === "btn-close-settings"'), 'settings focus before DevTools guard')
     let modalDevToolsOpened = 0
@@ -580,6 +645,54 @@ if (!process.versions.electron) {
     assert.equal((await state()).tabs.find((tab) => tab.id === normalId).canBack, false)
     assert.deepEqual(page.navigationHistory.getAllEntries().map(({ url }) => url), [base + '/normal'])
     pass('first page in a new desktop tab has no synthetic blank history entry')
+
+    // ── P1-4：ref 单调递增、失连元素按 DOM 顺序复用、隐藏目标拒绝点击 ──
+    await tool('browser_navigate', { url: base + '/ref-fixture', tabId: normalId, snapshot: false })
+    const refPage = await until(
+      () => webContents.getAllWebContents().find((wc) => wc !== chrome && wc.getURL() === base + '/ref-fixture'),
+      'ref fixture page'
+    )
+    await until(() => refPage.executeJavaScript('!!document.querySelector("#ref-list")', false), 'ref fixture DOM')
+    const refsNow = async () => Object.fromEntries(JSON.parse(await refPage.executeJavaScript(
+      'JSON.stringify((window.__aaSnapState?.elements || []).map((el) => [el.name, el.ref]))',
+      false
+    )))
+    await tool('browser_snapshot', { tabId: normalId, full: true })
+    const refsA = await refsNow()
+    assert.deepEqual(
+      ['One', 'Two', 'Three', 'Hidden target'].map((name) => refsA[name]),
+      ['e1', 'e2', 'e3', 'e4'],
+      `initial full snapshot must allocate refs in DOM order: ${JSON.stringify(refsA)}`
+    )
+    await tool('browser_snapshot', { tabId: normalId, full: true })
+    const refsB = await refsNow()
+    assert.ok(
+      Object.values(refsB).every((ref) => Number(ref.slice(1)) > 4),
+      `a forced full snapshot must keep the ref counter monotonic: ${JSON.stringify(refsB)}`
+    )
+    await refPage.executeJavaScript('document.querySelector("#hidden-target").style.display = "none"', false)
+    await assert.rejects(
+      tool('browser_click', { tabId: normalId, ref: refsB['Hidden target'], snapshot: false }),
+      /hidden|not-visible/,
+      'a hidden snapshot target must be rejected instead of clicked at a stale position'
+    )
+    assert.equal(await refPage.executeJavaScript('window.__hiddenClicks || 0', false), 0)
+    await refPage.executeJavaScript(
+      `document.querySelector('#ref-list').innerHTML = '<li><button>One</button></li><li><button>Two</button></li><li><button>Three</button></li>'`,
+      false
+    )
+    await tool('browser_snapshot', { tabId: normalId })
+    const refsC = await refsNow()
+    for (const name of ['One', 'Two', 'Three']) {
+      assert.equal(refsC[name], refsB[name], `disconnected refs must be reused FIFO for ${name}: ${JSON.stringify({ refsB, refsC })}`)
+    }
+    const pointed = await refPage.executeJavaScript(`(() => {
+      const out = {}
+      for (const [ref, el] of Object.entries(window.__aaRefs || {})) if (el && el.textContent) out[ref] = el.textContent.trim()
+      return out
+    })()`, false)
+    for (const name of ['One', 'Two', 'Three']) assert.equal(pointed[refsC[name]], name, `${refsC[name]} must point at ${name}`)
+    pass('snapshot refs stay monotonic, reuse disconnected refs in DOM order, and reject hidden targets')
 
     const roundTripUrl = base + '/address-roundtrip?encoded=%2F%23&query=one%20two#route/part?mode=edit'
     await ui(`window.aa.submit(${jsLiteral(roundTripUrl)})`)

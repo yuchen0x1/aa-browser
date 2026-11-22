@@ -174,16 +174,13 @@ try {
     assert.equal(options.noLink, true)
   })
 
-  await test('取消: 中立 info，不谎报成功或失败', async () => {
+  await test('取消: 不弹模态框，并立即释放 busy', async () => {
     const wc = wcFixture()
     printImpl = (_options, callback) => callback(false, 'Print job canceled')
     assert.equal(printPage(wc, null), true)
     await tick()
-    const options = optionsOf(dialogs[0])
-    assert.equal(options.type, 'info')
-    assert.equal(options.message, '打印未完成。')
-    assert.equal(options.detail, 'Print job canceled')
-    assert.ok(!/成功|success/i.test(options.message))
+    assert.equal(dialogs.length, 0, '用户取消打印不是错误，不应再弹框')
+    assert.equal(printPage(wc, null), true, '取消后应可立即再次打印')
   })
 
   await test('同步 throw: 返回 false 并安全反馈错误', async () => {
@@ -325,7 +322,7 @@ try {
     assert.equal(printCalls.length, 0)
 
     const wc2 = wcFixture()
-    printImpl = (_options, callback) => callback(false, 'Print job canceled')
+    printImpl = (_options, callback) => callback(false, 'Print job failed')
     assert.equal(printPage(wc2, null), true)
     await tick()
     assert.equal(dialogs.length, 1)

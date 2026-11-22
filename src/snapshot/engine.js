@@ -49,8 +49,21 @@ export function __aaSnapshot() {
     if (typeof closedProbe === 'function') readClosed = closedProbe
   } catch (e) {}
 
+  // truncated 只表示可渲染节点被省略；长文本 / 下拉选项的裁剪单独记录，
+  // 否则任何长标题都会谎报“内容已截断，可滚动后重新快照”。
   var truncated = false
+  var nodeLimitReached = false
+  var depthLimitReached = false
+  var textClipped = false
+  var optionsClipped = false
+  // ref 编号在同一文档内单调递增：完整快照不能把编号重置回 e1，
+  // 否则 Agent 手里的旧 ref 会静默指向另一个元素。
   var seq = 0
+  var seqFloor = 0
+  try {
+    seqFloor = Math.max(0, Math.floor(Number(window.__aaRefSeq) || 0))
+  } catch (e) {}
+  seq = seqFloor
   var refs = {} // ref -> Element（动作定位）
   var refOf = null // Map Element -> ref（活元素复用）
   var sigPool = {} // sig -> [ref]（失连元素的签名池）
@@ -79,7 +92,7 @@ export function __aaSnapshot() {
     } catch (e) {
       refOf = null
     }
-    seq = prevState.nextSeq || 0
+    seq = Math.max(seqFloor, prevState.nextSeq || 0)
     var oldRefs = prevState.refs
     var infoByRef = {}
     var prevEls = prevState.elements || []
@@ -112,10 +125,20 @@ export function __aaSnapshot() {
     n = n || MAX_TEXT
     s = String(s == null ? '' : s).replace(/\s+/g, ' ').trim()
     if (s.length > n) {
-      truncated = true
+      textClipped = true
       return s.slice(0, n - 1) + '…'
     }
     return s
+  }
+
+  /** 只在该原因真实发生时说明；文本裁剪不再冒充“内容已截断”。 */
+  function truncationNote() {
+    var notes = []
+    if (nodeLimitReached) notes.push('节点数已达上限，部分内容未列出，可滚动后重新快照')
+    if (depthLimitReached) notes.push('嵌套层级过深，部分子节点未展开')
+    if (textClipped) notes.push('部分长文本已截断显示')
+    if (optionsClipped) notes.push('部分下拉选项未列出')
+    return notes.length ? '（' + notes.join('；') + '）' : ''
   }
 
   function styleOf(el) {
@@ -292,10 +315,15 @@ export function __aaSnapshot() {
     }
     if (!ref) {
       var pool = sigPool[sig]
-      if (pool && pool.length) ref = pool.pop()
+      // 按分配顺序取最早的失连 ref：列表重渲染后同一位置的元素仍拿到同一个编号，
+      // 而不是 LIFO 地把编号整体反转。
+      if (pool && pool.length) ref = pool.shift()
       else {
         seq++
         ref = 'e' + seq
+        try {
+          window.__aaRefSeq = seq
+        } catch (e) {}
       }
     }
     refs[ref] = el
@@ -390,7 +418,7 @@ export function __aaSnapshot() {
       try {
         var os = el.options
         for (var i = 0; i < os.length && i < MAX_OPTIONS; i++) optsList.push(os[i].label || os[i].value)
-        if (os.length > MAX_OPTIONS) truncated = true
+        if (os.length > MAX_OPTIONS) optionsClipped = true
       } catch (e) {}
       if (optsList.length) info.options = optsList
     }
@@ -455,9 +483,14 @@ export function __aaSnapshot() {
   function walk(node, depth, ox, oy) {
     if (lines.length >= MAX_NODES) {
       truncated = true
+      nodeLimitReached = true
       return
     }
-    if (depth > MAX_DEPTH) return
+    if (depth > MAX_DEPTH) {
+      truncated = true
+      depthLimitReached = true
+      return
+    }
 
     // 文本节点
     if (node.nodeType === 3) {
@@ -581,7 +614,7 @@ export function __aaSnapshot() {
     var head =
       '页面快照（完整） url: ' + url + '\n' +
       'title: ' + title + '\n' +
-      '元素数: ' + elements.length + (truncated ? '（内容已截断，可滚动后重新快照）' : '')
+      '元素数: ' + elements.length + truncationNote()
     return head + '\n\n' + (lines.join('\n') || '（页面无可渲染内容）')
   }
 
@@ -701,7 +734,7 @@ export function __aaSnapshot() {
     text =
       '页面快照（分页 ' + (start + 1) + '–' + end + ' / ' + totalLines + '） url: ' + url + '\n' +
       'title: ' + title + '\n' +
-      '本页 ' + pageLines.length + ' 行' + (hasMore ? '，下一页 cursor=' + nextCursor : '，已到末页') + '\n\n' +
+      '本页 ' + pageLines.length + ' 行' + (hasMore ? '，下一页 cursor=' + nextCursor : '，已到末页') + truncationNote() + '\n\n' +
       (pageLines.join('\n') || '（本页无可渲染内容）')
   } else if (prevState) {
     // 统计新增/失效 ref
@@ -753,10 +786,11 @@ export function __aaSnapshot() {
           text = fullText()
         } else {
           mode = 'patch'
+          var patchNote = truncationNote()
           text =
             '页面快照（增量） url: ' + url + '\n' +
             'title: ' + title + '\n' +
-            '变化: +' + added + ' / -' + removed + '（共 ' + lines.length + ' 行，其余未变，仍以上次快照为准）\n\n' +
+            '变化: +' + added + ' / -' + removed + '（共 ' + lines.length + ' 行，其余未变，仍以上次快照为准）' + (patchNote ? '\n' + patchNote : '') + '\n\n' +
             body + '\n\n' +
             '新增 ref: ' + (newRefs.slice(0, 15).join(' ') || '无') + '\n' +
             '失效 ref: ' + (removedRefs.slice(0, 15).join(' ') || '无')
@@ -770,6 +804,7 @@ export function __aaSnapshot() {
   /* ── 持久化状态并返回 ── */
   try {
     window.__aaRefs = refs
+    window.__aaRefSeq = seq
     window.__aaSnapState = {
       v: 2,
       url: url,
@@ -790,6 +825,10 @@ export function __aaSnapshot() {
     newRefs: newRefs,
     removedRefs: removedRefs,
     truncated: truncated,
+    nodeLimitReached: nodeLimitReached,
+    depthLimitReached: depthLimitReached,
+    textClipped: textClipped,
+    optionsClipped: optionsClipped,
     totalLines: totalLines,
     cursor: cursor,
     nextCursor: nextCursor,

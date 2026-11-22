@@ -42,6 +42,27 @@ export function throwIfAborted(signal?: AbortSignal): void {
 const tabQueues = new WeakMap<Tab, Promise<void>>()
 const tabQueueContext = new AsyncLocalStorage<{ inFlight: Set<Promise<unknown>> }>()
 
+/**
+ * 页面合成/截图的等待上限。窗口隐藏、合成器丢掉帧或渲染器卡死时，
+ * capturePage / CDP 命令可能永远不结算；不能让它拖住整条标签队列。
+ */
+const PAGE_CAPTURE_TIMEOUT_MS = 15_000
+/** 队列收尾等待上限：容忍迟到的派生操作，但不能让标签永久排队。 */
+const DRAIN_TIMEOUT_MS = 10_000
+
+/** 给可能永不结算的页面操作加上限；超时后原始 Promise 仍由页面侧收尾。导出供队列回归测试使用。 */
+export async function withDeadline<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new ActionError(`${label}超时（${ms}ms）；页面可能已失去响应`)), ms)
+  })
+  try {
+    return await Promise.race([work, timeout])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 function trackTabOperation<T>(work: Promise<T>): void {
   const context = tabQueueContext.getStore()
   if (!context) return
@@ -53,9 +74,32 @@ function trackTabOperation<T>(work: Promise<T>): void {
   )
 }
 
-async function drainTabOperations(context: { inFlight: Set<Promise<unknown>> }): Promise<void> {
-  while (context.inFlight.size) {
-    await Promise.allSettled([...context.inFlight])
+/** 等待派生操作收敛，但受 timeoutMs 约束；导出供队列回归测试使用。 */
+export async function drainTabOperations(
+  context: { inFlight: Set<Promise<unknown>> },
+  timeoutMs = DRAIN_TIMEOUT_MS
+): Promise<void> {
+  if (!context.inFlight.size) return
+  let timer: ReturnType<typeof setTimeout> | undefined
+  // 整个收尾阶段共用一个截止时间；等待期间新增的操作也受同一个上限约束。
+  const deadline = new Promise<'timeout'>((resolve) => {
+    timer = setTimeout(() => resolve('timeout'), timeoutMs)
+  })
+  try {
+    while (context.inFlight.size) {
+      const settled = await Promise.race([
+        Promise.allSettled([...context.inFlight]).then(() => 'settled' as const),
+        deadline
+      ])
+      if (settled === 'timeout') {
+        console.warn(
+          `[aa-browser] 标签操作超过 ${timeoutMs}ms 仍未结束，强制释放标签队列（剩余 ${context.inFlight.size} 项）`
+        )
+        return
+      }
+    }
+  } finally {
+    if (timer) clearTimeout(timer)
   }
 }
 
@@ -614,7 +658,14 @@ export async function doType(
   }
 
   if (opts.clear) {
-    await wc.executeJavaScript(clearScript(ref), false)
+    const cleared = (await wc.executeJavaScript(clearScript(ref), false)) as { ok?: boolean; reason?: string } | null
+    if (!cleared?.ok) {
+      throw new ActionError(
+        cleared?.reason === 'no-ref'
+          ? `找不到元素 ${ref}：页面可能已变化，请先重新调用 browser_snapshot`
+          : `无法清空元素 ${ref}（${cleared?.reason ?? 'clear-failed'}）`
+      )
+    }
   }
   throwIfAborted(signal)
 
@@ -635,7 +686,16 @@ export async function doType(
   }
   throwIfAborted(signal)
   if (!inserted) {
-    await wc.executeJavaScript(setValueScript(ref, text), false)
+    const setResult = (await wc.executeJavaScript(setValueScript(ref, text), false)) as
+      | { ok?: boolean; reason?: string }
+      | null
+    if (!setResult?.ok) {
+      throw new ActionError(
+        setResult?.reason === 'no-ref'
+          ? `找不到元素 ${ref}：页面可能已变化，请先重新调用 browser_snapshot`
+          : `无法写入 ${ref}（${setResult?.reason ?? 'set-failed'}）：目标可能不是可编辑输入框`
+      )
+    }
   }
   const typed = `${tag}${inserted ? '' : '（setter 兜底写入）'}`
 
@@ -691,6 +751,8 @@ export interface ScrollResult {
   where: string
   before?: { x: number; y: number }
   after?: { x: number; y: number }
+  requested?: { x: number; y: number }
+  moved?: { x: number; y: number }
   atLimit?: boolean
   scrollHeight?: number
   scrollWidth?: number
@@ -720,6 +782,8 @@ export async function doScroll(
     where: raw?.where ?? 'unknown',
     ...(raw?.before ? { before: raw.before } : {}),
     ...(raw?.after ? { after: raw.after } : {}),
+    ...(raw?.requested ? { requested: raw.requested } : {}),
+    ...(raw?.moved ? { moved: raw.moved } : {}),
     ...(typeof raw?.atLimit === 'boolean' ? { atLimit: raw.atLimit } : {}),
     ...(typeof raw?.scrollHeight === 'number' ? { scrollHeight: raw.scrollHeight } : {}),
     ...(typeof raw?.scrollWidth === 'number' ? { scrollWidth: raw.scrollWidth } : {}),
@@ -881,8 +945,83 @@ export async function doWaitForDom(
   }
 }
 
-const VALID_KEYS = new Set([
-  'Enter', 'Escape', 'Tab', 'Backspace', 'Delete', 'Insert', 'Home', 'End',
+/**
+ * 等待“任一条件”满足：文本出现/消失、选择器出现/消失、URL 包含。
+ * 旧实现先等完文本再等 DOM，最坏耗时是 timeout 的两倍，且与工具声明的
+ * “whichever happens first” 不符。这里共用一个 deadline，每轮依次检查，
+ * 任一条件命中立即返回。
+ */
+export async function doWaitForAny(
+  tab: Tab,
+  opts: {
+    text?: string
+    textGone?: string
+    selector?: string
+    selectorGone?: string
+    urlContains?: string
+    timeoutMs: number
+    signal?: AbortSignal
+  }
+): Promise<{
+  found: boolean
+  elapsedMs: number
+  which?: 'appeared' | 'gone' | 'selector' | 'selectorGone' | 'url'
+}> {
+  const wc = tab.view.webContents
+  const start = Date.now()
+  const timeoutMs = Math.min(30000, Math.max(1000, opts.timeoutMs))
+  const deadline = start + timeoutMs
+  const checks: { which: 'appeared' | 'gone' | 'selector' | 'selectorGone'; script: string; expect: boolean }[] = []
+  if (opts.text !== undefined) checks.push({ which: 'appeared', script: containsTextScript(opts.text), expect: true })
+  if (opts.textGone !== undefined) checks.push({ which: 'gone', script: containsTextScript(opts.textGone), expect: false })
+  if (opts.selector !== undefined) {
+    checks.push({
+      which: 'selector',
+      expect: true,
+      script: `(() => { const el = document.querySelector(${jsLiteral(opts.selector)}); if (!el) return false; try { const cs = getComputedStyle(el); if (cs.display === 'none' || cs.visibility === 'hidden') return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 } catch (e) { return true } })()`
+    })
+  }
+  if (opts.selectorGone !== undefined) {
+    checks.push({
+      which: 'selectorGone',
+      expect: true,
+      script: `(() => !document.querySelector(${jsLiteral(opts.selectorGone)}))()`
+    })
+  }
+  const urlNeedle = opts.urlContains ?? null
+  let lastReport = 0
+  // eslint-disable-next-line no-constant-condition
+  while (true) {
+    throwIfAborted(opts.signal)
+    const elapsed = Date.now() - start
+    if (elapsed - lastReport >= 100) {
+      lastReport = elapsed
+      reportProgress(elapsed, timeoutMs, '等待条件')
+    }
+    if (urlNeedle !== null && wc.getURL().includes(urlNeedle)) {
+      reportProgress(1, 1, '完成')
+      return { found: true, elapsedMs: Date.now() - start, which: 'url' }
+    }
+    for (const check of checks) {
+      try {
+        const value = (await wc.executeJavaScript(check.script, false)) as boolean
+        if (value === check.expect) {
+          reportProgress(1, 1, '完成')
+          return { found: true, elapsedMs: Date.now() - start, which: check.which }
+        }
+      } catch {
+        /* 页面导航中，继续等 */
+      }
+    }
+    if (Date.now() >= deadline) {
+      reportProgress(1, 1, '完成')
+      return { found: false, elapsedMs: Date.now() - start }
+    }
+    await delay(250)
+  }
+}
+
+const VALID_KEYS = new Set([  'Enter', 'Escape', 'Tab', 'Backspace', 'Delete', 'Insert', 'Home', 'End',
   'PageUp', 'PageDown', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
   'F1', 'F2', 'F3', 'F4', 'F5', 'F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12',
   'Space'
@@ -1014,6 +1153,7 @@ async function captureFullPage(wc: WebContents, background: boolean, minimized: 
   const dbg = wc.debugger
   let attachedHere = false
   let restoreViewport: { width: number; height: number } | null = null
+  let viewportOverridden = false
   try {
     if (!dbg.isAttached()) {
       dbg.attach('1.3')
@@ -1038,16 +1178,23 @@ async function captureFullPage(wc: WebContents, background: boolean, minimized: 
         contentWidth?: number
         contentHeight?: number
       }
-      const originalWidth = Math.max(1, Math.ceil(dimensions.viewportWidth ?? 0) || 1280)
-      const originalHeight = Math.max(1, Math.ceil(dimensions.viewportHeight ?? 0) || 720)
+      const measuredWidth = Math.ceil(dimensions.viewportWidth ?? 0)
+      const measuredHeight = Math.ceil(dimensions.viewportHeight ?? 0)
+      const originalWidth = Math.max(1, measuredWidth || 1280)
+      const originalHeight = Math.max(1, measuredHeight || 720)
       const width = Math.max(originalWidth, Math.ceil(dimensions.contentWidth ?? 0) || 1280)
       const fullHeight = Math.max(originalHeight, Math.ceil(dimensions.contentHeight ?? 0) || 720)
       const MAX_HEIGHT = 8000
       const height = Math.min(fullHeight, MAX_HEIGHT)
-      restoreViewport = { width: originalWidth, height: originalHeight }
+      // 只有实测到正尺寸才恢复；0×0 说明本来就没有有效视口，
+      // 恢复 1280×720 会在窗口还原后留下无人清理的覆盖。
+      if (measuredWidth > 0 && measuredHeight > 0) {
+        restoreViewport = { width: originalWidth, height: originalHeight }
+      }
       await dbg.sendCommand('Emulation.setDeviceMetricsOverride', {
         width, height, deviceScaleFactor: 1, mobile: false, screenWidth: width, screenHeight: height
       })
+      viewportOverridden = true
       await delay(100)
       const image = await wc.capturePage(undefined, { stayHidden: true })
       if (image.isEmpty()) throw new ActionError('整页截图失败：页面合成器未返回图像数据')
@@ -1076,9 +1223,9 @@ async function captureFullPage(wc: WebContents, background: boolean, minimized: 
     if (error instanceof ActionError) throw error
     throw new ActionError(`整页截图失败：${error instanceof Error ? error.message : String(error)}`)
   } finally {
-    if (restoreViewport && dbg.isAttached()) {
+    if (viewportOverridden && dbg.isAttached()) {
       try {
-        if (minimized()) {
+        if (restoreViewport && minimized()) {
           // 仍最小化：回到索引层维持的后台视口，快照与后续输入继续可用。
           await dbg.sendCommand('Emulation.setDeviceMetricsOverride', {
             width: restoreViewport.width,
@@ -1113,9 +1260,12 @@ export async function doScreenshot(tab: Tab, signal?: AbortSignal, opts?: { full
     const background = !tab.canUseWindowInput()
     // 最小化时 capturePage 可能等待永远不会产生的合成帧；后台直接走 CDP，
     // 这样整页截图不依赖窗口是否能被桌面合成器显示。
-    if (!background) await raceAbort(wc.capturePage(undefined, { stayHidden: true }), signal)
+    if (!background) await raceAbort(withDeadline(wc.capturePage(undefined, { stayHidden: true }), PAGE_CAPTURE_TIMEOUT_MS, '页面截图'), signal)
     reportProgress(0.5, 1, '正在捕获整页')
-    const full = await raceAbort(captureFullPage(wc, background, () => tab.isWindowMinimized?.() ?? false), signal)
+    const full = await raceAbort(
+      withDeadline(captureFullPage(wc, background, () => tab.isWindowMinimized?.() ?? false), PAGE_CAPTURE_TIMEOUT_MS, '整页截图'),
+      signal
+    )
     throwIfAborted(signal)
     let img = nativeImage.createFromBuffer(Buffer.from(full.base64, 'base64'))
     if (img.isEmpty()) throw new ActionError('整页截图失败：图像为空')
@@ -1128,9 +1278,11 @@ export async function doScreenshot(tab: Tab, signal?: AbortSignal, opts?: { full
   for (let i = 0; i < 3; i++) {
     throwIfAborted(signal)
     try {
-      image = await wc.capturePage(undefined, { stayHidden: true })
+      image = await withDeadline(wc.capturePage(undefined, { stayHidden: true }), PAGE_CAPTURE_TIMEOUT_MS, '页面截图')
       if (!image.isEmpty()) break
-    } catch {
+    } catch (error) {
+      // 超时说明合成器已失去响应，重试只会把工具调用拖得更久。
+      if (error instanceof ActionError) throw error
       image = null
     }
     await delay(300)
@@ -1234,18 +1386,26 @@ export async function doFind(
 ): Promise<{ matches: number; activeOrdinal: number | null }> {
   const wc = tab.view.webContents
   return new Promise((resolve, reject) => {
+    let requestId: number | null = null
     const timer = setTimeout(() => {
       wc.removeListener('found-in-page', onFound)
       reject(new ActionError('查找超时（页面未响应 findInPage）'))
     }, timeoutMs)
-    const onFound = (_e: unknown, result: { matches: number; activeMatchOrdinal: number }): void => {
+    const onFound = (
+      _e: unknown,
+      result: { matches: number; activeMatchOrdinal: number; finalUpdate?: boolean; requestId?: number }
+    ): void => {
+      // Electron 会先上报中间结果，只有 finalUpdate 才是完整计数；
+      // 同时过滤旧请求（连续查找时）的迟到事件。
+      if (requestId !== null && typeof result.requestId === 'number' && result.requestId !== requestId) return
+      if (result.finalUpdate === false) return
       clearTimeout(timer)
       wc.removeListener('found-in-page', onFound)
       resolve({ matches: result.matches, activeOrdinal: result.activeMatchOrdinal })
     }
     wc.on('found-in-page', onFound)
     try {
-      wc.findInPage(text, { findNext: false })
+      requestId = wc.findInPage(text, { findNext: false })
     } catch (err) {
       clearTimeout(timer)
       wc.removeListener('found-in-page', onFound)
@@ -1292,9 +1452,10 @@ export async function doElementScreenshot(tab: Tab, ref: string): Promise<ToolCo
   let image: Electron.NativeImage | null = null
   for (let i = 0; i < 3; i++) {
     try {
-      image = await wc.capturePage(undefined, { stayHidden: true })
+      image = await withDeadline(wc.capturePage(undefined, { stayHidden: true }), PAGE_CAPTURE_TIMEOUT_MS, '元素截图')
       if (!image.isEmpty()) break
-    } catch {
+    } catch (error) {
+      if (error instanceof ActionError) throw error
       image = null
     }
     await delay(300)
@@ -1363,11 +1524,24 @@ export async function doCookies(
     }
     if (opts.action !== 'clear') throw new ActionError('不支持的 Cookie 操作')
     const cookies = await session.cookies.get({})
+    // clear 的作用域必须与审批面板显示的一致：url 指定来源站点，domain 指定域名。
+    // 旧实现只按 name 过滤，传了 url 仍会清空所有站点的同名 Cookie。
+    let host: string | null = null
+    if (opts.url) {
+      try {
+        host = new URL(opts.url).hostname.toLowerCase()
+      } catch {
+        throw new ActionError(`url 无法解析：${opts.url}`)
+      }
+    }
+    const domainFilter = opts.domain?.replace(/^\./, '').toLowerCase() || null
     let n = 0
     for (const c of cookies) {
       if (opts.name && c.name !== opts.name) continue
       const domain = c.domain ?? ''
-      if (opts.domain && !domain.includes(opts.domain)) continue
+      const bare = domain.replace(/^\./, '').toLowerCase()
+      if (domainFilter && bare !== domainFilter && !bare.endsWith(`.${domainFilter}`)) continue
+      if (host && bare !== host && !host.endsWith(`.${bare}`)) continue
       const scheme = c.secure ? 'https' : 'http'
       await session.cookies.remove(`${scheme}://${domain.replace(/^\./, '')}${c.path ?? '/'}`, c.name)
       n++
@@ -1455,6 +1629,73 @@ export async function doUploadFile(tab: Tab, ref: string, paths: string[]): Prom
   return { content: `已上传 ${result.count} 个文件: ${(result.names ?? []).join('、')}` }
 }
 
+/**
+ * 导出文件落盘位置约束。
+ *
+ * HAR/PDF 的 path 来自 MCP 调用方，可能被提示注入操纵。旧实现会在任意位置
+ * 递归建目录并覆盖任意文件（例如 ~/.ssh/authorized_keys）。这里把显式路径
+ * 限制在浏览器自己的导出目录内，同时拒绝符号链接，避免写到用户配置或
+ * 证据登记文件。不传 path 的自动导出不受影响。
+ */
+const insideDir = (pathMod: typeof import('node:path'), root: string, target: string): boolean => {
+  const rel = pathMod.relative(root, target)
+  return rel === '' || (!rel.startsWith('..') && !pathMod.isAbsolute(rel))
+}
+
+export async function resolveExportFile(
+  requested: string | undefined,
+  ext: '.pdf' | '.har',
+  defaultFile: string
+): Promise<{ file: string; explicit: boolean }> {
+  if (!requested) return { file: defaultFile, explicit: false }
+  const [fsMod, pathMod, osMod] = await Promise.all([
+    import('node:fs'),
+    import('node:path'),
+    import('node:os')
+  ])
+  if (!requested.trim() || requested.includes('\0')) {
+    throw new ActionError('导出路径不能为空或包含非法字符')
+  }
+  let file = requested
+  if (pathMod.extname(file).toLowerCase() !== ext) file += ext
+  file = pathMod.resolve(file)
+  const home = osMod.homedir()
+  const roots = [
+    process.env['AA_BROWSER_EXPORT_DIR'],
+    process.env['AA_BROWSER_DOWNLOAD_DIR'] || pathMod.join(home, '.aabrowser', 'downloads'),
+    pathMod.join(home, '.aabrowser', 'har'),
+    pathMod.join(home, '.aabrowser', 'screenshots')
+  ]
+    .filter((root): root is string => Boolean(root))
+    .map((root) => pathMod.resolve(root))
+  if (!roots.some((root) => insideDir(pathMod, root, file))) {
+    throw new ActionError(
+      `导出路径必须位于浏览器导出目录内（${roots.join('、')}）；可用 AA_BROWSER_EXPORT_DIR 自定义目录。当前: ${file}`
+    )
+  }
+  if (fsMod.existsSync(file)) {
+    const st = fsMod.lstatSync(file)
+    if (st.isSymbolicLink()) throw new ActionError(`拒绝写入符号链接: ${file}`)
+    if (!st.isFile()) throw new ActionError(`导出路径不是普通文件: ${file}`)
+  }
+  // 父目录可能是指向外部的符号链接；按真实路径再确认一次（只检查已存在、且词法上位于根内的祖先）。
+  const root = roots.find((candidate) => insideDir(pathMod, candidate, file))
+  if (root && fsMod.existsSync(root)) {
+    let parent = pathMod.dirname(file)
+    while (!fsMod.existsSync(parent) && pathMod.dirname(parent) !== parent && insideDir(pathMod, root, parent)) {
+      parent = pathMod.dirname(parent)
+    }
+    if (fsMod.existsSync(parent)) {
+      const realParent = fsMod.realpathSync(parent)
+      const realRoot = fsMod.realpathSync(root)
+      if (!insideDir(pathMod, realRoot, realParent)) {
+        throw new ActionError(`导出路径的真实父目录不在允许范围内: ${realParent}`)
+      }
+    }
+  }
+  return { file, explicit: true }
+}
+
 /** 页面存 PDF */
 export async function doPdf(
   tab: Tab,
@@ -1469,13 +1710,17 @@ export async function doPdf(
   const osMod = await import('node:os')
   const pathMod = await import('node:path')
   const fsMod = await import('node:fs')
-  const file = filePath || pathMod.join(process.env['AA_BROWSER_DOWNLOAD_DIR'] || pathMod.join(osMod.homedir(), '.aabrowser', 'downloads'), `aa-page-${Date.now()}.pdf`)
+  const defaultFile = pathMod.join(
+    process.env['AA_BROWSER_DOWNLOAD_DIR'] || pathMod.join(osMod.homedir(), '.aabrowser', 'downloads'),
+    `aa-page-${Date.now()}.pdf`
+  )
+  const { file, explicit } = await resolveExportFile(filePath, '.pdf', defaultFile)
   throwIfAborted(signal)
   fsMod.mkdirSync(pathMod.dirname(file), { recursive: true })
   fsMod.writeFileSync(file, pdf)
   // Printing may be non-cancellable; do not register a PDF after its caller has cancelled.
   throwIfAborted(signal)
-  getEvidenceManager().record(file, 'pdf', { managed: !filePath })
+  getEvidenceManager().record(file, 'pdf', { managed: !explicit })
   return { savedPath: file }
 }
 

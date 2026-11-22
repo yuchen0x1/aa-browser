@@ -113,6 +113,20 @@ function contrastProbeScript(level: 'AA' | 'AAA', maxResults: number): string {
     return { bg };
   };
 
+  // 祖先链上的 opacity 会整体淡化文字；只检查元素自身 opacity===0 会误判。
+  const cumulativeOpacity = (el) => {
+    let o = 1;
+    let cur = el;
+    while (cur && cur.nodeType === 1) {
+      let cs;
+      try { cs = getComputedStyle(cur); } catch (e) { return 0; }
+      const v = parseFloat(cs.opacity);
+      if (isFinite(v)) o *= clamp(v, 0, 1);
+      cur = cur.parentElement;
+    }
+    return o;
+  };
+
   // 简短、确定性的 CSS 选择器：优先 #id，其次 tag.class，最后 tag:nth-of-type。
   const selectorFor = (el) => {
     const id = el.id;
@@ -176,7 +190,13 @@ function contrastProbeScript(level: 'AA' | 'AAA', maxResults: number): string {
       const cs = getComputedStyle(el);
       if (!cs) continue;
       if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse') continue;
-      if (parseFloat(cs.opacity) === 0) continue;
+      const opacity = cumulativeOpacity(el);
+      if (opacity === 0) continue;
+      // 半透明文字、文字阴影/描边会让“颜色对颜色的对比度”失真：
+      // 与其给出可能错误的通过/违规，不如计入 skipped 并明确说明。
+      const hasShadow = cs.textShadow && cs.textShadow !== 'none';
+      const strokeWidth = parseFloat(cs.webkitTextStrokeWidth || '0') || 0;
+      if (opacity < 0.999 || hasShadow || strokeWidth > 0) { skipped++; continue; }
       const rects = el.getClientRects();
       if (!rects || rects.length === 0) continue;
       const rawText = directText(el);
@@ -294,7 +314,7 @@ export function formatContrast(report: ContrastReport, ok: boolean): string {
 
   const notes: string[] = []
   if (report.truncated) notes.push(`结果已截断，仅列出对比度最差的 ${report.violations.length} 条`)
-  if (report.skipped > 0) notes.push(`${report.skipped} 个元素因背景图片或颜色无法解析被跳过`)
+  if (report.skipped > 0) notes.push(`${report.skipped} 个元素因背景图片、半透明/阴影/描边或颜色无法解析被跳过`)
   if (notes.length) lines.push('注：' + notes.join('；'))
 
   return lines.join('\n')

@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' http: https: data:" />
     <title>Aa Browser</title>
+    <script src="./bootstrap.js"></script>
     <link rel="stylesheet" href="./src/style.css" />
   </head>
   <body>
@@ -65,10 +66,10 @@
         <button id="find-next" type="button" class="navbtn" aria-label="下一个匹配 (Enter)">↓</button>
         <button id="find-close" type="button" class="navbtn" aria-label="关闭页面查找 (Esc)">×</button>
       </div>
-      <div id="approval-panel" class="approval-panel" hidden></div>
+      <div id="approval-panel" class="approval-panel" role="alertdialog" aria-live="assertive" aria-labelledby="approval-title" aria-describedby="approval-help" hidden></div>
       <div id="action-feed-drawer" class="action-feed-drawer" hidden>
         <div class="drawer-header">
-          <span>Agent 实时活动日志</span>
+          <span id="feed-title">Agent 实时活动日志</span>
           <button id="btn-close-feed" type="button" class="drawer-close" aria-label="关闭 Agent 活动记录">×</button>
         </div>
         <div id="action-feed-list" class="drawer-content">
@@ -77,7 +78,7 @@
       </div>
       <div id="download-panel" class="download-panel" hidden>
         <div class="drawer-header">
-          <span>下载记录</span>
+          <span id="download-title">下载记录</span>
           <button id="btn-close-dl" type="button" class="drawer-close" aria-label="关闭下载列表">×</button>
         </div>
         <div id="download-status" role="status" aria-live="polite" aria-atomic="true"></div>
@@ -248,9 +249,9 @@
                   <div class="settings-group settings-row settings-row-stack">
                     <div class="settings-row-text">
                       <label id="settings-allowlist-label" class="settings-label" for="set-allowed-sites">站点白名单</label>
-                      <div id="settings-allowlist-hint" class="settings-hint">填写后仅允许匹配的 HTTP/HTTPS 站点。留空表示不启用白名单。支持 *.example.com 子域名匹配。</div>
+                      <div id="settings-allowlist-hint" class="settings-hint">填写后仅允许匹配的 HTTP/HTTPS 站点。留空表示不启用白名单。支持 *.example.com 子域名与 example.com/admin 路径前缀；不支持查询串或 # 片段。</div>
                     </div>
-                    <textarea id="set-allowed-sites" class="settings-input settings-textarea" rows="4" aria-describedby="settings-allowlist-hint" placeholder="每行一个规则，例如：&#10;https://example.com&#10;https://*.example.org:8443"></textarea>
+                    <textarea id="set-allowed-sites" class="settings-input settings-textarea" rows="4" aria-describedby="settings-allowlist-hint" placeholder="每行一个规则，例如：&#10;https://example.com&#10;https://*.example.org:8443&#10;https://example.com/admin"></textarea>
                   </div>
                 </div>
               </section>

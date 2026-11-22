@@ -384,6 +384,10 @@ function usage() {
   console.log('支持平台: Windows x64、Linux x86_64。其他平台会明确拒绝。')
 }
 
+// 版本号在不同来源里可能已经带 v（例如 GitHub tag v0.11.0），
+// 展示时统一只加一次前缀。
+const versionLabel = (value) => `v${String(value ?? '').replace(/^v/i, '')}`
+
 async function main(argv) {
   const options = parseArgs(argv)
   const json = options.json === true
@@ -433,7 +437,7 @@ async function main(argv) {
       const result = await verifyBrowserTabs(connection)
       report.verified = true
       report.ok = true
-      log(`✅ browser_tabs 验证通过（Aa Browser v${connection.version}）`)
+      log(`✅ browser_tabs 验证通过（Aa Browser ${versionLabel(connection.version)}）`)
       log(result.text || '（未返回文本内容）')
       emit()
       return
@@ -558,7 +562,7 @@ async function main(argv) {
 
     report.version = report.version || connection.version
     report.installDir = report.installDir || (platform === 'win32' ? installDir : appImage ? path.dirname(appImage) : null)
-    log(`✅ Aa Browser 已就绪 (v${connection.version}, ws://127.0.0.1:${connection.port})`)
+    log(`✅ Aa Browser 已就绪 (${versionLabel(connection.version)}, ws://127.0.0.1:${connection.port})`)
 
     let bridge = bridgePathFor({ platform, installDir })
     if (platform === 'linux') {
@@ -603,7 +607,7 @@ async function main(argv) {
     report.ok = true
     log('')
     log('🎉 安装与接入完成！')
-    log(`   版本    : v${report.version}`)
+    log(`   版本    : ${versionLabel(report.version)}`)
     log(`   安装位置: ${report.installDir}`)
     log(`   MCP 桥  : ${bridge}`)
     log(`   配置备份: 各客户端目录下的 *.aa-backup-* 文件`)

@@ -536,6 +536,9 @@ async function testRenderer() {
     async function reloadRenderer() {
       assert.deepEqual(await run(() => window.__settingsSafetyErrors), [], 'No unhandled errors before renderer reload')
       await win.loadFile(page)
+      // Electron/Windows may retain a hidden visualization surface after a file reload;
+      // keep this fixture visible for the diagnostic screenshots without stealing focus.
+      win.showInactive()
       await run(() => {
         window.__settingsSafetyErrors = []
         window.addEventListener('unhandledrejection', (event) => window.__settingsSafetyErrors.push(String(event.reason)))
@@ -557,7 +560,9 @@ async function testRenderer() {
       await click('#btn-settings')
       await until(() => modalRead.entered, 'modal read held before ready')
       await close()
-      assert.equal((await snapshot()).theme, 'light')
+      // bootstrap.js reuses the last committed appearance before the held IPC read;
+      // this profile has already adopted the dark fixture during the preceding session.
+      assert.equal((await snapshot()).theme, 'dark')
       if (order === 'boot-first') {
         startup.resolve(view())
         await assertAppearance('en-US', 'dark')

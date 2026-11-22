@@ -67,7 +67,7 @@ try {
     assert.ok(Object.hasOwn(deps, name), `Unexpected production dependency: ${name}`)
     return deps[name]
   }, module, module.exports)
-  const { withTabLock, raceAbort, doNavigate, doReload, ActionError } = module.exports
+  const { withTabLock, raceAbort, doNavigate, doReload, ActionError, withDeadline, drainTabOperations } = module.exports
   const neverRun = () => assert.fail('Cancelled or closed queue entry must not run')
 
   await test('same-tab calls run strictly FIFO and preserve their results', options, async () => {
@@ -269,6 +269,36 @@ try {
     assert.deepEqual(events, ['B'])
     assert.equal(underlyingFinished, true)
     assert.equal(getEventListeners(ctrl.signal, 'abort').length, 0)
+  })
+
+  await test('a page operation bounded by withDeadline releases the tab promptly', options, async () => {
+    const { tab } = fixture()
+    const events = []
+    const ctrl = new AbortController()
+    const hung = new Promise(() => {})
+    const a = withTabLock(tab, ctrl.signal, () => raceAbort(withDeadline(hung, 40, '页面截图'), ctrl.signal))
+    const rejected = assert.rejects(a, cancelled)
+    const b = withTabLock(tab, undefined, async () => { events.push('B') })
+    await checkpoint()
+    ctrl.abort()
+    await rejected
+    // 原始 capturePage 永不返回；队列仍必须在 withDeadline 的 40ms 上限后交棒。
+    await b
+    assert.deepEqual(events, ['B'])
+  })
+
+  await test('drainTabOperations gives up on a non-settling tracked promise', async () => {
+    const context = { inFlight: new Set([new Promise(() => {})]) }
+    const started = Date.now()
+    await drainTabOperations(context, 30)
+    assert.ok(Date.now() - started < 1000, 'drain must honor its own deadline instead of hanging forever')
+  })
+
+  await test('withDeadline rejects a non-settling page operation as ActionError', async () => {
+    await assert.rejects(
+      withDeadline(new Promise(() => {}), 20, '页面截图'),
+      (error) => error instanceof ActionError && /页面截图超时/.test(error.message)
+    )
   })
 
   await test('doNavigate keeps completion callback and queued work under one tab lock', options, async () => {

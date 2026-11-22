@@ -16,6 +16,7 @@ import {
   doUploadFile,
   doPdf,
   doGetSelector,
+  resolveExportFile,
   inspectTypeTarget
 } from './actions'
 import type { ApprovalManager } from './approvals'
@@ -42,6 +43,7 @@ import {
   doWaitForText,
   doWaitForCondition,
   doWaitForDom,
+  doWaitForAny,
   doPressKey,
   doScreenshot,
   doConsoleLogs,
@@ -262,7 +264,12 @@ export function buildTools(
     assertToolRunning(signal)
     if (!originalFrame) throw new ActionError('敏感输入目标已失效；请刷新快照后重试。')
     const url = new URL(originalUrl)
-    const allowed = approvals ? await approvals.request({ site: url.host || url.protocol, tabTitle: tab.title, fieldLabel: target.label || '敏感输入框' }, signal) : false
+    const allowed = approvals
+      ? await approvals.request(
+          { site: url.host || url.protocol, tabTitle: tab.title, fieldLabel: target.label || '敏感输入框', kind: 'sensitive' },
+          signal
+        )
+      : false
     assertToolRunning(signal)
     if (!allowed) throw new ActionError('敏感输入已取消或超时；Agent 提供的文本未写入。')
     if (wc.isDestroyed() || wc.getURL() !== originalUrl || tabs.activeId !== tab.id) throw new ActionError('页面或活动标签在等待确认期间已变化；请重新获取快照后再继续。')
@@ -279,14 +286,15 @@ export function buildTools(
       const el = document.querySelector(${jsLiteral(selector)});
       if (!el) return { ok: false };
       const type = String(el.type || '').toLowerCase();
+      const editable = el.isContentEditable === true;
       const label = String(el.labels && Array.from(el.labels).map(x => x.innerText || x.textContent).join(' ') || '');
       const autocomplete = String(el.autocomplete || '').toLowerCase();
       const meta = [label, el.name, el.id, autocomplete, el.placeholder, el.getAttribute('aria-label'), el.getAttribute('data-testid')].join(' ').toLowerCase();
       const pattern = /(token|secret|api.?key|access.?key|private.?key|password|passwd|credential|验证码|密钥|令牌|密码|otp|one.?time.?code|security.?code|auth.?code|card.?number|cc.?number|cvv|cvc|expiry|expiration)/i;
       const sensitive = type === 'password' || /^(current-password|new-password|one-time-code|cc-csc|cc-number|cc-exp|cc-exp-month|cc-exp-year)$/.test(autocomplete) || pattern.test(meta);
-      const fingerprint = [el.tagName, type, el.name || '', el.id || '', autocomplete, el.getAttribute('aria-label') || '', label].join('|');
+      const fingerprint = [el.tagName, type, el.name || '', el.id || '', autocomplete, el.getAttribute('aria-label') || '', label, editable ? 'contenteditable' : ''].join('|');
       if (sensitive) el.focus();
-      return { ok: true, sensitive, fingerprint, label: (label || el.getAttribute('aria-label') || el.name || el.id || type || el.tagName).slice(0, 120), url: String(location.href) };
+      return { ok: true, sensitive, editable, fingerprint, label: (label || el.getAttribute('aria-label') || el.name || el.id || type || el.tagName).slice(0, 120), url: String(location.href) };
     })()`
     return await frameEvaluate(wc, frameId, source, signal) as { ok: boolean; sensitive?: boolean; label?: string; fingerprint?: string; url?: string }
   }
@@ -314,7 +322,7 @@ export function buildTools(
     }
     const allowed = approvals
       ? await approvals.request(
-          { site, tabTitle: tab.title, fieldLabel: original.label || '敏感输入框' },
+          { site, tabTitle: tab.title, fieldLabel: original.label || '敏感输入框', kind: 'sensitive' },
           signal
         )
       : false
@@ -532,9 +540,14 @@ export function buildTools(
           : result.reason === 'not-scrollable' ? '页面内容不足一屏，无法滚动'
             : result.reason === 'no-scrollable-area' ? '未找到可滚动区域（页面可能尚未完成渲染）'
               : '页面位置未变化'
+      const vertical = dir === 'up' || dir === 'down'
+      const effective = result.requested
+        ? Math.abs(vertical ? result.requested.y : result.requested.x)
+        : Math.max(50, Math.min(3000, Math.round(amount)))
+      const moved = result.moved ? Math.abs(vertical ? result.moved.y : result.moved.x) : null
       const head = result.didScroll
-        ? `已滚动: ${dir} ${amount}px（作用区域: ${result.where}）`
-        : `未发生滚动: ${dir} ${amount}px（${reasonText}）`
+        ? `已滚动: ${dir} 实际 ${moved ?? effective}px（请求 ${amount}px，生效 ${effective}px；作用区域: ${result.where}）`
+        : `未发生滚动: ${dir} 请求 ${amount}px（${reasonText}）`
       const pos = result.before && result.after
         ? `位置: (${result.before.x}, ${result.before.y}) → (${result.after.x}, ${result.after.y})`
         : ''
@@ -611,44 +624,32 @@ export function buildTools(
       if (wantUrl) wants.push(`URL 含 "${args['urlContains']}"`)
       // 条件等待期间持有标签页队列：等待不会与其他客户端对同一标签的导航/点击穿插。
       return onTab(tab, args['__aaSignal'], async (): Promise<{ content: ToolContent[]; isError?: boolean }> => {
-        if (wantText || wantGone) {
-          const r = await doWaitForCondition(tab, {
-            text: wantText ? String(args['text']) : undefined,
-            textGone: wantGone ? String(args['textGone']) : undefined,
-            timeoutMs,
-            signal: args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
-          })
-          if (r.found) {
-            const what = r.which === 'gone' ? `"${args['textGone']}" 已消失` : `"${args['text']}" 已出现`
-            return { content: [text(`${what}（等待 ${r.elapsedMs}ms）`)] }
-          }
-          if (!wantSelector && !wantSelectorGone && !wantUrl) {
-            return {
-              content: [text(`超时 ${r.elapsedMs}ms，未等到 ${wants.join(' 或 ')}。可调用 browser_snapshot 查看当前页面。`)],
-              isError: true
-            }
-          }
-        }
-        const dom = await doWaitForDom(tab, {
+        const r = await doWaitForAny(tab, {
+          text: wantText ? String(args['text']) : undefined,
+          textGone: wantGone ? String(args['textGone']) : undefined,
           selector: wantSelector ? String(args['selector']) : undefined,
           selectorGone: wantSelectorGone ? String(args['selectorGone']) : undefined,
           urlContains: wantUrl ? String(args['urlContains']) : undefined,
           timeoutMs,
           signal: args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
         })
-        if (!dom.found) {
+        if (!r.found) {
           return {
-            content: [text(`超时 ${dom.elapsedMs}ms，未等到 ${wants.join(' 或 ')}。可调用 browser_snapshot 查看当前页面。`)],
+            content: [text(`超时 ${r.elapsedMs}ms，未等到 ${wants.join(' 或 ')}。可调用 browser_snapshot 查看当前页面。`)],
             isError: true
           }
         }
         const label =
-          dom.which === 'selector'
-            ? `${args['selector']} 已出现`
-            : dom.which === 'selectorGone'
-              ? `${args['selectorGone']} 已消失`
-              : `URL 已包含 "${args['urlContains']}"`
-        return { content: [text(`${label}（等待 ${dom.elapsedMs}ms）`)] }
+          r.which === 'appeared'
+            ? `"${args['text']}" 已出现`
+            : r.which === 'gone'
+              ? `"${args['textGone']}" 已消失`
+              : r.which === 'selector'
+                ? `${args['selector']} 已出现`
+                : r.which === 'selectorGone'
+                  ? `${args['selectorGone']} 已消失`
+                  : `URL 已包含 "${args['urlContains']}"`
+        return { content: [text(`${label}（等待 ${r.elapsedMs}ms）`)] }
       })
     }
   })
@@ -754,9 +755,11 @@ export function buildTools(
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const r = await onTab(tab, callSignal(args), () => doFind(tab, String(args['text'] ?? '')))
-      return {
-        content: [text(`页面共 ${r.matches} 处匹配"${args['text']}"，已高亮并定位到第 ${r.activeOrdinal ?? 1} 处`)]
-      }
+      const summary =
+        r.matches === 0
+          ? `页面未找到"${String(args['text'] ?? '')}"（共 0 处匹配），没有可定位的文本`
+          : `页面共 ${r.matches} 处匹配"${args['text']}"，已高亮并定位到第 ${r.activeOrdinal ?? 1} 处`
+      return { content: [text(summary)] }
     }
   })
 
@@ -776,7 +779,9 @@ export function buildTools(
             site: siteOf(tab),
             tabTitle: tab.title,
             action: action === 'set' ? '写入 Cookie（会改变登录态）' : '清除 Cookie（可能导致登出）',
-            detail: `域名: ${String(args['domain'] ?? args['url'] ?? '全部')} · 名称: ${String(args['name'] ?? '全部')}`
+            detail:
+              (args['url'] ? `来源: ${String(args['url'])}` : `域名: ${String(args['domain'] ?? '全部')}`) +
+              ` · 名称: ${String(args['name'] ?? '全部')}`
           },
           args['__aaSignal']
         )
@@ -836,7 +841,7 @@ export function buildTools(
           if (!ok) throw new ActionError(`下载 ${id} 不在进行中，无法取消`)
           return { content: [text(`已取消下载 ${id}；文件不会继续使用。`)] }
         }
-        const r = downloads.retry(id)
+        const r = await downloads.retry(id)
         if (!r.ok) throw new ActionError(r.reason ?? '重试失败')
         return { content: [text(`已重新发起下载（来源记录 ${id}）。用 action=list 查看新记录。`)] }
       }
@@ -956,10 +961,28 @@ export function buildTools(
       const lines = shown.map(
         (e) =>
           `[${e.requestId}] ${e.method} ${e.status || '…'} ${e.resourceType} ` +
-          `${(e.size / 1024).toFixed(1)}KB ${e.durationMs != null ? e.durationMs + 'ms' : '…'} ` +
+          `${(e.size / 1024).toFixed(1)}KB 耗时:${e.durationMs != null ? e.durationMs + 'ms' : '…'} ` +
           `${e.error ? 'ERROR:' + e.error : ''} ${safeNetworkUrl(e.url).slice(0, 160)}`
       )
-      return { content: [text(`共 ${list.length} 条（显示最近 ${shown.length} 条）：\n${lines.join('\n')}`)] }
+      // 机器可读副本：Agent 需要按耗时/状态排序或筛别时不必解析中文散文。
+      const structured = shown.map((e) => ({
+        requestId: e.requestId,
+        method: e.method,
+        url: safeNetworkUrl(e.url),
+        status: e.status,
+        resourceType: e.resourceType,
+        size: e.size,
+        durationMs: e.durationMs,
+        error: e.error,
+        ...(e.redirectUrl ? { redirectUrl: safeNetworkUrl(e.redirectUrl) } : {})
+      }))
+      return {
+        content: [
+          text(
+            `共 ${list.length} 条（显示最近 ${shown.length} 条）：\n${lines.join('\n')}\n\n结构化数据:\n${JSON.stringify(structured)}`
+          )
+        ]
+      }
     }
   })
 
@@ -982,7 +1005,7 @@ export function buildTools(
       const parts: string[] = [
         `${entry.method} ${safeNetworkUrl(entry.url, includeSensitive)}`,
         `状态: ${entry.status} ${entry.statusText}${entry.error ? '（失败: ' + entry.error + '）' : ''}`,
-        `类型: ${entry.resourceType} | 大小: ${(entry.size / 1024).toFixed(1)}KB | 耗时: ${entry.durationMs ?? '…'}ms`,
+        `类型: ${entry.resourceType} | 大小: ${(entry.size / 1024).toFixed(1)}KB | 耗时: ${entry.durationMs != null ? entry.durationMs + 'ms' : '未完成或未知'}`,
         '',
         '请求头:',
         ...Object.entries(safeNetworkHeaders(entry.requestHeaders, includeSensitive)).map(([k, v]) => `  ${k}: ${v}`),
@@ -994,6 +1017,22 @@ export function buildTools(
         const body = await tab.net.getResponseBody(entry.requestId)
         parts.push('', '响应体:', clipBody(body, entry.mimeType))
       }
+      const structured = {
+        requestId: entry.requestId,
+        method: entry.method,
+        url: safeNetworkUrl(entry.url, includeSensitive),
+        status: entry.status,
+        statusText: entry.statusText,
+        resourceType: entry.resourceType,
+        mimeType: entry.mimeType,
+        size: entry.size,
+        durationMs: entry.durationMs,
+        error: entry.error,
+        ...(entry.redirectUrl ? { redirectUrl: safeNetworkUrl(entry.redirectUrl, includeSensitive) } : {}),
+        requestHeaders: safeNetworkHeaders(entry.requestHeaders, includeSensitive),
+        responseHeaders: safeNetworkHeaders(entry.responseHeaders, includeSensitive)
+      }
+      parts.push('', '结构化数据:', JSON.stringify(structured))
       return { content: [text(parts.join('\n'))] }
     }
   })
@@ -1019,15 +1058,14 @@ export function buildTools(
         import('electron'), import('node:fs'), import('node:path'), import('node:os')
       ])
       assertToolRunning(signal)
-      const file =
-        (args['path'] as string | undefined) ||
-        path.join(os.homedir(), '.aabrowser', 'har', `aa-${Date.now()}.har`)
+      const defaultFile = path.join(os.homedir(), '.aabrowser', 'har', `aa-${Date.now()}.har`)
+      const { file, explicit } = await resolveExportFile(args['path'] as string | undefined, '.har', defaultFile)
       const data = JSON.stringify(tab.net.toHar(app.getVersion(), includeSensitive), null, 2)
       // 创建目录也是副作用；取消时不得创建目录、写文件或登记证据。
       assertToolRunning(signal)
       fs.mkdirSync(path.dirname(file), { recursive: true })
       fs.writeFileSync(file, data, 'utf-8')
-      getEvidenceManager().record(file, 'har', { managed: !args['path'] })
+      getEvidenceManager().record(file, 'har', { managed: !explicit })
       return { content: [text(`HAR 已导出: ${file}\n共 ${fs.statSync(file).size} 字节`)] }
     }
   })
@@ -1300,7 +1338,7 @@ export function buildTools(
       const parts: string[] = []
       if (policy.confirm !== undefined) parts.push(`confirm→${policy.confirm}`)
       if (policy.prompt !== undefined) parts.push(`prompt→${JSON.stringify(policy.prompt)}`)
-      const scope = policy.once ? '下一次对话框' : '之后每次对话框'
+      const scope = policy.once ? '下一次匹配的 confirm/prompt' : '之后每次匹配的 confirm/prompt'
       if (!ready) {
         return {
           content: [text(`已记录策略（${parts.join('，')}，作用于${scope}），但当前页面未安装对话框守卫；若点击后仍卡住，请先重新打开该页面再试。`)]
@@ -1580,7 +1618,8 @@ export function buildTools(
         specs = VIEWPORT_PRESETS[preset] ?? VIEWPORT_PRESETS['all'] ?? []
       }
       const results = await onTab(tab, callSignal(args), () => captureViewportMatrix(tab, specs, {
-        signal: callSignal(args)
+        signal: callSignal(args),
+        isMinimized: () => windowCtl.state?.().minimized === true
       }))
       const content: import('@shared/types').ToolContent[] = [text(formatViewportMatrix(results))]
       if (args['includeImages'] === true) {

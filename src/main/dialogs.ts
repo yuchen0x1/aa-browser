@@ -25,23 +25,30 @@ const GUARD_SOURCE = `(() => {
       if (window.__aaDialogs.length > 50) window.__aaDialogs.shift()
     } catch (e) {}
   }
-  const takePolicy = () => {
+  const takePolicy = (kind) => {
     try {
       const policy = window.__aaDialogPolicy || null
-      if (policy && policy.once) window.__aaDialogPolicy = null
-      return policy || {}
+      if (!policy) return {}
+      // 只被“能回答的那种对话框”消耗：例如只设置了 prompt 时，
+      // 中间出现的 confirm 不应把策略吃掉，否则随后的 prompt 会拿到默认值。
+      const hasAnswer = kind === 'confirm'
+        ? typeof policy.confirm === 'boolean'
+        : policy.prompt !== undefined && policy.prompt !== null
+      if (!hasAnswer) return policy
+      if (policy.once) window.__aaDialogPolicy = null
+      return policy
     } catch (e) { return {} }
   }
   try {
     window.alert = function (message) { push({ type: 'alert', message: String(message ?? ''), ts: Date.now() }); return undefined }
     window.confirm = function (message) {
-      const policy = takePolicy()
+      const policy = takePolicy('confirm')
       const accepted = typeof policy.confirm === 'boolean' ? policy.confirm : false
       push({ type: 'confirm', message: String(message ?? ''), ts: Date.now(), accepted })
       return accepted
     }
     window.prompt = function (message, def) {
-      const policy = takePolicy()
+      const policy = takePolicy('prompt')
       const answered = policy.prompt !== undefined && policy.prompt !== null
       const value = answered ? String(policy.prompt) : null
       push({ type: 'prompt', message: String(message ?? ''), defaultValue: def == null ? null : String(def), ts: Date.now(), answered: answered ? value : null })

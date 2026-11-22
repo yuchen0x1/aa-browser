@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-globalThis.__AA_BRIDGE_VERSION__ = "0.10.0";
+globalThis.__AA_BRIDGE_VERSION__ = "0.11.0";
 // \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -4192,7 +4192,7 @@ const TOOL_DEFS = [
 				},
 				url: {
 					type: "string",
-					description: "(get/set) Cookie belongs to this URL"
+					description: "(get/set/clear) Cookie belongs to this URL; with clear, only cookies for this site are removed"
 				},
 				name: {
 					type: "string",
@@ -4300,7 +4300,7 @@ const TOOL_DEFS = [
 			properties: {
 				path: {
 					type: "string",
-					description: "Output file path (default ~/.aabrowser/downloads/aa-page-<ts>.pdf)"
+					description: "Output file path inside the browser export dirs (~/.aabrowser/downloads, har, screenshots or AA_BROWSER_EXPORT_DIR; default ~/.aabrowser/downloads/aa-page-<ts>.pdf). Symlinks and paths outside those dirs are rejected."
 				},
 				landscape: {
 					type: "boolean",
@@ -4457,7 +4457,7 @@ const TOOL_DEFS = [
 			properties: {
 				path: {
 					type: "string",
-					description: "Output file path (default ~/.aabrowser/har/aa-<timestamp>.har)"
+					description: "Output file path inside the browser export dirs (~/.aabrowser/downloads, har, screenshots or AA_BROWSER_EXPORT_DIR; default ~/.aabrowser/har/aa-<timestamp>.har). Symlinks and paths outside those dirs are rejected."
 				},
 				includeSensitive: {
 					type: "boolean",

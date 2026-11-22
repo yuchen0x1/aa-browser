@@ -15,6 +15,8 @@ export interface NetRequest {
   size: number
   durationMs: number | null
   error: string | null
+  /** 该跳转响应指向的下一跳 URL（仅重定向条目） */
+  redirectUrl?: string
   ts: number
 }
 
@@ -22,6 +24,14 @@ const MAX_ENTRIES = 500
 const MAX_BODY_CHARS = 50000
 const SENSITIVE_HEADER = /^(authorization|proxy-authorization|cookie2?|set-cookie|.*(?:auth|token|secret|api[-_]?key|password|passwd|credential).*)$/i
 const SENSITIVE_QUERY = /^(access[-_]?token|refresh[-_]?token|id[-_]?token|token|jwt|bearer|api[-_]?key|key|secret|signature|sig|password|passwd|auth|authorization|session|session[-_]?id|credential|code)$/i
+
+/** 兜底：URL 本身无法解析时，仍按 `?/&/#` 分隔符抹掉明显的凭据参数。 */
+function redactRawUrl(raw: string): string {
+  return raw.replace(
+    /([?&#])((?:access[-_]?token|refresh[-_]?token|id[-_]?token|token|jwt|bearer|api[-_]?key|key|secret|signature|sig|password|passwd|auth|authorization|session|session[-_]?id|credential|code))=([^&#]*)/gi,
+    '$1$2=[redacted]'
+  )
+}
 
 /** Keep captured credentials in memory for debugging, but redact them at MCP output boundaries by default. */
 export function safeNetworkUrl(raw: string, includeSensitive = false): string {
@@ -35,9 +45,24 @@ export function safeNetworkUrl(raw: string, includeSensitive = false): string {
     url.search = safeParams.toString()
     if (url.username) url.username = '[redacted]'
     if (url.password) url.password = '[redacted]'
+    // 隐式 OAuth 会把 access_token 放在 fragment 里；旧实现只清洗 search，
+    // 导致导出 HAR / 网络列表时 token 原样泄漏。
+    const hash = url.hash.slice(1)
+    let sensitiveHash = false
+    if (hash.includes('=')) {
+      try {
+        new URLSearchParams(hash).forEach((_value, key) => {
+          if (SENSITIVE_QUERY.test(key)) sensitiveHash = true
+        })
+      } catch {
+        /* 非标准 fragment，继续用正则兜底 */
+      }
+    }
+    if (!sensitiveHash && redactRawUrl(`#${hash}`).includes('[redacted]')) sensitiveHash = true
+    if (sensitiveHash) url.hash = '#[redacted]'
     return url.toString()
   } catch {
-    return raw
+    return redactRawUrl(raw)
   }
 }
 
@@ -136,7 +161,7 @@ export class NetworkCapture {
     this.listener = null
     if (this.fetchAttached) {
       this.fetchAttached = false
-      this.mocks = []
+      // 规则本身留在内存里：DevTools 关闭后可以重新安装拦截，不应静默丢失。
     }
   }
 
@@ -243,27 +268,50 @@ export class NetworkCapture {
     const req = params['request'] as Record<string, unknown> | undefined
     const url = String(req?.['url'] ?? '')
     const reqMethod = String(req?.['method'] ?? 'GET')
-    const rule = this.matchMock(url, reqMethod)
+    const requestHeaders = normalizeHeaders(req?.['headers'])
+    const header = (name: string): string =>
+      Object.entries(requestHeaders).find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1] ?? ''
+    const isPreflight = reqMethod.toUpperCase() === 'OPTIONS' && Boolean(header('Access-Control-Request-Method'))
+    // 预检不带规则里的方法；按 URL 找到规则后合成 204，否则跨域 mock 会在预检阶段失败。
+    const rule = this.matchMock(url, reqMethod) ?? (isPreflight ? this.matchMock(url, reqMethod, true) : null)
     if (!rule || rule.action === 'continue') {
       this.continueRequest(requestId)
       return
     }
+    const origin = header('Origin')
+    const merged = new Map<string, string>()
+    for (const [name, value] of Object.entries(rule.headers)) merged.set(name.toLowerCase(), String(value))
+    if (!merged.has('content-type')) merged.set('content-type', 'text/plain; charset=utf-8')
+    if (origin && !merged.has('access-control-allow-origin')) merged.set('access-control-allow-origin', origin)
+    if (origin && !merged.has('access-control-allow-credentials')) merged.set('access-control-allow-credentials', 'true')
+    if (origin && !merged.has('vary')) merged.set('vary', 'Origin')
+    if (isPreflight) {
+      if (!merged.has('access-control-allow-methods')) {
+        merged.set('access-control-allow-methods', header('Access-Control-Request-Method') || '*')
+      }
+      if (!merged.has('access-control-allow-headers')) {
+        merged.set('access-control-allow-headers', header('Access-Control-Request-Headers') || '*')
+      }
+      merged.set('access-control-max-age', merged.get('access-control-max-age') ?? '600')
+      this.respondRequest(requestId, {
+        responseCode: 204,
+        responseHeaders: [...merged].map(([name, value]) => ({ name, value })),
+        body: ''
+      })
+      return
+    }
     rule.hits++
-    const headers = [
-      ...Object.entries(rule.headers).map(([k, v]) => ({ name: k, value: String(v) })),
-      { name: 'Content-Type', value: rule.headers['Content-Type'] || 'text/plain; charset=utf-8' }
-    ]
     this.respondRequest(requestId, {
       responseCode: rule.status,
-      responseHeaders: headers,
+      responseHeaders: [...merged].map(([name, value]) => ({ name, value })),
       body: Buffer.from(rule.body, 'utf-8').toString('base64')
     })
   }
 
-  private matchMock(url: string, method: string): MockRule | null {
+  private matchMock(url: string, method: string, ignoreMethod = false): MockRule | null {
     const u = url.toLowerCase()
     for (const m of [...this.mocks].reverse()) {
-      if (m.method && m.method.toUpperCase() !== method.toUpperCase()) continue
+      if (!ignoreMethod && m.method && m.method.toUpperCase() !== method.toUpperCase()) continue
       if (u.includes(m.urlContains.toLowerCase())) return m
     }
     return null
@@ -291,9 +339,27 @@ export class NetworkCapture {
       if (method === 'Network.requestWillBeSent') {
         const req = params['request'] as Record<string, unknown> | undefined
         if (!req) return
+        const id = String(params['requestId'] ?? '')
+        const nextUrl = String(req['url'] ?? '')
+        // 重定向不会给上一跳发 responseReceived；若不在这里收尾，
+        // 列表会留下永远 status=0/duration=null 的幽灵条目，HAR 也丢失跳转链。
+        const redirect = params['redirectResponse'] as Record<string, unknown> | undefined
+        if (redirect) {
+          const prev = this.byId.get(id)
+          if (prev) {
+            prev.status = Number(redirect['status'] ?? prev.status)
+            prev.statusText = String(redirect['statusText'] ?? '')
+            prev.mimeType = String(redirect['mimeType'] ?? prev.mimeType)
+            prev.responseHeaders = normalizeHeaders(redirect['headers'])
+            prev.redirectUrl = nextUrl
+            const len = Number(redirect['encodedDataLength'] ?? 0)
+            if (len > 0) prev.size = len
+            if (prev.durationMs === null) prev.durationMs = Math.max(0, Date.now() - prev.ts)
+          }
+        }
         this.push({
-          requestId: String(params['requestId'] ?? ''),
-          url: String(req['url'] ?? ''),
+          requestId: id,
+          url: nextUrl,
           method: String(req['method'] ?? 'GET'),
           resourceType: String(params['type'] ?? 'Other'),
           status: 0,
@@ -405,7 +471,7 @@ export class NetworkCapture {
             httpVersion: 'HTTP/1.1',
             headers: toHarHeaders(safeNetworkHeaders(e.responseHeaders, includeSensitive)),
             content: { size: e.size, mimeType: e.mimeType || 'unknown' },
-            redirectURL: '',
+            redirectURL: e.redirectUrl ? safeNetworkUrl(e.redirectUrl, includeSensitive) : '',
             headersSize: -1,
             bodySize: -1
           },

@@ -2,6 +2,13 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
+## v0.11.0 — 2026-11-22
+
+- **等待与网络结果更可靠**：`browser_wait` 支持出现/消失条件的 OR 等待并返回实际满足项；网络请求/详情提供结构化状态、大小、耗时和重定向信息；Mock 支持 CORS 预检。
+- **导出与快照更安全准确**：PDF/HAR 路径拒绝越界和符号链接；敏感 URL/请求头继续脱敏；快照区分节点、深度、文本和选项裁剪原因，不再把长文本误报为节点树截断。
+- **后台与界面体验**：修复最小化视口恢复、下载打开/重试状态、客户端缺失桥提示、标签切换焦点、审批可访问性、首帧主题/语言闪烁、更新错误详情和打印取消反馈。
+- 修复表单写入失败继续执行、对话框 once 类型串用、滚动/查找异步结果竞态、证据登记表损坏覆盖，以及桥无效帧无响应等问题；用户数据无需迁移。
+
 ## v0.10.0 — 2026-11-22
 
 - **滚动结果可验证**：`browser_scroll` 返回真实前后位置、`didScroll`、`atLimit`、`visibilityState` 与未滚动原因；主文档不动时按请求方向尝试最大滚动容器并再次校验，不再把静默无操作报告为「已滚动」。

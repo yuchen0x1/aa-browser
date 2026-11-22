@@ -74,6 +74,7 @@ export async function captureVisual(wc: WebContents, opts?: { fullPage?: boolean
   const background = opts?.background === true
   let attachedHere = false
   let restoreViewport: { width: number; height: number } | null = null
+  let viewportOverridden = false
   const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
   try {
     if (!dbg.isAttached()) {
@@ -97,14 +98,20 @@ export async function captureVisual(wc: WebContents, opts?: { fullPage?: boolean
           contentWidth?: number
           contentHeight?: number
         }
-        const originalWidth = Math.max(1, Math.ceil(dimensions.viewportWidth ?? 0) || 1280)
-        const originalHeight = Math.max(1, Math.ceil(dimensions.viewportHeight ?? 0) || 720)
+        const measuredWidth = Math.ceil(dimensions.viewportWidth ?? 0)
+        const measuredHeight = Math.ceil(dimensions.viewportHeight ?? 0)
+        const originalWidth = Math.max(1, measuredWidth || 1280)
+        const originalHeight = Math.max(1, measuredHeight || 720)
         const width = Math.max(originalWidth, Math.ceil(dimensions.contentWidth ?? 0) || 1280)
         const height = Math.min(Math.max(originalHeight, Math.ceil(dimensions.contentHeight ?? 0) || 720), MAX_FULL_PAGE_HEIGHT)
-        restoreViewport = { width: originalWidth, height: originalHeight }
+        // 0×0 说明本来就没有可恢复的视口；留空让 finally 直接清除覆盖。
+        if (measuredWidth > 0 && measuredHeight > 0) {
+          restoreViewport = { width: originalWidth, height: originalHeight }
+        }
         await dbg.sendCommand('Emulation.setDeviceMetricsOverride', {
           width, height, deviceScaleFactor: 1, mobile: false, screenWidth: width, screenHeight: height
         })
+        viewportOverridden = true
         await delay(100)
       }
       const image = await wc.capturePage(undefined, { stayHidden: true })
@@ -155,9 +162,9 @@ export async function captureVisual(wc: WebContents, opts?: { fullPage?: boolean
     if (error instanceof ActionError) throw error
     throw new ActionError(`截图失败：${error instanceof Error ? error.message : String(error)}`)
   } finally {
-    if (restoreViewport && dbg.isAttached()) {
+    if (viewportOverridden && dbg.isAttached()) {
       try {
-        if (opts?.isWindowMinimized?.() ?? false) {
+        if (restoreViewport && (opts?.isWindowMinimized?.() ?? false)) {
           await dbg.sendCommand('Emulation.setDeviceMetricsOverride', {
             width: restoreViewport.width,
             height: restoreViewport.height,
@@ -478,9 +485,11 @@ export async function visualCompare(
   }
 
   if (diffImage) {
-    const dir = visualBaselinesDir()
-    fs.mkdirSync(dir, { recursive: true })
-    const diffFile = path.join(dir, `${name}.diff.png`)
+    // 差异图放在子目录：基线名允许点号，`home` 的差异图与名为
+    // `home.diff` 的基线原本会写到同一个 home.diff.png 并互相覆盖/误删。
+    const diffDir = path.join(visualBaselinesDir(), 'diffs')
+    fs.mkdirSync(diffDir, { recursive: true })
+    const diffFile = path.join(diffDir, `${name}.diff.png`)
     fs.writeFileSync(diffFile, encodePng(base.width, base.height, diffImage))
     getEvidenceManager().record(diffFile, 'diff')
     result.diffFile = diffFile
@@ -517,7 +526,7 @@ export function visualDelete(name: string): boolean {
   const files = [
     path.join(dir, `${name}.png`),
     path.join(dir, `${name}.json`),
-    path.join(dir, `${name}.diff.png`)
+    path.join(dir, 'diffs', `${name}.diff.png`)
   ]
   let existed = false
   for (const file of files) {

@@ -238,8 +238,17 @@ export async function runAssertions(tab: Tab, checks: AssertCheck[]): Promise<As
       let hit = matched
       if (typeof check.status === 'number') hit = matched.filter((r) => r.status === check.status)
       const statusList = hit.map((r) => r.status).filter((s) => s > 0)
+      const hasStatusExpectation =
+        typeof check.status === 'number' ||
+        typeof check.statusMin === 'number' ||
+        typeof check.statusMax === 'number'
       actual = hit.length ? `${hit.length} 条匹配，状态 ${[...new Set(statusList)].join('/') || '未知'}` : '无匹配请求'
-      passed = hit.length > 0 && statusList.length > 0 && statusList.every((s) => s < 400)
+      // 调用方明确指定状态或区间时，requests() 已按此过滤，不能再要求 2xx/3xx；
+      // 否则 status:404 这类“预期失败”的断言永远无法通过。
+      passed =
+        hit.length > 0 &&
+        statusList.length > 0 &&
+        (hasStatusExpectation || statusList.every((s) => s >= 200 && s < 400))
     }
 
     results.push({ index, passed, label, expected: describeCheck(check), actual, kind: check.kind })

@@ -108,29 +108,54 @@ export class EvidenceManager {
   private entries: EvidenceEntry[] = []
   private loaded = false
   private dirty = false
+  /** 注册表损坏且无法备份时置位：宁可不写，也不能用空表覆盖原始数据。 */
+  private writeBlocked = false
 
   private load(): void {
     if (this.loaded) return
     this.loaded = true
+    const file = registryFile()
+    let text: string
     try {
-      const raw: unknown = JSON.parse(fs.readFileSync(registryFile(), 'utf-8'))
-      if (isObject(raw) && Array.isArray(raw.entries)) {
-        const unique = new Map<string, EvidenceEntry>()
-        for (const entry of raw.entries) {
-          if (!isEntry(entry)) continue
-          unique.delete(entry.file)
-          unique.set(entry.file, entry)
-        }
-        this.entries = [...unique.values()]
-        this.dirty = this.entries.length !== raw.entries.length
+      text = fs.readFileSync(file, 'utf-8')
+    } catch (error) {
+      if (!isMissing(error)) console.warn(`[evidence] 无法读取登记表 ${file}: ${String(error)}`)
+      return
+    }
+    try {
+      const raw: unknown = JSON.parse(text)
+      if (!isObject(raw) || !Array.isArray(raw.entries)) throw new Error('unexpected registry shape')
+      const unique = new Map<string, EvidenceEntry>()
+      for (const entry of raw.entries) {
+        if (!isEntry(entry)) continue
+        unique.delete(entry.file)
+        unique.set(entry.file, entry)
       }
-    } catch {
-      /* 首次运行或注册表损坏：从空表开始 */
+      this.entries = [...unique.values()]
+      this.dirty = this.entries.length !== raw.entries.length
+    } catch (error) {
+      // 首次运行是 ENOENT（上面已返回）；这里只剩真正的损坏。
+      // 先保留一份可人工恢复的副本，再以空表继续，否则下一次 record 会覆盖原文件。
+      const backup = `${file}.corrupt-${Date.now()}.bak`
+      try {
+        fs.copyFileSync(file, backup)
+        console.warn(`[evidence] 登记表损坏（${String(error)}），已备份到 ${backup}，本次从空表开始`)
+      } catch (copyError) {
+        this.writeBlocked = true
+        console.warn(
+          `[evidence] 登记表损坏（${String(error)}），且无法创建备份 ${backup}（${String(copyError)}）；` +
+            '为保护原始数据，本次会话不会写入登记表'
+        )
+      }
     }
   }
 
   private save(): void {
     this.dirty = true
+    if (this.writeBlocked) {
+      console.warn('[evidence] 登记表处于只读保护状态，跳过写入')
+      return
+    }
     try {
       writeJsonAtomic(registryFile(), { version: 1, entries: this.entries })
       this.dirty = false

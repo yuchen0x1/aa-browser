@@ -61,7 +61,7 @@ export class DownloadTracker {
   /** 记录 -> 发起它的 session（完成后仍保留，用于重试） */
   private recordSessions = new Map<string, Session>()
   /** 发起重试时排队的来源记录；will-download 用它标注新记录 */
-  private pendingRetries: string[] = []
+  private pendingRetries: { id: string; url: string; ts: number }[] = []
   /** URL 白名单校验（由主进程注入；未注入时拒绝重试） */
   private urlGuard: (url: string) => boolean = () => false
   private directoryProvider: () => string = defaultDownloadDir
@@ -97,7 +97,10 @@ export class DownloadTracker {
       }
       const stamp = Date.now().toString(36)
       const downloadId = randomUUID()
-      const retriedFrom = this.pendingRetries.shift()
+      const downloadUrl = item.getURL()
+      // 只有 URL 匹配才认领重试记录，避免启动失败后把下一条无关下载标成 -r。
+      const retryIndex = this.pendingRetries.findIndex((p) => p.url === downloadUrl)
+      const retriedFrom = retryIndex >= 0 ? this.pendingRetries.splice(retryIndex, 1)[0].id : undefined
       const rawFilename = item.getFilename() || `download-${stamp}`
       // Chromium normally supplies a basename, but a hostile server can still
       // return separators or traversal segments in Content-Disposition.
@@ -148,11 +151,19 @@ export class DownloadTracker {
     return this.directoryProvider() || defaultDownloadDir()
   }
 
-  /** 打开文件（用系统默认应用） */
-  open(id: string): void {
+  /** 打开文件（仅已完成的下载；返回失败原因供 UI 展示） */
+  async open(id: string): Promise<{ ok: boolean; reason?: string }> {
+    const locale = getMainLocale()
     const rec = this.records.find((r) => r.id === id)
-    if (!rec) return
-    void shell.openPath(rec.savePath)
+    if (!rec) return { ok: false, reason: diagnosticMessage(locale, 'downloads.missing', id) }
+    if (rec.state !== 'completed') {
+      return { ok: false, reason: diagnosticMessage(locale, 'downloads.notCompleted', rec.state) }
+    }
+    if (!fs.existsSync(rec.savePath)) {
+      return { ok: false, reason: diagnosticMessage(locale, 'downloads.openFailed', rec.savePath) }
+    }
+    const error = await shell.openPath(rec.savePath)
+    return error ? { ok: false, reason: diagnosticMessage(locale, 'downloads.openFailed', error) } : { ok: true }
   }
 
   /** 在系统文件管理器中显示 */
@@ -182,21 +193,35 @@ export class DownloadTracker {
    * 重试一条已结束的下载：新建一次下载，文件名带 -r 前缀避免覆盖原文件。
    * URL 必须用主进程注入的白名单重新校验，防止绕过站点限制。
    */
-  retry(id: string): { ok: boolean; reason?: string } {
+  async retry(id: string): Promise<{ ok: boolean; reason?: string }> {
     const locale = getMainLocale()
     const rec = this.records.find((r) => r.id === id)
     if (!rec) return { ok: false, reason: diagnosticMessage(locale, 'downloads.missing', id) }
-    if (this.activeItems.has(id)) return { ok: false, reason: diagnosticMessage(locale, 'downloads.active') }
+    if (this.activeItems.has(id) || rec.state === 'progressing') {
+      return { ok: false, reason: diagnosticMessage(locale, 'downloads.active') }
+    }
+    if (rec.state === 'completed') {
+      return { ok: false, reason: diagnosticMessage(locale, 'downloads.retryCompleted') }
+    }
     if (!this.urlGuard(rec.url)) return { ok: false, reason: diagnosticMessage(locale, 'downloads.notAllowed') }
 
     const session = this.recordSessions.get(id)
     if (!session) return { ok: false, reason: diagnosticMessage(locale, 'downloads.noSession') }
-    this.pendingRetries.push(id)
+    const pending = { id, url: rec.url, ts: Date.now() }
+    this.pendingRetries.push(pending)
+    const discard = (): void => {
+      const index = this.pendingRetries.indexOf(pending)
+      if (index >= 0) this.pendingRetries.splice(index, 1)
+    }
+    // 60 秒没有 will-download 就丢弃，避免永远占位并误标后续下载。
+    const timer = setTimeout(discard, 60_000)
+    timer.unref?.()
     try {
-      // Electron 的 downloadURL 在部分版本返回 void，不能假设是 Promise
-      session.downloadURL(rec.url)
+      // Electron 45 返回 Promise；旧版本的同步异常也要捕获。
+      await session.downloadURL(rec.url)
     } catch (error) {
-      this.pendingRetries.splice(this.pendingRetries.indexOf(id), 1)
+      clearTimeout(timer)
+      discard()
       return { ok: false, reason: diagnosticMessage(locale, 'downloads.failed', errorDetail(error)) }
     }
     return { ok: true }

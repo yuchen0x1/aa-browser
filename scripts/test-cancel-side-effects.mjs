@@ -14,6 +14,8 @@ import { TOOL_ANNOTATIONS, TOOL_DEFS } from '../src/shared/tool-defs.mjs'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const require = createRequire(import.meta.url)
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-cancel-side-effects-'))
+// HAR/PDF exports are confined to an allowed root; point that root at this fixture.
+process.env.AA_BROWSER_EXPORT_DIR = tmp
 const out = path.join(tmp, 'compiled')
 const url = 'https://fixture.test/page'
 const text = 'fixture text'

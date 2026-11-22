@@ -52,6 +52,14 @@ export const locateScript = (ref: string): string => {
   }
   let r
   try { r = el.getBoundingClientRect() } catch (e) { return { ok: false, reason: 'detached' } }
+  // 快照之后元素可能被隐藏/折叠；继续按旧坐标点击会命中其他元素，
+  // 或通过合成事件触发一个用户根本点不到的东西。
+  let cs = null
+  try { cs = el.ownerDocument.defaultView ? el.ownerDocument.defaultView.getComputedStyle(el) : null } catch (e) {}
+  if (!cs || cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity || '1') === 0) {
+    return { ok: false, reason: 'hidden' }
+  }
+  if (r.width < 1 || r.height < 1) return { ok: false, reason: 'not-visible' }
   const x = Math.round(ox + r.x + r.width / 2)
   const y = Math.round(oy + r.y + r.height / 2)
   let hitOk = false
@@ -118,10 +126,10 @@ export const inspectInputScript = (ref: string): string => {
   if (!el || !el.isConnected) return { ok: false, reason: 'no-ref' }
   const type = String(el.type || '').toLowerCase()
   const label = String(el.labels && Array.from(el.labels).map(x => x.innerText || x.textContent).join(' ') || '')
-    const autocomplete = String(el.autocomplete || '').toLowerCase()
-    const meta = [label, el.name, el.id, autocomplete, el.placeholder, el.getAttribute('aria-label'), el.getAttribute('data-testid')].join(' ').toLowerCase()
-    const secretPattern = /(token|secret|api.?key|access.?key|private.?key|password|passwd|credential|验证码|密钥|令牌|密码|otp|one.?time.?code|security.?code|auth.?code|card.?number|cc.?number|cvv|cvc|expiry|expiration)/i
-    const sensitive = type === 'password' || /^(current-password|new-password|one-time-code|cc-csc|cc-number|cc-exp|cc-exp-month|cc-exp-year)$/.test(autocomplete) || secretPattern.test(meta)
+  const autocomplete = String(el.autocomplete || '').toLowerCase()
+  const meta = [label, el.name, el.id, autocomplete, el.placeholder, el.getAttribute('aria-label'), el.getAttribute('data-testid')].join(' ').toLowerCase()
+  const secretPattern = /(token|secret|api.?key|access.?key|private.?key|password|passwd|credential|验证码|密钥|令牌|密码|otp|one.?time.?code|security.?code|auth.?code|card.?number|cc.?number|cvv|cvc|expiry|expiration)/i
+  const sensitive = type === 'password' || /^(current-password|new-password|one-time-code|cc-csc|cc-number|cc-exp|cc-exp-month|cc-exp-year)$/.test(autocomplete) || secretPattern.test(meta)
   const fingerprint = [el.tagName, type, el.name || '', el.id || '', autocomplete, el.getAttribute('aria-label') || '', label].join('|')
   return { ok: true, sensitive, fingerprint, label: (label || el.getAttribute('aria-label') || el.name || el.id || type || el.tagName).slice(0, 120), type }
 })()`
@@ -135,8 +143,10 @@ export const fingerprintScript = (ref: string): string => {
   const r = e.getBoundingClientRect()
   e.focus()
   const labels = e.labels ? Array.from(e.labels).map(x => x.innerText || x.textContent || '').join(' ') : ''
+  const type = String(e.type || '').toLowerCase()
+  const autocomplete = String(e.autocomplete || '').toLowerCase()
   return {
-    fingerprint: [e.tagName, e.type || '', e.name || '', e.id || '', e.autocomplete || '', e.getAttribute('aria-label') || '', labels].join('|'),
+    fingerprint: [e.tagName, type, e.name || '', e.id || '', autocomplete, e.getAttribute('aria-label') || '', labels].join('|'),
     rect: [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)]
   }
 })()`
@@ -271,6 +281,8 @@ export const scrollScript = (direction: string, amount: number): string => {
       where,
       before,
       after,
+      requested: { x: dx, y: dy },
+      moved: { x: after.x - before.x, y: after.y - before.y },
       atLimit: atLimit(after, size),
       scrollHeight: size.height,
       scrollWidth: size.width,
@@ -412,6 +424,10 @@ export const extractScript = (ref?: string): string => {
         else copy.textContent = '••••••'
       }
     }
+    // 离屏 clone 的 innerText 会退化到 textContent，把脚本/样式源码也带出来。
+    try {
+      clone.querySelectorAll('script,style,noscript,template').forEach(n => n.remove())
+    } catch (e) {}
     return clone.innerText || clone.textContent || ''
   }
   if (ref) {

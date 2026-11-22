@@ -11,12 +11,10 @@ export function printPage(wc: Electron.WebContents, parent: Electron.BaseWindow 
   const text = locale === 'en-US' ? {
     title: 'Aa Browser — Print',
     failed: 'Printing could not be completed. Check the printer configuration.',
-    canceled: 'Printing was not completed.',
     ok: 'OK'
   } : {
     title: 'Aa Browser — 打印',
     failed: '无法完成打印，请检查打印机配置。',
-    canceled: '打印未完成。',
     ok: '确定'
   }
   let settled = false
@@ -40,10 +38,15 @@ export function printPage(wc: Electron.WebContents, parent: Electron.BaseWindow 
       return
     }
     const canceled = reason === 'Print job canceled'
+    // 用户主动取消打印不是错误，再弹一个模态框只会多一次点击；静默释放即可再次打印。
+    if (canceled) {
+      release()
+      return
+    }
     const options: Electron.MessageBoxOptions = {
-      type: canceled ? 'info' : 'error',
+      type: 'error',
       title: text.title,
-      message: canceled ? text.canceled : text.failed,
+      message: text.failed,
       detail: reason,
       buttons: [text.ok],
       noLink: true

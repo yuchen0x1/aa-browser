@@ -13,11 +13,15 @@ type DiagnosticParameters = {
   'clients.updated': [name: string, file: string, note: string]
   'clients.notDetected': []
   'clients.writeFailed': [name: string, error: string]
+  'clients.bridgeMissing': [file: string]
   'downloads.missing': [id: string]
   'downloads.active': []
   'downloads.notAllowed': []
   'downloads.noSession': []
   'downloads.failed': [error: string]
+  'downloads.notCompleted': [state: string]
+  'downloads.retryCompleted': []
+  'downloads.openFailed': [error: string]
 }
 
 type DiagnosticCatalog = { [K in keyof DiagnosticParameters]: (...args: DiagnosticParameters[K]) => string }
@@ -35,11 +39,15 @@ const catalogs: Record<Locale, DiagnosticCatalog> = {
     'clients.updated': (name, file, note) => `已更新 ${name} 配置：${file}${note}`,
     'clients.notDetected': () => '（客户端目录未检测到，已创建新配置）',
     'clients.writeFailed': (name, error) => `写入 ${name} 失败：${error}`,
+    'clients.bridgeMissing': (file) => `配置指向的 MCP 桥文件已不存在（${file}）；请重新安装/更新 Aa Browser 后再点“写入配置”。`,
     'downloads.missing': (id) => `找不到下载记录 ${id}`,
     'downloads.active': () => '该下载仍在进行中，无法重试',
     'downloads.notAllowed': () => '该下载地址不在当前站点白名单内，已拒绝重试',
     'downloads.noSession': () => '无法找到该下载所属的浏览器会话',
-    'downloads.failed': (error) => `重新发起下载失败：${error}`
+    'downloads.failed': (error) => `重新发起下载失败：${error}`,
+    'downloads.notCompleted': (state) => `下载尚未完成（${state}），不能打开；可重试或使用“在文件夹中显示”。`,
+    'downloads.retryCompleted': () => '该下载已完成，不能重试；如需再次下载，请访问原下载地址。',
+    'downloads.openFailed': (error) => `打开下载文件失败：${error}`
   },
   'en-US': {
     'clients.nodeRequired': () => 'Install Node.js 22 and reopen Aa Browser first.',
@@ -53,11 +61,15 @@ const catalogs: Record<Locale, DiagnosticCatalog> = {
     'clients.updated': (name, file, note) => `Updated ${name} configuration: ${file}${note}`,
     'clients.notDetected': () => ' (Client directory not detected; created a new configuration)',
     'clients.writeFailed': (name, error) => `Failed to write ${name} configuration: ${error}`,
+    'clients.bridgeMissing': (file) => `The configured MCP bridge file no longer exists (${file}); reinstall/update Aa Browser and write the configuration again.`,
     'downloads.missing': (id) => `Download record not found: ${id}`,
     'downloads.active': () => 'This download is still in progress and cannot be retried',
     'downloads.notAllowed': () => 'This download URL is not on the current site allowlist; retry denied',
     'downloads.noSession': () => 'The browser session for this download could not be found',
-    'downloads.failed': (error) => `Failed to restart the download: ${error}`
+    'downloads.failed': (error) => `Failed to restart the download: ${error}`,
+    'downloads.notCompleted': (state) => `The download is not completed (${state}) and cannot be opened; retry it or use "Show in folder".`,
+    'downloads.retryCompleted': () => 'This download is already completed and cannot be retried; revisit the source URL to download it again.',
+    'downloads.openFailed': (error) => `Failed to open the downloaded file: ${error}`
   }
 }
 

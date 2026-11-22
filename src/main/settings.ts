@@ -110,6 +110,19 @@ export class SettingsStore {
         .filter((site): site is string => typeof site === 'string')
         .map((site) => site.trim())
         .filter(Boolean)
+      // 查询串/片段无法参与导航白名单匹配，静默接受会让用户误以为规则生效。
+      const unsupported = next.allowedSites.find((site) => {
+        if (/[?#]/.test(site)) return true
+        try {
+          const parsed = new URL(site.includes('://') ? site : `https://${site}`)
+          return Boolean(parsed.search || parsed.hash)
+        } catch {
+          return false
+        }
+      })
+      if (unsupported) {
+        throw new Error('站点规则只支持 host、*.host 或 host/path，不支持查询串或 # 片段。')
+      }
     }
     try {
       writeJsonAtomic(this.filePath, next, this.backupInvalid)

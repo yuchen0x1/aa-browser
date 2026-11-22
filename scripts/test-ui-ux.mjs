@@ -261,6 +261,8 @@ if (!process.versions.electron) {
     assertTabView(tabs[0].id)
     chrome.focus()
     await ui(`document.querySelector('[data-tab-id="${tabs[0].id}"]').focus(); window.__nextTabProbe = document.querySelector('[data-tab-id="${tabs[1].id}"]')`)
+    // 切换标签后原生窗口焦点短暂悬空（focusedURL=null）；等外壳重新拿到焦点再发键，避免按键落空。
+    await until(() => webContents.getFocusedWebContents() === chrome, 'chrome focused before arrow key')
     await key('Right')
     try {
       await until(async () => (await ui(`window.aa.getState().then(s=>s.activeId === ${literal(tabs[1].id)})`)) && (await ui(`document.querySelector('[data-tab-id="${tabs[1].id}"]')?.getAttribute('aria-selected') === 'true'`)) && webContents.getFocusedWebContents() === chrome, 'arrow-selected tab, rendered selection and native shell focus')
@@ -277,9 +279,12 @@ if (!process.versions.electron) {
         allWebContents: webContents.getAllWebContents().map((wc) => wc.getURL()),
         dom: await ui('({hasFocus:document.hasFocus(),focusKey:document.activeElement?.dataset.focusKey,tabRetained:window.__nextTabProbe?.isConnected})'),
       }
-      throw new Error(`${error.message} ${JSON.stringify(diagnostics)}`)
+      throw new Error(`${error.message} ${JSON.stringify(diagnostics)}`, { cause: error })
     }
     assertTabView(tabs[1].id)
+    // arrow selection already proves DOM focus retention on the first run; a second
+    // pass after the rAF-driven reveal settles removes the reveal-timing flake.
+    await pause(80)
     check('changing the active tab does not replace its focused DOM node', await ui('document.activeElement === window.__nextTabProbe && window.__nextTabProbe.getAttribute("aria-selected") === "true"'))
     await ui('delete window.__nextTabProbe')
     const arrowFocus = webContents.getFocusedWebContents() === chrome
@@ -365,6 +370,9 @@ if (!process.versions.electron) {
     await send(fixture)
     const completionFocus = await ui('({key:document.activeElement.dataset.focusKey,id:document.activeElement.id})')
     check('completed download moves focus from removed cancel action to a surviving download action', completionFocus.key === 'download-open:ui-download', completionFocus)
+    // Retry only exists for cancelled/interrupted downloads; completed ones must offer Open/Show instead.
+    const retryableFixture = {...fixture, downloads: fixture.downloads.map(d => ({...d, state: 'cancelled'}))}
+    await send(retryableFixture)
     await ui(`document.querySelector('[data-focus-key="download-retry:ui-download"]')?.click()`)
     await pause(200)
     const retryNotice = await ui(`(() => {const e=document.querySelector('#download-status');return {text:e?.textContent,live:e?.getAttribute('aria-live'),visible:!!e&&e.offsetParent!==null};})()`)
@@ -442,7 +450,15 @@ if (!process.versions.electron) {
       await click('#btn-feed')
       await capture(`${theme}-activity-feed`)
       await click('#btn-feed')
-      await capture(`${theme}-newtab`, page)
+      // Electron can report the background view as hidden right after the shell
+      // reasserts its bounds; retry the evidence capture once instead of failing.
+      try {
+        await capture(`${theme}-newtab`, page)
+      } catch (error) {
+        await page.focus()
+        await pause(300)
+        await capture(`${theme}-newtab`, page)
+      }
       const noteContrast = await page.executeJavaScript(`(() => {
         const rgb=s=>s.match(/[\\d.]+/g).map(Number);
         const lum=c=>c.slice(0,3).map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4}).reduce((v,c,i)=>v+c*[.2126,.7152,.0722][i],0);
@@ -490,7 +506,21 @@ if (!process.versions.electron) {
 
     for (const [width,height] of [[1920,1080],[1600,900],[1366,768],[1280,720],[1024,768],[960,640]]) {
       win.setContentSize(width,height)
+      // Windows rounds content size to even pixels at forced DPI (1366 -> 1368) and
+      // an immediate re-request can race the shell; wait for bounds to settle then
+      // confirm the renderer viewport before measuring.
+      // Windows 在强制 DPI 下会把内容尺寸取整到偶数像素（1366 -> 1368），
+      // 且立即重请求可能与外壳竞争；等边界收敛后再确认渲染器视口。
+      await until(() => {
+        const bounds = win.getContentBounds()
+        return Math.abs(bounds.width - width) <= 2
+      }, `resize settled ${width}x${height}`)
       await pause(150)
+      // 设置未打开时外壳视图只有工具栏高度，innerHeight 不等于窗口高度；宽度到位即可测量。
+      await until(async () => {
+        const size = await ui('({w:innerWidth})')
+        return Math.abs(size.w - width) <= 2
+      }, `renderer viewport width ${width}`)
       await openSettings()
       await ui('document.querySelector("#set-locale").value="en-US"; document.querySelector("#set-locale").dispatchEvent(new Event("change"))')
       const geometry = await ui(`(() => { const c=document.querySelector('.settings-card').getBoundingClientRect(); const b=document.querySelector('#settings-body'); const f=document.querySelector('#btn-save-settings').getBoundingClientRect(); return {width:innerWidth,height:innerHeight,devicePixelRatio,overflow:b.scrollWidth-b.clientWidth,cardFits:c.left>=0&&c.top>=0&&c.right<=innerWidth+1&&c.bottom<=innerHeight+1,saveFits:f.bottom<=innerHeight&&f.right<=innerWidth}; })()`)
@@ -522,7 +552,7 @@ if (!process.versions.electron) {
       retryCalls++
       return new Promise(resolve => { finishRetry = resolve })
     })
-    const delayedDownloads = {...live, downloads:[fixture.downloads[0], {...fixture.downloads[0],id:'ui-download-2',filename:'Second isolated file.txt'}]}
+    const delayedDownloads = {...live, downloads:[{...fixture.downloads[0], state:'cancelled'}, {...fixture.downloads[0],id:'ui-download-2',filename:'Second isolated file.txt',state:'cancelled'}]}
     await send(delayedDownloads)
     await click('#btn-downloads')
     chrome.focus()

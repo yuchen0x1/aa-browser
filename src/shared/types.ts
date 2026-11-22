@@ -202,7 +202,12 @@ export interface PageSnapshot {
   elements: SnapshotElement[]
   newRefs?: string[]
   removedRefs?: string[]
+  /** 是否有可渲染节点被省略（文本/选项裁剪不计入，见下面各原因位）。 */
   truncated: boolean
+  nodeLimitReached?: boolean
+  depthLimitReached?: boolean
+  textClipped?: boolean
+  optionsClipped?: boolean
   /** 分页模式：总行数 / 当前游标 / 下一页游标 / 是否还有后续页 */
   totalLines?: number
   cursor?: number
@@ -254,4 +259,18 @@ export interface ToolContent {
   text?: string
   data?: string
   mimeType?: string
+}
+
+/**
+ * 活动 HUD 展开成整窗外壳视图时，页面区域被透明但仍参与命中测试的外壳覆盖。
+ * 外壳把落在页面区域的指针事件转发给活动页，坐标使用窗口内容区 DIP。
+ */
+export interface PagePointerForward {
+  type: 'mouseDown' | 'mouseUp' | 'mouseMove' | 'mouseWheel'
+  x: number
+  y: number
+  button?: 'left' | 'right' | 'middle'
+  clickCount?: number
+  deltaX?: number
+  deltaY?: number
 }

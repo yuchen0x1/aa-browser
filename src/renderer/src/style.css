@@ -321,8 +321,11 @@ textarea:focus-visible,
 }
 
 .tab .close {
-  width: 18px;
-  height: 18px;
+  /* 24×24 满足 WCAG 2.2 AA；图标仍保持 14px。负外边距避免撑高标签。 */
+  width: 24px;
+  height: 24px;
+  margin: -3px -5px -3px 0;
+  padding: 0;
   border: none;
   background: transparent;
   color: inherit;

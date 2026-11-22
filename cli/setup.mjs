@@ -150,20 +150,207 @@ function bridgeEntry() {
   return entry
 }
 
+/**
+ * 零依赖 JSONC 扫描器：返回带 [start,end) 字节区间的 AST。
+ *
+ * 只用于找到目标键的区间，让写入可以只替换 `aa-browser` 那一小段文本。
+ * 这样 `//`、`/* *\/` 注释、缩进和文件其余内容都不会被整体重写丢失；
+ * 字符串里的 `//` 也不会被误当成注释（旧实现的直接正则替换会因此误报“无法解析”）。
+ */
+function parseJsonc(text) {
+  let i = 0
+  const fail = () => { throw new Error('JSONC 语法错误') }
+  function skip() {
+    for (;;) {
+      const ch = text[i]
+      if (ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r' || ch === '\uFEFF') { i++; continue }
+      if (ch === '/' && text[i + 1] === '/') {
+        i += 2
+        while (i < text.length && text[i] !== '\n') i++
+        continue
+      }
+      if (ch === '/' && text[i + 1] === '*') {
+        const end = text.indexOf('*/', i + 2)
+        if (end === -1) fail()
+        i = end + 2
+        continue
+      }
+      break
+    }
+  }
+  function parseString() {
+    const start = i
+    i++
+    while (i < text.length) {
+      const ch = text[i]
+      if (ch === '\\') { i += 2; continue }
+      if (ch === '"') {
+        i++
+        return { type: 'string', start, end: i, value: JSON.parse(text.slice(start, i)) }
+      }
+      if (ch === '\n' || ch === '\r') fail()
+      i++
+    }
+    fail()
+  }
+  function parseValue() {
+    skip()
+    const ch = text[i]
+    if (ch === '{') return parseObject()
+    if (ch === '[') return parseArray()
+    if (ch === '"') return parseString()
+    const start = i
+    while (i < text.length && !/[\s,\]}]/.test(text[i])) i++
+    if (i === start) fail()
+    JSON.parse(text.slice(start, i)) // 只做合法性检查
+    return { type: 'literal', start, end: i }
+  }
+  function parseObject() {
+    const start = i
+    i++
+    const members = []
+    for (;;) {
+      skip()
+      if (text[i] === '}') { i++; return { type: 'object', start, end: i, members } }
+      if (text[i] === ',') { i++; continue } // 尾逗号
+      if (text[i] !== '"') fail()
+      const key = parseString()
+      skip()
+      if (text[i] !== ':') fail()
+      i++
+      const value = parseValue()
+      members.push({ key: key.value, keyStart: key.start, keyEnd: key.end, value })
+      skip()
+      if (text[i] === ',') { i++; continue }
+      if (text[i] === '}') { i++; return { type: 'object', start, end: i, members } }
+      fail()
+    }
+  }
+  function parseArray() {
+    const start = i
+    i++
+    const items = []
+    for (;;) {
+      skip()
+      if (text[i] === ']') { i++; return { type: 'array', start, end: i, items } }
+      if (text[i] === ',') { i++; continue }
+      items.push(parseValue())
+      skip()
+      if (text[i] === ',') { i++; continue }
+      if (text[i] === ']') { i++; return { type: 'array', start, end: i, items } }
+      fail()
+    }
+  }
+  const root = parseValue()
+  skip()
+  if (i !== text.length) fail()
+  return root
+}
+
+function materializeJsonc(node, text) {
+  if (node.type === 'object') {
+    const out = {}
+    for (const member of node.members) out[member.key] = materializeJsonc(member.value, text)
+    return out
+  }
+  if (node.type === 'array') return node.items.map((item) => materializeJsonc(item, text))
+  if (node.type === 'string') return node.value
+  return JSON.parse(text.slice(node.start, node.end))
+}
+
 function parseLoose(text) {
   try {
     return JSON.parse(text)
   } catch {
     try {
-      const stripped = text
-        .replace(/\/\*[\s\S]*?\*\//g, '')
-        .replace(/(^|[^:])\/\/[^\n]*/g, '$1')
-        .replace(/,(\s*[}\]])/g, '$1')
-      return JSON.parse(stripped)
+      return materializeJsonc(parseJsonc(text), text)
     } catch {
       return null
     }
   }
+}
+
+function lineIndentAt(text, pos) {
+  const lineStart = text.lastIndexOf('\n', pos - 1) + 1
+  const match = /^[ \t]*/.exec(text.slice(lineStart, pos))
+  return match ? match[0] : ''
+}
+
+function detectIndentUnit(text) {
+  const match = /^(?:\uFEFF)?[^\r\n]*\r?\n([ \t]+)\S/m.exec(text)
+  return match ? match[1] : '  '
+}
+
+function newlineOf(text) {
+  return text.includes('\r\n') ? '\r\n' : '\n'
+}
+
+/** 多行 JSON 的续行按目标位置缩进；缩进单位沿用文件自身的风格。 */
+function stringifyIndented(value, baseIndent, indentUnit, newline) {
+  return JSON.stringify(value, null, indentUnit).split('\n').join(newline + baseIndent)
+}
+
+function objectMember(node, key) {
+  if (!node || node.type !== 'object') return null
+  const matches = node.members.filter((member) => member.key === key)
+  // 重复键会让“只改一个条目”变成改错条目；客户端对重复键的取舍也不一致。
+  if (matches.length > 1) throw new Error(`配置中存在重复键 ${key}`)
+  return matches[0] || null
+}
+
+/** 在对象末尾插入一个成员；保留已有注释、缩进与换行风格。 */
+function insertMember(text, node, key, value, indentUnit, newline) {
+  const close = node.end - 1 // '}' 的位置
+  const closingIndent = lineIndentAt(text, close)
+  if (!node.members.length) {
+    const insertAt = text.slice(close - closingIndent.length, close) === closingIndent ? close - closingIndent.length : close
+    const memberIndent = closingIndent + indentUnit
+    const body = `${JSON.stringify(key)}: ${stringifyIndented(value, memberIndent, indentUnit, newline)}`
+    // 空对象 `{}` 的 `{` 与 `}` 在同一行时，先换行再写成员。
+    const atLineStart = insertAt === 0 || text[insertAt - 1] === '\n' || text[insertAt - 1] === '\r'
+    const head = atLineStart ? '' : newline
+    return `${text.slice(0, insertAt)}${head}${memberIndent}${body}${newline}${closingIndent}${text.slice(close)}`
+  }
+  // 插在最后一个成员之后：先跳过它可能已有的尾逗号。
+  let anchor = node.members[node.members.length - 1].value.end
+  while (text[anchor] === ' ' || text[anchor] === '\t') anchor++
+  const hadComma = text[anchor] === ','
+  if (hadComma) anchor++
+  const memberIndent = closingIndent + indentUnit
+  const body = `${JSON.stringify(key)}: ${stringifyIndented(value, memberIndent, indentUnit, newline)}`
+  return `${text.slice(0, anchor)}${hadComma ? '' : ','}${newline}${memberIndent}${body}${text.slice(anchor)}`
+}
+
+/**
+ * 只替换/插入 aa-browser 配置，返回新文本。
+ * 容器路径缺失时补建中间对象；任一层不是对象则不猜，交给调用方提示手动处理。
+ */
+function applyMcpEntry(text, containerPath, entry) {
+  const indentUnit = detectIndentUnit(text)
+  const newline = newlineOf(text)
+  const root = parseJsonc(text)
+  if (root.type !== 'object') throw new Error('配置根节点不是对象')
+  const keys = containerPath.split('.').filter(Boolean)
+  let node = root
+  let missingAt = -1
+  for (let k = 0; k < keys.length; k++) {
+    const member = objectMember(node, keys[k])
+    if (!member) { missingAt = k; break }
+    if (member.value.type !== 'object') throw new Error(`配置项 ${keys.slice(0, k + 1).join('.')} 不是对象`)
+    node = member.value
+  }
+  if (missingAt === -1) {
+    const existing = objectMember(node, 'aa-browser')
+    if (existing) {
+      const baseIndent = lineIndentAt(text, existing.value.start)
+      return `${text.slice(0, existing.value.start)}${stringifyIndented(entry, baseIndent, indentUnit, newline)}${text.slice(existing.value.end)}`
+    }
+    return insertMember(text, node, 'aa-browser', entry, indentUnit, newline)
+  }
+  // 补建缺失的容器层级：从最内层往外包，一次插入到已存在的那一层。
+  let nested = { 'aa-browser': entry }
+  for (let k = keys.length - 1; k > missingAt; k--) nested = { [keys[k]]: nested }
+  return insertMember(text, node, keys[missingAt], nested, indentUnit, newline)
 }
 
 function getContainer(obj, container) {
@@ -290,6 +477,14 @@ function detectOne(def) {
   return { def, file, installed: installed || def.id === 'workbuddy', configured, outdated }
 }
 
+/** 补建容器路径时用的嵌套对象（新建配置文件也走这里）。 */
+function nestedContainer(containerPath, entry) {
+  const keys = containerPath.split('.').filter(Boolean)
+  let value = { 'aa-browser': entry }
+  for (let k = keys.length - 1; k >= 0; k--) value = { [keys[k]]: value }
+  return value
+}
+
 function setupOne(def) {
   if (def.manual) {
     log(`  ⚠️  ${def.name}: 请在 DeepSeek Harness 插件市场安装并启用 Aa Browser 插件；本脚本不会修改 .dsh 配置或内部状态。启用后让 Agent 实际调用 mcp__aa-browser__browser_tabs 验证。`)
@@ -310,18 +505,19 @@ function setupOne(def) {
   }
   const file = configFileFor(def)
   const installed = fs.existsSync(def.detect)
+  const entry = entryFor(def)
+  let existingText = ''
   let parsed = {}
   if (fs.existsSync(file)) {
-    const p = parseLoose(fs.readFileSync(file, 'utf-8'))
-    if (!p) {
+    existingText = fs.readFileSync(file, 'utf-8')
+    parsed = parseLoose(existingText)
+    if (!parsed || typeof parsed !== 'object') {
       backupConfig(file)
       log(`  ⚠️  ${def.name}: 配置文件无法解析（${file}），请手动添加`)
       return
     }
-    parsed = p
   }
   const container = getContainer(parsed, def.container)
-  const entry = entryFor(def)
   let verb = '已写入'
   if (container['aa-browser']) {
     if (JSON.stringify(container['aa-browser']) === JSON.stringify(entry)) {
@@ -330,8 +526,18 @@ function setupOne(def) {
     }
     verb = '已更新'
   }
-  container['aa-browser'] = entry
-  writeClientConfig(file, JSON.stringify(parsed, null, 2) + '\n')
+  // 只改 aa-browser 对应的字节区间：注释、缩进、换行和其余配置原样保留。
+  let nextText
+  try {
+    nextText = existingText
+      ? applyMcpEntry(existingText, def.container, entry)
+      : `${JSON.stringify(nestedContainer(def.container, entry), null, 2)}\n`
+  } catch (err) {
+    backupConfig(file)
+    log(`  ⚠️  ${def.name}: 无法安全改写配置（${err.message}），请手动添加`)
+    return
+  }
+  writeClientConfig(file, nextText)
   log(`  ✅ ${def.name} ${verb}（${file}${installed ? '' : '，客户端目录未检测到，已创建新配置'}）`)
 }
 

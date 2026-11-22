@@ -41,6 +41,11 @@ try {
   const appRoot = path.join(runDir, '应用 Ω e\u0301')
   const bin = path.join(runDir, 'Node 程序 Ω')
   for (const directory of [home, appRoot, bin]) fs.mkdirSync(directory, { recursive: true })
+  // setupClients now refuses to write configs pointing at a missing bridge; give the
+  // fixture app root a real bridge file so write-path tests exercise their own branch.
+  const fixtureBridge = path.join(appRoot, 'out', 'bridge', 'mcp.cjs')
+  fs.mkdirSync(path.dirname(fixtureBridge), { recursive: true })
+  fs.writeFileSync(fixtureBridge, '// isolated bridge fixture')
   for (const name of ['node', 'node.exe']) fs.writeFileSync(path.join(bin, name), 'fixture; never executed')
   delete process.env.Path
   process.env.PATH = bin
@@ -122,13 +127,13 @@ try {
     fs.mkdirSync(directory, { recursive: true })
     return directory
   }
-  function test(label, fn) {
+  async function test(label, fn) {
     checks++
     fsFault = fsObserver = undefined
     lastFilesystemError = undefined
     operations.length = 0
     try {
-      fn()
+      await fn()
       assert.deepEqual(violations, [], 'No production read/write may escape the fixture directory')
       console.log(`PASS: ${label}`)
     } catch (error) {
@@ -183,7 +188,7 @@ try {
   }
   const rawError = 'EACCES 原始错误 Ω e\u0301 / 原样保留\n$& {clients.added}'
 
-  test('pure locale resolver honors explicit settings, auto candidates and the existing fallback', () => {
+  await test('pure locale resolver honors explicit settings, auto candidates and the existing fallback', () => {
     assert.equal(resolveLocale('zh-CN', ['en-GB']), 'zh-CN')
     assert.equal(resolveLocale('en-US', ['zh-HK']), 'en-US')
     for (const [candidate, expected] of [['EN-gb', 'en-US'], ['zh-HK', 'zh-CN'], ['fr-FR', 'zh-CN'], ['', 'zh-CN']]) {
@@ -193,7 +198,7 @@ try {
     assert.equal(resolveLocale('auto', ['fr-FR', 'en-AU']), 'en-US')
     assert.equal(resolveLocale('auto'), 'zh-CN')
   })
-  test('pure diagnostic parameters and exception details remain opaque Unicode text', () => {
+  await test('pure diagnostic parameters and exception details remain opaque Unicode text', () => {
     const file = 'C:\\用户\\e\u0301 Ω\\配置.json'
     const command = 'C:\\程序 Files\\Node Ω\\node.exe'
     const bridge = 'C:\\同步盘\\Aa $& {clients.added}\\桥.cjs'
@@ -207,7 +212,7 @@ try {
     assert.equal(errorDetail(rawError), rawError)
     assert.equal(errorDetail({ toString: () => rawError }), rawError)
   })
-  test('main locale uses the persisted setting rather than the opposite system locale', () => {
+  await test('main locale uses the persisted setting rather than the opposite system locale', () => {
     assert.equal(getMainLocale(), 'en-US')
     assert.equal(JSON.parse(fs.readFileSync(process.env.AA_BROWSER_SETTINGS_FILE, 'utf8')).locale, 'en-US')
     useLocale('auto', 'fr-FR')
@@ -239,7 +244,7 @@ try {
       Object.defineProperty(process, 'resourcesPath', previousResources)
     }
   }
-  test('AppImage bridge diagnostics distinguish bundled, absent and stable files without writing', () => {
+  await test('AppImage bridge diagnostics distinguish bundled, absent and stable files without writing', () => {
     withAppImage(true, (resources) => {
       const bundled = path.join(resources, 'app.asar.unpacked', 'out', 'bridge', 'mcp.cjs')
       const stable = clients.mcpBridgePath()
@@ -290,11 +295,11 @@ try {
   ]
   for (const profile of profiles) {
     const t = (zh, en) => profile.effective === 'zh-CN' ? zh : en
-    const run = (label, fn) => test(`${profile.setting}/${profile.system}: ${label}`, () => {
+    const run = (label, fn) => test(`${profile.setting}/${profile.system}: ${label}`, async () => {
       useLocale(profile.setting, profile.system)
-      fn()
+      await fn()
     })
-    run('manual client result has unchanged identity/status and never accesses client files', () => {
+    await run('manual client result has unchanged identity/status and never accesses client files', () => {
       const def = fixture('deepseek-harness')
       def.file = def.detectPath = () => { throw new Error('Manual setup must not access paths') }
       const [result] = setup([def])
@@ -304,7 +309,7 @@ try {
       ))
       assert.deepEqual(operations, [])
     })
-    run('JSON add for an undetected client retains the Unicode path and missing-directory note', () => {
+    await run('JSON add for an undetected client retains the Unicode path and missing-directory note', () => {
       const def = fixture('cursor', undefined, false)
       const [result] = setup([def])
       assertSetup(result, def, 'added', t(
@@ -314,7 +319,7 @@ try {
       assert.deepEqual(JSON.parse(fs.readFileSync(def.file(), 'utf8')).mcpServers['aa-browser'], clients.entryFor(def))
       assert.equal(backups(def.file()).length, 0)
     })
-    run('JSONC add preserves unrelated configuration and backs up the original bytes', () => {
+    await run('JSONC add preserves unrelated configuration and backs up the original bytes', () => {
       const original = '{ // keep settings\n "preference": "原文 Ω", "mcpServers": { "other": { "command": "keep" }, },\n}\n'
       const def = fixture('cursor', original)
       const [result] = setup([def])
@@ -326,7 +331,7 @@ try {
       assert.equal(backups(def.file()).length, 1)
       assert.equal(fs.readFileSync(path.join(path.dirname(def.file()), backups(def.file())[0]), 'utf8'), original)
     })
-    run('JSONC insertion honors the file indent unit; minified files stay compact', () => {
+    await run('JSONC insertion honors the file indent unit; minified files stay compact', () => {
       const { replaceJsonEntry } = require(path.join(runDir, 'compiled/main/client-config.js'))
       const pretty = '{\n  "preference": "keep",\n  "mcpServers": {\n    "other": { "command": "x" }\n  }\n}\n'
       const prettyOut = replaceJsonEntry(pretty, 'mcpServers', { command: 'node', args: ['b.cjs'] })
@@ -337,7 +342,7 @@ try {
       assert.ok(!miniOut.includes('\n  '), 'minified files stay minified')
       assert.deepEqual(JSON.parse(miniOut).mcpServers['aa-browser'], { command: 'n' })
     })
-    run('TOML repeated updates do not accumulate blank lines and stay parseable', () => {
+    await run('TOML repeated updates do not accumulate blank lines and stay parseable', () => {
       const { replaceTomlEntry } = require(path.join(runDir, 'compiled/main/client-config.js'))
       const { parse: parseToml } = require('smol-toml')
       let text = '[other]\nkey = "v"\n\n[mcp_servers.other]\nc = "x"\n'
@@ -348,7 +353,7 @@ try {
       assert.equal(parseToml(text).mcp_servers['aa-browser'].command, 'node3')
       assert.equal(parseToml(text).other.key, 'v')
     })
-    run('JSON update and skip retain statuses, unrelated keys and existing backup behavior', () => {
+    await run('JSON update and skip retain statuses, unrelated keys and existing backup behavior', () => {
       const original = JSON.stringify({ preference: '保留', mcpServers: { other: { command: 'keep' }, 'aa-browser': { command: 'old' } } })
       const def = fixture('cursor', original)
       const [updated] = setup([def])
@@ -364,7 +369,7 @@ try {
       assert.equal(operations.filter(({ method }) => method === 'copyFileSync').length, 0, 'An unchanged entry does not create another backup')
       assert.equal(operations.filter(({ method }) => method === 'writeFileSync').length, 0)
     })
-    run('corrupt JSON is backed up but not overwritten, with original command and bridge in manual advice', () => {
+    await run('corrupt JSON is backed up but not overwritten, with original command and bridge in manual advice', () => {
       const original = '{ 损坏 JSON e\u0301'
       const def = fixture('cursor', original)
       const entry = clients.bridgeEntry()
@@ -377,7 +382,7 @@ try {
       assert.equal(fs.readFileSync(path.join(path.dirname(def.file()), backups(def.file())[0]), 'utf8'), original)
       assert.equal(operations.filter(({ method }) => method === 'writeFileSync').length, 0)
     })
-    run('Codex add then skip preserves TOML, line endings and avoids repeat writes', () => {
+    await run('Codex add then skip preserves TOML, line endings and avoids repeat writes', () => {
       const original = '# 用户设置\r\nmodel = "keep"\r\n\r\n[mcp_servers.other]\r\ncommand = "keep"\r\n'
       const def = fixture('codex', original)
       const [added] = setup([def])
@@ -395,7 +400,7 @@ try {
       assert.equal(detected.configured, true)
       assert.equal(detected.outdated, false)
     })
-    run('Codex creation and update do not alter unrelated TOML blocks', () => {
+    await run('Codex creation and update do not alter unrelated TOML blocks', () => {
       const fresh = fixture('codex')
       assertSetup(setup([fresh])[0], fresh, 'added', t(`已写入 Codex MCP 配置：${fresh.file()}`, `Wrote Codex MCP configuration: ${fresh.file()}`))
       assert.equal(backups(fresh.file()).length, 0)
@@ -410,7 +415,7 @@ try {
     })
     for (const id of ['cursor', 'codex']) {
       for (const method of ['copyFileSync', 'readFileSync', 'mkdirSync', 'openSync', 'writeFileSync', 'fsyncSync', 'renameSync']) {
-        run(`${id} ${method} error retains the raw exception and error status`, () => {
+        await run(`${id} ${method} error retains the raw exception and error status`, () => {
           const original = id === 'codex' ? 'model = "keep"\n' : '{"preference":"keep"}'
           const def = fixture(id, original)
           const detail = `${rawError}\n${def.file()}`
@@ -424,7 +429,7 @@ try {
           assert.equal(fs.readFileSync(def.file(), 'utf8'), original)
         })
       }
-      run(`${id} native filesystem error keeps the exact Unicode path and native error text`, () => {
+      await run(`${id} native filesystem error keeps the exact Unicode path and native error text`, () => {
         const def = fixture(id)
         const blocker = path.join(path.dirname(def.file()), '不可建目录 e\u0301')
         fs.writeFileSync(blocker, 'not a directory')
@@ -439,7 +444,7 @@ try {
         assert.equal(fs.readFileSync(blocker, 'utf8'), 'not a directory')
       })
     }
-    run('AppImage missing-Node preflight localizes the Aa error for every selected client', () => {
+    await run('AppImage missing-Node preflight localizes the Aa error for every selected client', () => {
       const defs = [fixture('cursor'), fixture('deepseek-harness'), fixture('codex')]
       const results = withAppImage(false, () => setup(defs, ['codex', 'unknown', 'cursor', 'deepseek-harness']))
       assert.equal(results.length, 3)
@@ -449,7 +454,7 @@ try {
       }
       assert.equal(operations.some(({ method }) => method === 'writeFileSync'), false)
     })
-    run('AppImage bridge-sync preflight returns the untouched external error for each client', () => {
+    await run('AppImage bridge-sync preflight returns the untouched external error for each client', () => {
       const defs = [fixture('cursor'), fixture('codex')]
       const results = withAppImage(true, () => setup(defs))
       assert.ok(lastFilesystemError instanceof Error)
@@ -459,49 +464,55 @@ try {
       }
       assert.equal(operations.some(({ method }) => method === 'writeFileSync'), false)
     })
-    run('download missing-record reason retains the original Unicode id', () => {
+    await run('download missing-record reason retains the original Unicode id', async () => {
       const id = '下载记录 e\u0301 $& Ω'
-      assert.deepEqual(retry(new DownloadTracker(), id), { ok: false, reason: t(`找不到下载记录 ${id}`, `Download record not found: ${id}`) })
+      assert.deepEqual(await retry(new DownloadTracker(), id), { ok: false, reason: t(`找不到下载记录 ${id}`, `Download record not found: ${id}`) })
     })
-    run('download active reason takes precedence over the URL guard', () => {
+    await run('download active reason takes precedence over the URL guard', async () => {
       const { tracker, record, requested } = downloadFixture('progressing')
       tracker.setUrlGuard(() => { throw new Error('The guard must not run for an active download') })
-      assert.deepEqual(retry(tracker, record.id), { ok: false, reason: t('该下载仍在进行中，无法重试', 'This download is still in progress and cannot be retried') })
+      assert.deepEqual(await retry(tracker, record.id), { ok: false, reason: t('该下载仍在进行中，无法重试', 'This download is still in progress and cannot be retried') })
       assert.deepEqual(requested, [])
       assert.equal(record.state, 'progressing')
     })
-    run('download default deny and explicit allowlist rejection never dispatch a download', () => {
+    await run('download default deny and explicit allowlist rejection never dispatch a download', async () => {
       const { tracker, record, requested } = downloadFixture()
       const expected = { ok: false, reason: t('该下载地址不在当前站点白名单内，已拒绝重试', 'This download URL is not on the current site allowlist; retry denied') }
-      assert.deepEqual(retry(tracker, record.id), expected)
+      assert.deepEqual(await retry(tracker, record.id), expected)
       tracker.setUrlGuard((url) => { assert.equal(url, record.url); return false })
-      assert.deepEqual(retry(tracker, record.id), expected)
+      assert.deepEqual(await retry(tracker, record.id), expected)
       assert.deepEqual(requested, [])
     })
-    run('download missing-session reason is emitted only after allowlist approval', () => {
+    await run('download missing-session reason is emitted only after allowlist approval', async () => {
       const { tracker, record, requested } = downloadFixture()
       tracker.setUrlGuard(() => true)
       // Simulate a record whose original session is no longer available.
       tracker.recordSessions.delete(record.id)
-      assert.deepEqual(retry(tracker, record.id), { ok: false, reason: t('无法找到该下载所属的浏览器会话', 'The browser session for this download could not be found') })
+      assert.deepEqual(await retry(tracker, record.id), { ok: false, reason: t('无法找到该下载所属的浏览器会话', 'The browser session for this download could not be found') })
       assert.deepEqual(requested, [])
     })
-    run('download dispatch failure keeps raw errors and rolls back the pending retry marker', () => {
+    await run('download dispatch failure keeps raw errors and rolls back the pending retry marker', async () => {
       const { tracker, session, record } = downloadFixture()
       const detail = `${rawError}\n${record.savePath}`
       tracker.setUrlGuard(() => true)
       session.downloadURL = () => { throw new Error(detail) }
-      assert.deepEqual(retry(tracker, record.id), { ok: false, reason: t(`重新发起下载失败：${detail}`, `Failed to restart the download: ${detail}`) })
+      assert.deepEqual(await retry(tracker, record.id), { ok: false, reason: t(`重新发起下载失败：${detail}`, `Failed to restart the download: ${detail}`) })
       session.emit('will-download', {}, downloadItem())
       assert.equal(tracker.list().at(-1).retriedFrom, undefined)
       assert.equal(record.state, 'cancelled')
     })
-    run('successful download retries keep the original URL, record, session and success shape', () => {
-      for (const state of ['completed', 'cancelled', 'interrupted']) {
+    await run('completed downloads are not retryable; cancelled and interrupted ones keep their shape', async () => {
+      const completed = downloadFixture('completed')
+      assert.deepEqual(await retry(completed.tracker, completed.record.id), {
+        ok: false,
+        reason: t('该下载已完成，不能重试；如需再次下载，请访问原下载地址。', 'This download is already completed and cannot be retried; revisit the source URL to download it again.')
+      })
+      assert.deepEqual(completed.requested, [])
+      for (const state of ['cancelled', 'interrupted']) {
         const { tracker, record, requested } = downloadFixture(state)
         const original = { ...record }
         tracker.setUrlGuard((url) => { assert.equal(url, original.url); return true })
-        assert.deepEqual(retry(tracker, record.id), { ok: true })
+        assert.deepEqual(await retry(tracker, record.id), { ok: true })
         assert.deepEqual(requested, [original.url])
         assert.deepEqual(record, original)
         const retried = tracker.list().at(-1)
@@ -515,7 +526,7 @@ try {
   }
 
   for (const id of ['cursor', 'codex', 'workbuddy']) {
-    test(`${id} keeps the current recovery point plus four historical backups, ignoring lookalikes`, () => {
+    await test(`${id} keeps the current recovery point plus four historical backups, ignoring lookalikes`, () => {
       useLocale('en-US', 'zh-TW')
       const original = id === 'codex' ? 'model = "keep"\r\n' : '{"preference":"keep"}\r\n'
       const def = fixture(id, original)
@@ -558,7 +569,7 @@ try {
       assert.equal(fs.readFileSync(target, 'utf8'), 'keep target')
     })
   }
-  test('write failures preserve all historical backups as well as the pre-write copy', () => {
+  await test('write failures preserve all historical backups as well as the pre-write copy', () => {
     useLocale('en-US', 'zh-TW')
     for (const [id, original] of [['cursor', '{}\n'], ['codex', 'model = "keep"\n']]) {
       const def = fixture(id, original)
@@ -575,7 +586,7 @@ try {
     }
   })
 
-  test('JSONC preserves string contents, comments and unrelated formatting', () => {
+  await test('JSONC preserves string contents, comments and unrelated formatting', () => {
     useLocale('en-US', 'zh-TW')
     const original = '{\r\n  // keep comment\r\n  "url": "https://example.test/a//b",\r\n  "literal": "/*not a comment*/ ,}",\r\n  "servers": { "other": { "command": "keep" }, },\r\n}\r\n'
     const def = fixture('vscode', original)
@@ -587,7 +598,7 @@ try {
     assert.ok(written.includes('"other": { "command": "keep" }'))
     assert.equal(setup([def])[0].status, 'skipped')
   })
-  test('non-object JSON roots and incompatible containers are never replaced', () => {
+  await test('non-object JSON roots and incompatible containers are never replaced', () => {
     useLocale('en-US', 'zh-TW')
     for (const original of ['[]', '[1]', 'null', '"text"', '42', '{"mcpServers":[]}', '{"mcpServers":"keep"}', '{"mcpServers":null}']) {
       const def = fixture('cursor', original)
@@ -596,7 +607,7 @@ try {
       assert.equal(fs.readFileSync(def.file(), 'utf8'), original)
     }
   })
-  test('Codex replacement preserves unrelated array tables and header-looking multiline strings', () => {
+  await test('Codex replacement preserves unrelated array tables and header-looking multiline strings', () => {
     useLocale('en-US', 'zh-TW')
     const original = '# keep\nmodel = "keep"\nprompt = """\n[mcp_servers.aa-browser]\nThis is not a table.\n"""\n[mcp_servers.aa-browser]\ncommand = "old"\n[mcp_servers.aa-browser.env]\nOLD = "old"\n[[projects]]\nname = "keep"\n[[projects.rules]]\npattern = "keep too"\n'
     const def = fixture('codex', original)
@@ -606,7 +617,7 @@ try {
     assert.ok(written.includes('[[projects]]\nname = "keep"\n[[projects.rules]]\npattern = "keep too"'))
     assert.equal(setup([def])[0].status, 'skipped')
   })
-  test('invalid TOML is left untouched rather than appending to a broken document', () => {
+  await test('invalid TOML is left untouched rather than appending to a broken document', () => {
     useLocale('en-US', 'zh-TW')
     for (const original of ['model = "unterminated', '[mcp_servers.aa-browser]\ncommand = "first"\ncommand = "duplicate"\n']) {
       const def = fixture('codex', original)
@@ -614,7 +625,7 @@ try {
       assert.equal(fs.readFileSync(def.file(), 'utf8'), original)
     }
   })
-  test('same-millisecond downloads have unique paths and IDs even after the history cap', () => {
+  await test('same-millisecond downloads have unique paths and IDs even after the history cap', () => {
     const now = Date.now
     Date.now = () => 1234567890
     try {
@@ -638,7 +649,7 @@ try {
       assert.equal(tracker.list(100).length, 100)
     } finally { Date.now = now }
   })
-  test('unique download prefixes keep long Unicode filenames within the leaf-name budget', () => {
+  await test('unique download prefixes keep long Unicode filenames within the leaf-name budget', () => {
     const tracker = new DownloadTracker()
     tracker.setDirectoryProvider(() => path.join(home, 'downloads'))
     const session = new EventEmitter()
@@ -655,7 +666,7 @@ try {
       item.emit('done', {}, 'completed')
     }
   })
-  test('duplicate JSON keys are ambiguous and stay untouched', () => {
+  await test('duplicate JSON keys are ambiguous and stay untouched', () => {
     useLocale('en-US', 'zh-TW')
     for (const original of ['{"mcpServers":{},"mcpServers":{"other":{"command":"keep"}}}', '{"preference":{"same":1,"same":2}}']) {
       const def = fixture('cursor', original)
@@ -663,7 +674,7 @@ try {
       assert.equal(fs.readFileSync(def.file(), 'utf8'), original)
     }
   })
-  test('inline and dotted TOML entry layouts fail closed without modifying the file', () => {
+  await test('inline and dotted TOML entry layouts fail closed without modifying the file', () => {
     useLocale('en-US', 'zh-TW')
     for (const original of ['mcp_servers = { aa-browser = { command = "keep" } }\n', 'mcp_servers.aa-browser.command = "keep"\n']) {
       const def = fixture('codex', original)
@@ -672,7 +683,7 @@ try {
       assert.equal(backups(def.file()).length, 0)
     }
   })
-  test('a broken client file cannot abort discovery for healthy clients', () => {
+  await test('a broken client file cannot abort discovery for healthy clients', () => {
     const broken = fixture('cursor', 'broken JSON')
     const codex = fixture('codex', 'model = "broken')
     const healthy = fixture('vscode')
@@ -681,7 +692,7 @@ try {
     assert.equal(results.length, 3)
     assert.deepEqual(results.map((result) => result.configured), [false, false, true])
   })
-  test('setup captures the saved locale before any write and re-resolves on the next call', () => {
+  await test('setup captures the saved locale before any write and re-resolves on the next call', () => {
     useLocale('en-US', 'en-GB')
     const defs = [fixture('cursor'), fixture('deepseek-harness'), fixture('codex')]
     let changed = false
@@ -701,7 +712,7 @@ try {
     fsObserver = undefined
     assertSetup(setup([defs[0]])[0], defs[0], 'skipped', `已配置且无需更新：${defs[0].file()}`)
   })
-  test('auto setup captures the system candidate before writing any client', () => {
+  await test('auto setup captures the system candidate before writing any client', () => {
     useLocale('auto', 'en-GB')
     const defs = [fixture('cursor'), fixture('codex')]
     fsObserver = (method, args) => {
@@ -711,17 +722,17 @@ try {
     assertSetup(results[0], defs[0], 'added', `Wrote ${defs[0].name} configuration: ${defs[0].file()}`)
     assertSetup(results[1], defs[1], 'added', `Wrote Codex MCP configuration: ${defs[1].file()}`)
   })
-  test('retry captures locale before session dispatch and reads changed settings on the next call', () => {
+  await test('retry captures locale before session dispatch and reads changed settings on the next call', async () => {
     useLocale('en-US', 'en-GB')
     const { tracker, session, record } = downloadFixture()
     tracker.setUrlGuard(() => true)
     session.downloadURL = () => { store.set({ locale: 'zh-CN' }); throw rawError }
-    assert.deepEqual(tracker.retry(record.id), { ok: false, reason: `Failed to restart the download: ${rawError}` })
+    assert.deepEqual(await tracker.retry(record.id), { ok: false, reason: `Failed to restart the download: ${rawError}` })
     assert.equal(localeReads, 1)
     session.downloadURL = () => { throw rawError }
-    assert.deepEqual(retry(tracker, record.id), { ok: false, reason: `重新发起下载失败：${rawError}` })
+    assert.deepEqual(await retry(tracker, record.id), { ok: false, reason: `重新发起下载失败：${rawError}` })
   })
-  test('non-Error client exceptions retain their raw text', () => {
+  await test('non-Error client exceptions retain their raw text', () => {
     useLocale('en-US', 'zh-TW')
     for (const id of ['cursor', 'codex']) {
       const def = fixture(id)
@@ -732,7 +743,7 @@ try {
   })
   for (const id of ['cline', 'vscode', 'opencode', 'workbuddy']) {
     const english = { cline: 'Cline (VS Code extension)', vscode: 'VS Code (native MCP)', opencode: 'OpenCode (open source)', workbuddy: 'WorkBuddy' }[id]
-    test(`messages for ${id} use the English display name while the name field keeps its stored value`, () => {
+    await test(`messages for ${id} use the English display name while the name field keeps its stored value`, () => {
       useLocale('en-US', 'zh-TW')
       const def = fixture(id)
       const [added] = setup([def])
@@ -759,7 +770,7 @@ try {
       assert.ok(zhAdded.message.startsWith(`已写入 ${zhDef.name} 配置：`), zhAdded.message)
     })
   }
-  test('unknown client ids keep their stored name in every message locale', () => {
+  await test('unknown client ids keep their stored name in every message locale', () => {
     // Keep the generic JSON branch explicit so this exercises the id-based name, not Codex's fixed label.
     const custom = () => ({ ...fixture('cursor'), id: 'custom-Ω', name: '自定义 Ω 客户端', toml: false })
     useLocale('en-US', 'zh-TW')
@@ -774,7 +785,7 @@ try {
     assert.equal(zhAdded.name, '自定义 Ω 客户端')
     assert.ok(zhAdded.message.startsWith('已写入 自定义 Ω 客户端 配置：'), zhAdded.message)
   })
-  test('client scanning, nested containers, candidate preference and OpenCode schema remain unchanged', () => {
+  await test('client scanning, nested containers, candidate preference and OpenCode schema remain unchanged', () => {
     useLocale('en-US', 'zh-TW')
     const nested = fixture('zcode', '{"mcp":{"other":"keep","servers":{"other":{"command":"keep"}}}}')
     const openCode = fixture('opencode')
@@ -804,7 +815,7 @@ try {
     const after = withDefs(defs, () => clients.detectClients())
     assert.ok(after.every((entry) => entry.installed && entry.configured && !entry.outdated))
   })
-  test('unknown selections remain empty and do not write client files', () => {
+  await test('unknown selections remain empty and do not write client files', () => {
     useLocale('en-US', 'zh-TW')
     assert.deepEqual(setup([fixture('cursor')], ['unknown']), [])
     assert.deepEqual(operations, [])
