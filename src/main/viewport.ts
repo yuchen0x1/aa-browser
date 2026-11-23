@@ -65,9 +65,13 @@ const CDP_COMMAND_TIMEOUT_MS = 8_000
 
 async function sendCdp<T>(dbg: Electron.Debugger, method: string, params?: Record<string, unknown>, timeoutMs = CDP_COMMAND_TIMEOUT_MS): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
+  // 超时先返回时，CDP 命令本身可能在目标关闭后迟到拒绝；预挂空处理器避免
+  // 未处理拒绝（只吞掉迟到错误，不改变超时语义）。
+  const command = dbg.sendCommand(method, params) as Promise<T>
+  void command.catch(() => {})
   try {
     return await Promise.race([
-      dbg.sendCommand(method, params) as Promise<T>,
+      command,
       new Promise<T>((_, reject) => {
         timer = setTimeout(() => reject(new ActionError(`CDP 命令超时：${method}`)), timeoutMs)
       })

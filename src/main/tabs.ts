@@ -130,6 +130,10 @@ const NAVIGATION_TIMEOUT_MS = 20_000
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string, onTimeout?: () => void): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined
+  // 超时后 Promise.race 不再消费原始 promise；若它随后才拒绝（例如页面已关闭导致
+  // target closed），会变成进程级未处理拒绝并让测试进程以退出码 1 结束。
+  // 预先挂一个空处理器，只用于吞掉迟到拒绝，不改变 race 的返回值/超时语义。
+  void promise.catch(() => {})
   try {
     return await Promise.race([
       promise,

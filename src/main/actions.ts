@@ -118,6 +118,9 @@ export async function withDeadline<T>(work: Promise<T>, ms: number, label: strin
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new ActionError(`${label}超时（${ms}ms）；页面可能已失去响应`)), ms)
   })
+  // 超时路径下 promise 仍由页面侧收尾；若它在竞速结束后才拒绝，
+  // 需要有人消费，否则会变成进程级未处理拒绝。仅吞掉迟到错误。
+  void work.catch(() => {})
   try {
     return await Promise.race([work, timeout])
   } finally {
