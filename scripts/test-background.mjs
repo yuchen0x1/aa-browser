@@ -444,9 +444,9 @@ async function runElectron() {
     const monitorState = await until(async () => {
       const value = await state()
       // 把截图失败原因带进超时消息：只报「frameSeq 为 0」无法定位。
-      if (value.monitor?.status === 'error') lastMonitorError = value.monitor.currentTask
+      if (value.monitor?.lastError) lastMonitorError = value.monitor.lastError
       if (value.monitor?.enabled && (value.monitor?.frameSeq ?? 0) > 0) return value.monitor
-      if (process.platform !== 'win32' && value.monitor?.status === 'error') return value.monitor
+      if (process.platform !== 'win32' && value.monitor?.lastError) return value.monitor
       return null
     }, 'hidden live preview frame', 30_000).catch((error) => {
       throw new Error(error.message + (lastMonitorError ? '（监控错误: ' + lastMonitorError + '）' : ''))
@@ -463,7 +463,7 @@ async function runElectron() {
       pass('hidden mode keeps an external, non-empty live preview for the selected tab')
     } else {
       assert.equal(win.isVisible(), false)
-      assert.match(String(monitorState.currentTask), /超时|不可见|合成/, 'hidden capture must fail with an actionable reason, not hang')
+      assert.match(String(monitorState.lastError), /超时|不可见|合成/, 'hidden capture must fail with an actionable reason, not hang')
       pass('hidden mode hides the window and reports an actionable capture error where the desktop has no compositor surface')
     }
 

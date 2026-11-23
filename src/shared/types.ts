@@ -113,6 +113,7 @@ export interface MonitorState {
   control: 'ai' | 'human'
   status: 'idle' | 'capturing' | 'paused' | 'error'
   currentTask?: string
+  lastError?: string
   lastFrameAt?: number
   frameSeq: number
   history: { file: string; capturedAt: number; tabId: string; title: string; url: string; width: number; height: number }[]

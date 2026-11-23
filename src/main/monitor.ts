@@ -105,6 +105,7 @@ export class BrowserMonitor {
     this.pointer = undefined
     this.pointerTabId = undefined
     this.state.status = 'idle'
+    this.state.lastError = undefined
     if (!this.timer) this.timer = setInterval(() => { this.queueCapture() }, FRAME_INTERVAL_MS)
     this.queueCapture()
     this.deps.emitState(this.getState())
@@ -282,6 +283,7 @@ export class BrowserMonitor {
       if (generation === this.captureGeneration) {
         const message = error instanceof Error ? error.message : String(error)
         this.state.status = 'error'
+        this.state.lastError = message
         this.state.currentTask = message
         // 预览出帧失败必须留痕：否则上层只看到「帧序号一直是 0」，
         // 无从判断是合成器没给画面、还是截图超时。
