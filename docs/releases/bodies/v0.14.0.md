@@ -31,6 +31,16 @@ Aa Browser v0.14.0 将已有的最小化后台控制扩展为统一的后台浏�
 
 ## 📦 下载与安装
 
+| 文件名 | 平台 / 架构 | 说明 |
+|---|---|---|
+| `aa-browser-setup-0.14.0.exe` | Windows x64 | NSIS 安装程序 |
+| `aa-browser-setup-0.14.0.exe.blockmap` | Windows x64 | 增量更新块映射 |
+| `latest.yml` | Windows x64 | 应用更新元数据 |
+| `aa-browser-0.14.0-linux-x86_64.AppImage` | Linux x86_64 | AppImage 应用 |
+| `latest-linux.yml` | Linux x86_64 | 应用更新元数据 |
+| `sbom.cdx.json` | 通用 | CycloneDX 软件物料清单 |
+| `SHA256SUMS.txt` | 通用 | 发行文件 SHA-256 校验和 |
+
 正式安装包、AppImage、更新元数据、SBOM 和 SHA-256 清单以 GitHub Release `v0.14.0` 的公开资产为准。
 
 ## 🔄 升级与数据迁移
