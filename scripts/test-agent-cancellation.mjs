@@ -328,6 +328,63 @@ try {
   assert.deepEqual(response(first, 1), { id: 1, ok: true, result: { label: 'wire-first' } })
   console.log('PASS: unchanged WS {id, cancel:true} cancellation remains connection-local with colliding IDs')
 
+  first.messages.length = 0
+  second.messages.length = 0
+  start(first, 30, 'pause-client')
+  start(second, 30, 'other-client-active')
+  await waitFor(() => running.has('pause-client') && running.has('other-client-active'), 'client-scoped pause tasks start')
+  server.pauseClient(firstClient)
+  await waitFor(() => response(first, 30), 'client-scoped pause aborts its active call')
+  assert.match(response(first, 30).error, /cancelled pause-client/)
+  assert.equal(running.get('other-client-active').signal.aborted, false, 'client pause leaves another client running')
+  start(first, 31, 'blocked-by-client-pause')
+  start(second, 31, 'other-client-sibling')
+  await waitFor(() => response(first, 31) && running.has('other-client-sibling'), 'paused client is blocked while sibling client continues')
+  assert.match(response(first, 31).error, /此 MCP 客户端已暂停/)
+  server.resumeClient(firstClient)
+  start(first, 32, 'resumed-client')
+  await waitFor(() => running.has('resumed-client'), 'client-scoped resume admits new work')
+  running.get('other-client-active').finish()
+  running.get('other-client-sibling').finish()
+  running.get('resumed-client').finish()
+  await waitFor(() => response(second, 30) && response(second, 31) && response(first, 32), 'client-scoped pause phase settles')
+  assert.equal(server.activity().tasks.find((task) => task.id === 30 && task.client === firstClient)?.status, 'interrupted')
+  assert.equal(server.activity().paused, false, 'client pause does not set the global automation lock')
+  console.log('PASS: pause/resume is isolated to one MCP session and aborts only that session’s active work')
+
+  start(first, 33, 'password=task-secret-value')
+  await waitFor(() => running.has('password=task-secret-value'), 'sensitive error fixture starts')
+  assert.equal(server.cancelCall(33, firstClient), true)
+  await waitFor(() => response(first, 33), 'sensitive task cancellation finishes')
+  const redactedTask = server.activity().tasks.find((task) => task.id === 33 && task.client === firstClient)
+  assert.equal(redactedTask?.status, 'cancelled')
+  assert.doesNotMatch(redactedTask?.error ?? '', /task-secret-value/, 'persisted task error must redact token-like fields')
+  const persisted = JSON.parse(fs.readFileSync(path.join(path.dirname(discoveryFile), 'task-history.json'), 'utf8'))
+  assert.ok(persisted.tasks.some((task) => task.id === 33 && task.status === 'cancelled'))
+  console.log('PASS: bounded task history persists terminal status and redacts secret-like error text')
+
+  const recoveryDir = path.join(tmp, 'recovery')
+  fs.mkdirSync(recoveryDir, { recursive: true })
+  fs.writeFileSync(path.join(recoveryDir, 'task-history.json'), JSON.stringify({ version: 1, tasks: [
+    { id: 90, client: 9, tool: 'browser_wait', startedAt: Date.now() - 1000, status: 'running' },
+    { id: 91, client: 9, tool: 'browser_extract', startedAt: Date.now() - 2000, finishedAt: Date.now() - 1000, status: 'completed' }
+  ] }))
+  const recoveryServer = new AgentServer([], () => {}, 'test')
+  const recoveryConnectionFile = path.join(recoveryDir, 'connection.json')
+  process.env.AA_BROWSER_CONNECTION_FILE = recoveryConnectionFile
+  try {
+    await recoveryServer.start()
+    const recoveredTasks = recoveryServer.activity().tasks
+    assert.equal(recoveredTasks.find((task) => task.id === 90)?.status, 'interrupted')
+    assert.equal(recoveredTasks.find((task) => task.id === 91)?.status, 'completed')
+    const savedRecovery = JSON.parse(fs.readFileSync(path.join(recoveryDir, 'task-history.json'), 'utf8'))
+    assert.equal(savedRecovery.tasks.find((task) => task.id === 90)?.status, 'interrupted')
+  } finally {
+    recoveryServer.stop()
+    process.env.AA_BROWSER_CONNECTION_FILE = discoveryFile
+  }
+  console.log('PASS: startup marks abandoned work interrupted without replaying it')
+
   second.socket.close()
   await waitFor(() => server.info().clientCount === 1, 'second client disconnects')
   const replacement = await connect()

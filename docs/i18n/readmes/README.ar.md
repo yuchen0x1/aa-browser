@@ -137,7 +137,7 @@ npm start          # launch the built app
 
 ## أدوات MCP
 
-**44 أداة** في خمس مجموعات: التنقل واللقطات (5)، والتفاعل (9)، والقراءة والحالة (20)، والشبكة وMock (6)، والتشخيص وعلامات التبويب (4). قد تحمل أسماء الأدوات في العميل بادئة `mcp__aa-browser__`.
+**47 أداة** في خمس مجموعات: التنقل واللقطات (5)، والتفاعل (9)، والقراءة والحالة (20)، والشبكة وMock (6)، والتشخيص وعلامات التبويب (7). قد تحمل أسماء الأدوات في العميل بادئة `mcp__aa-browser__`.
 
 | المجموعة | الأدوات |
 | --- | --- |
@@ -145,7 +145,7 @@ npm start          # launch the built app
 | التفاعل | `browser_click`, `browser_type`, `browser_fill_form`, `browser_select_option`, `browser_drag`, `browser_hover`, `browser_scroll`, `browser_press_key`, `browser_upload_file` |
 | القراءة والحالة | `browser_extract`, `browser_evaluate`, `browser_dialogs`, `browser_wait`, `browser_screenshot`, `browser_find`, `browser_get_selector`, `browser_cookies`, `browser_storage`, `browser_downloads`, `browser_pdf`, `browser_console` |
 | الشبكة وMock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
-| التشخيص وعلامات التبويب | `browser_performance`, `browser_resize`, `browser_tabs` |
+| التشخيص وعلامات التبويب | `browser_performance`, `browser_resize`, `browser_tabs`, `browser_window`, `browser_tasks`, `browser_extensions`, `browser_evidence` |
 
 السلوك المشترك: معظم الأدوات تُعيد لقطة مع نتيجتها (`snapshot: false` يتخطاها)، وكل أداة عدا `browser_resize` و`browser_downloads` تقبل `tabId`، وينتهي الاستدعاء الواحد بمهلة بعد 180 ثانية، وتنتظر الموافقة حتى 120 ثانية، وتُعقَّم تفاصيل الشبكة افتراضيًا.
 

@@ -12,15 +12,25 @@ const runDir = path.join(root, '.local-verification', `stores-${Date.now()}-${pr
 fs.mkdirSync(runDir, { recursive: true })
 const config = path.join(runDir, 'tsconfig.json')
 fs.writeFileSync(config, JSON.stringify({
-  compilerOptions: { target: 'ES2022', module: 'NodeNext', moduleResolution: 'NodeNext', esModuleInterop: true, skipLibCheck: true, types: ['node'], rootDir: path.join(root, 'src/main'), outDir: path.join(runDir, 'compiled') },
+  compilerOptions: {
+    target: 'ES2022',
+    module: 'NodeNext',
+    moduleResolution: 'NodeNext',
+    esModuleInterop: true,
+    skipLibCheck: true,
+    types: ['node'],
+    rootDir: path.join(root, 'src'),
+    outDir: path.join(runDir, 'compiled'),
+    paths: { '@shared/*': [path.join(root, 'src/shared/*')] }
+  },
   files: ['settings.ts', 'history.ts', 'session-store.ts'].map((file) => path.join(root, 'src/main', file))
 }))
 const tsc = path.join(path.dirname(require.resolve('typescript/package.json')), 'bin/tsc')
 const compiled = spawnSync(process.execPath, [tsc, '--project', config], { cwd: root, stdio: 'inherit' })
 if (compiled.status !== 0) process.exit(compiled.status ?? 1)
-const { SettingsStore } = require(path.join(runDir, 'compiled/settings.js'))
-const { HistoryStore } = require(path.join(runDir, 'compiled/history.js'))
-const { SessionStore, normalizeSessionSnapshot } = require(path.join(runDir, 'compiled/session-store.js'))
+const { SettingsStore } = require(path.join(runDir, 'compiled/main/settings.js'))
+const { HistoryStore } = require(path.join(runDir, 'compiled/main/history.js'))
+const { SessionStore, normalizeSessionSnapshot } = require(path.join(runDir, 'compiled/main/session-store.js'))
 let failures = 0
 const results = []
 function test(label, fn) {

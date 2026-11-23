@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-globalThis.__AA_BRIDGE_VERSION__ = "0.13.0";
+globalThis.__AA_BRIDGE_VERSION__ = "0.14.0";
 // \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -30,6 +30,7 @@ let node_path = require("node:path");
 node_path = __toESM(node_path, 1);
 let node_process = require("node:process");
 node_process = __toESM(node_process, 1);
+let node_crypto = require("node:crypto");
 let node_child_process = require("node:child_process");
 let node_url = require("node:url");
 // node_modules/ws/lib/constants.js
@@ -4867,7 +4868,7 @@ const TOOL_DEFS = [
 	{
 		name: "browser_tabs",
 		title: "标签管理",
-		description: "Manage tabs: \"list\" shows all tabs with ids (isolated tabs are marked, restored tabs are marked ♻) plus the browser instance id, PID, version, start time and each tab creation time; \"new\" opens a URL in a new tab; \"select\" makes a tab active (pass bringToFront:true to also bring the OS window to the front and focus the page); \"close\" closes a tab. Tabs share the default session (cookies/logins) unless created with isolated:true, which uses a throwaway partition cleared on close.",
+		description: "Manage this MCP client’s tabs: \"list\" shows only tabs owned by this client (the first operation may claim the current unowned tab); \"new\" opens an owned tab without switching the user’s visible tab; \"select\" changes this client’s default tab (pass bringToFront:true only when intentionally switching the shared visible browser); \"close\" closes an owned tab. Tabs share the browser session (cookies/logins) unless created with isolated:true, which uses a throwaway partition cleared on close.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -4896,6 +4897,75 @@ const TOOL_DEFS = [
 				bringToFront: {
 					type: "boolean",
 					description: "(action=select) Also restore/show the browser window and focus the page (default false: only switches the active tab)"
+				}
+			},
+			required: ["action"]
+		}
+	},
+	{
+		name: "browser_window",
+		title: "后台窗口与实时预览",
+		description: "Control the real Electron window mode without changing the browser profile: visible (normal foreground), background (shown without taking focus), minimized, hidden, or background-visual (background operation with an independent live preview). action=mode gets or sets the mode; action=monitor starts/stops preview for one explicit tab; action=takeover locks AI input for human control; action=release hands control back to AI. The preview captures only the selected tab and keeps a bounded screenshot history.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				action: {
+					type: "string",
+					enum: [
+						"mode",
+						"monitor",
+						"takeover",
+						"release"
+					],
+					description: "Window/monitor operation"
+				},
+				mode: {
+					type: "string",
+					enum: [
+						"visible",
+						"background",
+						"minimized",
+						"hidden",
+						"background-visual"
+					],
+					description: "(action=mode) real Electron window mode"
+				},
+				monitor: {
+					type: "boolean",
+					description: "(action=mode) also start/stop the independent preview"
+				},
+				tabId: {
+					type: "string",
+					description: "(action=monitor) tab to preview; defaults to the active tab"
+				}
+			},
+			required: ["action"]
+		}
+	},
+	{
+		name: "browser_tasks",
+		title: "后台任务中心",
+		description: "Inspect tasks and recent execution logs scoped to the calling MCP client. action=list returns that client’s active calls and bounded history; action=cancel stops one owned call; action=pause/resume only affects the calling client. The browser UI can pause all clients, and browser_window takeover locks the shared browser for human control with a live preview.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				action: {
+					type: "string",
+					enum: [
+						"list",
+						"cancel",
+						"pause",
+						"resume"
+					],
+					description: "Task operation"
+				},
+				id: {
+					type: "number",
+					description: "(action=cancel) MCP call id"
+				},
+				client: {
+					type: "number",
+					description: "(action=cancel) optional client number; must match the calling MCP client"
 				}
 			},
 			required: ["action"]
@@ -5293,6 +5363,18 @@ const TOOL_ANNOTATIONS = Object.freeze({
 		idempotentHint: false,
 		openWorldHint: true
 	},
+	browser_window: {
+		readOnlyHint: false,
+		destructiveHint: false,
+		idempotentHint: true,
+		openWorldHint: false
+	},
+	browser_tasks: {
+		readOnlyHint: false,
+		destructiveHint: true,
+		idempotentHint: false,
+		openWorldHint: false
+	},
 	browser_fill_form: {
 		readOnlyHint: false,
 		destructiveHint: true,
@@ -5398,6 +5480,7 @@ function readVersion() {
 	return "0.0.0";
 }
 const VERSION = readVersion();
+const CLIENT_SESSION_ID = (0, node_crypto.randomUUID)();
 const CONNECT_FILE = node_process.default.env["AA_BROWSER_CONNECTION_FILE"] || node_path.default.join(node_os.default.homedir(), ".aabrowser", "connection.json");
 /**
 * 必须大于主进程的审批等待窗口（ApprovalManager 默认 120s），
@@ -5697,7 +5780,10 @@ function connectWs() {
 			reject(/* @__PURE__ */ new Error("Aa Browser 进程已退出但发现文件残留：请重新启动 Aa Browser。"));
 			return;
 		}
-		const socket = new wrapper_default(`ws://127.0.0.1:${info.port}/?token=${info.token}`);
+		const endpoint = new URL(`ws://127.0.0.1:${info.port}/`);
+		endpoint.searchParams.set("token", info.token);
+		endpoint.searchParams.set("client", CLIENT_SESSION_ID);
+		const socket = new wrapper_default(endpoint);
 		let settled = false;
 		const timer = setTimeout(() => {
 			try {

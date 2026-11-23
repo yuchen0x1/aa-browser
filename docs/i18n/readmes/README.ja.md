@@ -137,7 +137,7 @@ npm start          # launch the built app
 
 ## MCP ツール
 
-5 つのグループに **44 個のツール**：ナビゲーションとスナップショット（5）、操作（9）、読み取りと状態（20）、ネットワークと Mock（6）、診断とタブ（4）。クライアント側のツール名には `mcp__aa-browser__` プレフィックスが付く場合があります。
+5 つのグループに **47 個のツール**：ナビゲーションとスナップショット（5）、操作（9）、読み取りと状態（20）、ネットワークと Mock（6）、診断とタブ（7）。クライアント側のツール名には `mcp__aa-browser__` プレフィックスが付く場合があります。
 
 | グループ | ツール |
 | --- | --- |
@@ -145,7 +145,7 @@ npm start          # launch the built app
 | 操作 | `browser_click`, `browser_type`, `browser_fill_form`, `browser_select_option`, `browser_drag`, `browser_hover`, `browser_scroll`, `browser_press_key`, `browser_upload_file` |
 | 読み取りと状態 | `browser_extract`, `browser_evaluate`, `browser_dialogs`, `browser_wait`, `browser_screenshot`, `browser_find`, `browser_get_selector`, `browser_cookies`, `browser_storage`, `browser_downloads`, `browser_pdf`, `browser_console` |
 | ネットワークと Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
-| 診断とタブ | `browser_performance`, `browser_resize`, `browser_tabs` |
+| 診断とタブ | `browser_performance`, `browser_resize`, `browser_tabs`, `browser_window`, `browser_tasks`, `browser_extensions`, `browser_evidence` |
 
 共通の動作：ほとんどのツールは結果と一緒にスナップショットを返します（`snapshot: false` で省略できます）。`browser_resize` と `browser_downloads` を除くすべてのツールは `tabId` を受け付け、1 回の呼び出しは 180 秒でタイムアウトし、承認は最大 120 秒待機し、ネットワーク詳細は既定でマスキングされます。
 

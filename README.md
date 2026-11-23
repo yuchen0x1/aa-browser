@@ -32,11 +32,11 @@
 
 <!-- github-release:start -->
 
-**[v0.13.0](./release-notes-v0.13.0.md)** · 2026-11-23 · 最新正式版
+**[v0.14.0](./release-notes-v0.14.0.md)** · 2026-11-23 · 最新正式版
 
-本版新增 `browser_cloudflare` 验证辅助：可识别跨域 Cloudflare 挑战 iframe、等待验证完成，并在显式确认后对可见复选框发送一次真实鼠标点击；不读取令牌、不改 Cookie，也不自动完成滑块或图片挑战。
+本版把最小化后台控制扩展为统一的后台浏览层：五种真实窗口模式、只捕获指定标签的实时预览、人工接管锁和多客户端任务中心。最小化时可继续导航、点击、输入、滚动、原生拖放和截图；拖拽使用 Chromium 返回的真实 DataTransfer 数据，不伪造网页状态或绕过站点安全检查。
 
-**上一版：[v0.12.1](./release-notes-v0.12.1.md)** · 2026-11-23
+**上一版：[v0.13.0](./release-notes-v0.13.0.md)** · 2026-11-23
 
 [全部发行记录](https://github.com/yuchen0x1/aa-browser/releases)
 
@@ -48,7 +48,7 @@
 
 它适合把**真实登录态**交给 Agent 的场景：后台运营、数据采集、回归验证、抓包排障，以及把重复的网页操作交给模型。浏览器本体照常使用，Agent 只是多出来的一个「遥控器」。
 
-一句话概括：**44 个 MCP 工具、增量快照、真实输入、本地 token 鉴权，而浏览器本体也照常上网。**
+一句话概括：**47 个 MCP 工具、增量快照、真实输入、本地 token 鉴权，而浏览器本体也照常上网。**
 
 ## 目录
 
@@ -348,7 +348,7 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 
 ## MCP 工具
 
-共 **44 个**工具，按能力分为五类：导航与快照 5 个、交互 9 个、读取与状态 20 个、网络与 Mock 6 个、诊断与标签 4 个。工具名在客户端可能带 `mcp__aa-browser__` 前缀（如 `mcp__aa-browser__browser_tabs`），以客户端实际展示为准。
+共 **47 个**工具，按能力分为五类：导航与快照 5 个、交互 9 个、读取与状态 20 个、网络与 Mock 6 个、诊断与标签 7 个。工具名在客户端可能带 `mcp__aa-browser__` 前缀（如 `mcp__aa-browser__browser_tabs`），以客户端实际展示为准。
 
 共享行为：
 
@@ -425,9 +425,24 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 | `browser_performance` | 页面性能摘要：TTFB / DOMContentLoaded / load、首绘、资源体积与慢资源、JS 堆、DOM 规模（只读诊断） |
 | `browser_resize` | 调整视口尺寸 200–5000px（响应式测试） |
 | `browser_tabs` | 列表 / 新建 / 切换 / 关闭标签页；列表附带浏览器实例、PID、版本、启动时间、标签创建时间与恢复标记；`isolated: true` 新建隔离标签；`select` 可加 `bringToFront: true` 同时恢复窗口并聚焦页面 |
+| `browser_window` | 统一窗口策略：`visible`、`background`（显示但不抢焦点）、`minimized`、`hidden`、`background-visual`；可启动只捕获指定标签的独立实时预览，并用 `takeover` / `release` 锁定或交还 AI 操作权 |
+| `browser_tasks` | 后台任务中心：列出多客户端并发调用、按客户端与调用 id 取消、暂停 / 恢复自动化；人工接管时 AI 输入会被锁定 |
 | `browser_extensions` | **加载已解压扩展**：`action=load` 传入含 `manifest.json` 的目录绝对路径（等价 Chrome「加载已解压的扩展程序」），装载到共享会话并跨重启保留；`action=list` / `action=remove` 查看（id/名称/版本/路径）与卸载。扩展对之后打开或刷新的页面生效，隔离标签不装载 |
 
 Cloudflare 验证辅助的完整流程与边界见 [`docs/CLOUDFLARE.md`](./docs/CLOUDFLARE.md)。
+
+后台运行、独立预览、人工接管和 15 项能力审计见 [`docs/BACKGROUND_CONTROL.md`](./docs/BACKGROUND_CONTROL.md)。
+
+### 两套引擎如何分工
+
+Aa Browser 的页面理解不是单一路径，而是**结构化快照引擎**与**视觉引擎**互为补充：
+
+| 引擎 | 负责 | 何时使用 |
+| --- | --- | --- |
+| 结构化快照（Accessibility Tree + ref） | 读取页面语义、定位元素、执行点击 / 输入 / 选择 | 默认路径。ref 稳定、可校验命中测试，不依赖像素坐标 |
+| 视觉（CDP 截图 + 元素截图 + 基线对比） | 元素坐标、遮挡判断、布局变化、视觉回归 | 快照无法表达时（canvas、图片、图表），或需要人眼可见的证据 |
+
+两者不是二选一：视觉定位失败时回退到 DOM，DOM 表达不了的视觉差异再交给截图与基线对比。**坐标点击永远不是默认操作方式**——它只在结构化定位不可用、且已确认命中测试通过时才作为补充手段，避免把「碰巧点在那个位置」当成可靠操作。
 
 视觉评审建议流程：先用 `browser_viewport_matrix` 跑一遍响应式矩阵（发现横向溢出），再用 `browser_contrast_audit` 找不可读文本，最后对关键页面用 `browser_visual_diff action=save` 存基线、改动后 `action=compare` 做回归对比。基线目录可用 `AA_BROWSER_BASELINE_DIR` 覆盖。
 
@@ -438,6 +453,8 @@ Cloudflare 验证辅助的完整流程与边界见 [`docs/CLOUDFLARE.md`](./docs
 ## 界面与快捷键
 
 工具栏左侧依次是后退 / 前进 / 刷新和 AI 连接状态；右侧是恢复关闭的标签页、页面查找、Agent 活动日志、下载、设置和「中断 Agent」。AI 调用浏览器工具时窗口四周会显示闪烁光圈，右下角 HUD 会显示当前工具与中断/恢复按钮；并发调用会逐条列出（含进度），每条可单独停止；地址栏支持输入网址、搜索词与历史补全（↑ / ↓ 选择，Enter 打开，Esc 取消）。Agent 每次点击时页面会闪出激光波纹，方便人观察它在点哪里。
+
+点击工具栏的「◉」可打开后台实时预览。预览只显示选中的标签页，支持人工接管/交还 AI；接管期间自动化调用会暂停，避免和人工输入竞态。窗口模式也可在设置中选择，或由 Agent 调用 `browser_window` 切换。
 
 | 快捷键 | 作用 |
 | --- | --- |
@@ -527,6 +544,8 @@ Aa Browser 不提供 Chrome 的原生 `chrome://extensions` 页面；在地址�
 - **会话恢复有范围**：只恢复普通网页标签，不恢复隔离标签、内部页与非 HTTP(S) 地址，最多 20 条。
 - **同一用户数据目录只运行一个实例**：重复启动会聚焦已有窗口；开发版使用独立目录，可与安装版并存。
 - **安装与更新依赖 GitHub Releases**：访问受限时需要手动下载安装包；AppImage 原地更新要求当前文件目录可写。
+- **不伪造页面可见性**：后台模式下页面拿到的 `document.visibilityState` 仍是真实值。少数站点会在不可见时暂停视频、轮询或渲染，这类站点请显式选择 `visible` 或 `background`；Aa Browser 不会用伪造状态绕过站点的安全检查。
+- **后台拖放有平台差异**：原生 HTML5 拖放在窗口最小化或完全隐藏时，部分平台（实测 Linux/X11）不会建立系统级拖放会话。此时 `browser_drag` 会改用页面内 DataTransfer 事件序列完成拖放，并在返回结果中标注「DOM 事件回退」；这条路径的事件不是 `isTrusted`，对强制校验可信输入的站点可能无效。
 
 ## 故障排查
 
@@ -611,6 +630,7 @@ CI 在 Windows x64 与 Linux x64 上执行 `check`、工具与客户端接入校
 | [自动更新](./docs/AUTO_UPDATE.md) | 检查、下载、重启安装、SHA-512 与回滚 |
 | [插件市场接入](./docs/MARKETPLACE.md) | DeepSeek Harness 插件安装与验证 |
 | [维护状态](./docs/MAINTENANCE.md) | 发行证据、回归记录与维护边界 |
+| [后台控制与实时预览](./docs/BACKGROUND_CONTROL.md) | 窗口模式、后台操控审计、预览与接管、竞品取舍与许可证审查 |
 | [发布说明](./docs/releases/release-notes.md) / [Release 正文归档](./docs/releases/bodies/) / [发布模板](./docs/releases/release-notes-template.md) | 按版本摘要、线上正文副本与下一版模板；`npm run check:release-bodies:remote` 可对照 GitHub 检查漂移 |
 | [CHANGELOG](./CHANGELOG.md) | 工程与产品变更摘要 |
 | [竞品与生态调研](./docs/RESEARCH.md) | 开源项目对标、平台可行性依据 |

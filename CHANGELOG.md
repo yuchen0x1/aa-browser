@@ -2,6 +2,15 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
+## v0.14.0 — 2026-11-23
+
+- **统一后台窗口策略**：新增 `visible`、`background`、`minimized`、`hidden` 和 `background-visual` 五种真实 Electron 模式；切换模式不重建标签、不破坏 Cookie、Storage 或登录态。
+- **独立实时预览**：新增 `browser_window` 监控动作和工具栏预览面板，只捕获明确选择的标签页，限频传输并保留最近 20 张截图历史。
+- **人工接管锁**：预览面板和 `browser_window takeover/release` 可暂停/交还 AI，暂停期间仅允许释放和任务管理控制调用，避免 AI 与人工输入竞态。
+- **后台任务中心**：新增 `browser_tasks`，支持按 MCP 客户端列出并发调用、取消、暂停和恢复；原有按标签队列与渲染租约继续生效。
+- **输入遥测与审计**：后台点击、拖拽、输入位置进入预览元数据；拖拽改用 Chromium `dragIntercepted` 返回的原生 DataTransfer 数据，不再发送合成文本。新增 `docs/BACKGROUND_CONTROL.md`，记录 15 项后台能力审计、特殊网站策略和竞品取舍。
+- **回归覆盖**：真实 Electron + stdio MCP 后台套件 11 项通过，覆盖最小化 hover / 输入 / 滚动 / 原生拖放 / Enter 提交 / 截图、隐藏预览、窗口模式切换、审批唤醒、人工接管与释放、多客户端隔离、任务取消与队列释放、Windows 遮挡窗口；桌面回归 58/58、Windows 30 分钟 soak（`timerDelta` 1802、预览 3531 帧、历史与磁盘各 20 张、私有内存末次低于首次、Win32 前台窗口始终不是浏览器）和 DPI 100%–200% 矩阵均通过。物理多显示器、真实 DRM、第三方登录/2FA、生产签名、升级/回滚与崩溃注入恢复仍未验证。
+
 ## v0.13.0 — 2026-11-23
 
 - **Cloudflare 验证辅助**：新增 `browser_cloudflare`，可检查 `challenges.cloudflare.com` 跨域挑战 iframe、列出可见复选框，并等待验证稳定完成。

@@ -50,12 +50,77 @@ const PAGE_CAPTURE_TIMEOUT_MS = 15_000
 /** 队列收尾等待上限：容忍迟到的派生操作，但不能让标签永久排队。 */
 const DRAIN_TIMEOUT_MS = 10_000
 
+/**
+ * 未挂到窗口的页面用 CDP 取视口截图。
+ *
+ * 这类页面不会被桌面合成器绘制，capturePage 只会一直等到超时；CDP 直接向渲染器
+ * 索取当前视口的合成结果，是唯一可靠的路径。附带一份有界超时，
+ * 保证渲染器无响应时调用能在限定时间内失败而不是挂住整条标签队列。
+ */
+async function captureBackgroundViewport(wc: WebContents, signal?: AbortSignal, fullPage = false): Promise<string> {
+  const dbg = wc.debugger
+  let attachedHere = false
+  try {
+    if (!dbg.isAttached()) {
+      dbg.attach('1.3')
+      attachedHere = true
+    }
+    const params: Record<string, unknown> = { format: 'png', fromSurface: true }
+    if (fullPage) {
+      const metrics = (await withDeadline(dbg.sendCommand('Page.getLayoutMetrics'), PAGE_CAPTURE_TIMEOUT_MS, '页面布局测量')) as {
+        cssContentSize?: { width?: number; height?: number }
+        contentSize?: { width?: number; height?: number }
+      }
+      const size = metrics.cssContentSize ?? metrics.contentSize ?? {}
+      params['captureBeyondViewport'] = true
+      params['clip'] = {
+        x: 0,
+        y: 0,
+        width: Math.max(1, Math.ceil(size.width ?? 0) || 1280),
+        height: Math.min(8000, Math.max(1, Math.ceil(size.height ?? 0) || 720)),
+        scale: 1
+      }
+    }
+    // fromSurface=true 依赖窗口合成表面；从未挂到窗口的页面可能没有表面，会一直挂起。
+    // 因此先用较短超时尝试，再退回 fromSurface=false（直接读渲染器主帧）。
+    let shot: { data?: string } | undefined
+    try {
+      shot = (await raceAbort(
+        withDeadline(dbg.sendCommand('Page.captureScreenshot', { ...params, fromSurface: true }), 4_000, '后台截图'),
+        signal
+      )) as { data?: string } | undefined
+    } catch (error) {
+      if (error instanceof ActionError && error.message.includes('已被用户中断')) throw error
+      shot = (await raceAbort(
+        withDeadline(dbg.sendCommand('Page.captureScreenshot', { ...params, fromSurface: false }), PAGE_CAPTURE_TIMEOUT_MS, '后台截图'),
+        signal
+      )) as { data?: string } | undefined
+    }
+    if (!shot?.data) throw new ActionError('截图失败：浏览器未返回图像数据')
+    return shot.data
+  } catch (error) {
+    if (error instanceof ActionError) throw error
+    throw new ActionError(`截图失败：${error instanceof Error ? error.message : String(error)}`)
+  } finally {
+    if (attachedHere) {
+      try {
+        dbg.detach()
+      } catch {
+        /* 已销毁或仍被占用 */
+      }
+    }
+  }
+}
+
 /** 给可能永不结算的页面操作加上限；超时后原始 Promise 仍由页面侧收尾。导出供队列回归测试使用。 */
 export async function withDeadline<T>(work: Promise<T>, ms: number, label: string): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<never>((_, reject) => {
     timer = setTimeout(() => reject(new ActionError(`${label}超时（${ms}ms）；页面可能已失去响应`)), ms)
   })
+  // 超时路径下 promise 仍由页面侧收尾；若它在竞速结束后才拒绝，
+  // 需要有人消费，否则会变成进程级未处理拒绝。仅吞掉迟到错误。
+  void work.catch(() => {})
   try {
     return await Promise.race([work, timeout])
   } finally {
@@ -147,6 +212,9 @@ export async function withTabLock<T>(
   tabQueues.set(tab, tail)
   void tail.then(() => {
     if (tabQueues.get(tab) === tail) tabQueues.delete(tab)
+  }, () => {
+    // 队尾按设计永不拒绝；万一上游引入拒绝，这里也要收尾，否则队列会卡死。
+    if (tabQueues.get(tab) === tail) tabQueues.delete(tab)
   })
   let started = false
   try {
@@ -161,6 +229,10 @@ export async function withTabLock<T>(
       }
       signal?.addEventListener('abort', onAbort, { once: true })
       void prev.then(() => {
+        signal?.removeEventListener('abort', onAbort)
+        resolve()
+      }, () => {
+        // 前驱失败不代表本调用应失败：继续进入锁槽，但必须消费该拒绝。
         signal?.removeEventListener('abort', onAbort)
         resolve()
       })
@@ -293,6 +365,165 @@ async function gestureSender(tab: Tab): Promise<(event: MouseEvent, held?: boole
 }
 
 const gestureSenders = new WeakMap<Electron.WebContents, (event: MouseEvent, held?: boolean) => Promise<unknown>>()
+
+type DragData = {
+  items: { mimeType: string; data: string; title?: string; baseURL?: string }[]
+  dragOperationsMask: number
+  files?: string[]
+}
+
+/**
+ * 判断起始元素是否可能触发 HTML5 拖拽。只有这类元素才值得开启
+ * Input.setInterceptDrags：滑块、canvas、文本选择等永远不会派发 dragstart，
+ * 对它们开启拦截只会白等一次超时，并让渲染器停在悬而未决的拖拽状态。
+ */
+const dragCandidateScript = (ref: string): string => `(() => {
+  const el = (window.__aaRefs || {})['${ref}']
+  if (!el || !el.isConnected) return false
+  if (el.draggable === true) return true
+  const tag = el.tagName
+  if (tag === 'IMG' || tag === 'VIDEO' || tag === 'CANVAS') return true
+  if (tag === 'A' && el.href) return true
+  return false
+})()`
+
+/**
+ * Chromium 拦截到的 DataTransfer 数据。非 HTML 拖拽元素（滑块、canvas、文本选择）
+ * 永远不会触发 dragstart，因此超时是预期路径而不是错误：返回 null 让调用方
+ * 回退到合成鼠标拖拽。
+ */
+function waitForDragIntercept(dbg: Electron.Debugger, signal?: AbortSignal, timeoutMs = 1200): Promise<DragData | null> {
+  return new Promise((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout>
+    const cleanup = (): void => {
+      clearTimeout(timer)
+      dbg.removeListener('message', onMessage)
+      dbg.removeListener('detach', onDetach)
+      signal?.removeEventListener('abort', onAbort)
+    }
+    const fail = (error: Error): void => {
+      cleanup()
+      reject(error)
+    }
+    const onMessage = (_event: Electron.Event, method: string, params: Record<string, unknown>): void => {
+      if (method !== 'Input.dragIntercepted') return
+      const data = params['data'] as DragData | undefined
+      if (!data || !Array.isArray(data.items) || typeof data.dragOperationsMask !== 'number') {
+        fail(new ActionError('Chromium 返回了无效的拖拽数据'))
+        return
+      }
+      cleanup()
+      resolve(data)
+    }
+    const onDetach = (): void => fail(new ActionError('页面调试通道在拖拽期间已关闭'))
+    const onAbort = (): void => fail(new ActionError('工具调用已被用户中断。'))
+    dbg.on('message', onMessage)
+    dbg.once('detach', onDetach)
+    signal?.addEventListener('abort', onAbort, { once: true })
+    // 元素没有启动 HTML 拖拽属于正常情况：回退到合成鼠标拖拽。
+    timer = setTimeout(() => {
+      cleanup()
+      resolve(null)
+    }, timeoutMs)
+    if (signal?.aborted) onAbort()
+  })
+}
+
+async function dispatchDragEvent(
+  dbg: Electron.Debugger,
+  type: 'dragEnter' | 'dragOver' | 'drop' | 'dragCancel',
+  x: number,
+  y: number,
+  data: DragData
+): Promise<void> {
+  await dbg.sendCommand('Input.dispatchDragEvent', { type, x, y, data })
+}
+
+/**
+ * 在页面里记录 HTML5 拖放事件是否真的发生。
+ * 原生拖放是否生效只能由页面侧证明：CDP 命令返回成功 ≠ 页面收到 dragstart。
+ * 窗口最小化时这条差别是决定性的（见 doDrag 的回退分支）。
+ */
+async function armDragProbe(wc: WebContents): Promise<void> {
+  try {
+    await wc.executeJavaScript(
+      `(() => {
+        const probe = { start: false, drop: false }
+        window.__aaDragProbe = probe
+        const mark = (key) => () => { probe[key] = true }
+        document.addEventListener('dragstart', mark('start'), { capture: true, once: true })
+        document.addEventListener('drop', mark('drop'), { capture: true, once: true })
+        return true
+      })()`,
+      false
+    )
+  } catch {
+    /* 页面可能已关闭；探针缺失按「未验证」处理 */
+  }
+}
+
+async function readDragProbe(wc: WebContents): Promise<{ start: boolean; drop: boolean } | null> {
+  try {
+    return (await wc.executeJavaScript(
+      `(() => { const p = window.__aaDragProbe; return p ? { start: !!p.start, drop: !!p.drop } : null })()`,
+      false
+    )) as { start: boolean; drop: boolean } | null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * DOM 级拖放回退。
+ *
+ * 原生拖放在后台有平台限制：X11 下窗口最小化或不可见时，Chromium 根本不会
+ * 建立系统级 DnD 会话，`Input.dragIntercepted` 永不触发，页面连 dragstart 都收不到，
+ * 于是拖放静默失效（调用仍返回成功）。这里用页面内的 DataTransfer 走完整的
+ * dragstart → dragenter/dragover → drop → dragend 序列，让页面自己的处理函数执行。
+ *
+ * 这是兼容回退，不是默认路径：只有可信输入没有产生真实 drop 时才会走到这里，
+ * 且返回值会明确标注「DOM 回退」，让上层知道事件不是 isTrusted。
+ */
+async function syntheticHtml5Drag(wc: WebContents, fromRef: string, toRef: string): Promise<boolean> {
+  try {
+    return (await wc.executeJavaScript(
+      `(() => {
+        const src = (window.__aaRefs || {})[${refLiteral(fromRef)}]
+        const tgt = (window.__aaRefs || {})[${refLiteral(toRef)}]
+        if (!src || !tgt || !src.isConnected || !tgt.isConnected) return false
+        const center = (el) => {
+          const r = el.getBoundingClientRect()
+          return { clientX: Math.round(r.x + r.width / 2), clientY: Math.round(r.y + r.height / 2) }
+        }
+        let dt
+        try {
+          dt = new DataTransfer()
+        } catch {
+          return false
+        }
+        const make = (type, el) => new DragEvent(type, {
+          bubbles: true, cancelable: true, composed: true, dataTransfer: dt, ...center(el)
+        })
+        try {
+          src.dispatchEvent(make('dragstart', src))
+          tgt.dispatchEvent(make('dragenter', tgt))
+          // dragover 必须被页面 preventDefault，否则 drop 不会发生。
+          const over = make('dragover', tgt)
+          tgt.dispatchEvent(over)
+          const drop = make('drop', tgt)
+          tgt.dispatchEvent(drop)
+          src.dispatchEvent(make('dragend', src))
+        } catch {
+          return false
+        }
+        return true
+      })()`,
+      false
+    )) === true
+  } catch {
+    return false
+  }
+}
 
 /** 未预先建立连接时的单事件兜底路径（悬停等无取消语义的调用）。 */
 function pageMouse(tab: Tab): (event: MouseEvent, held?: boolean) => unknown {
@@ -475,6 +706,7 @@ export async function doClick(
 
   const x = Math.max(0, loc.x ?? 0)
   const y = Math.max(0, loc.y ?? 0)
+  tab.recordPointer?.({ kind: 'click', x, y })
   const button = opts?.button ?? 'left'
   const clickCount = Math.max(1, Math.min(3, opts?.clickCount ?? 1))
   const actName = clickCount === 2 ? '双击' : button === 'right' ? '右键' : '点击'
@@ -536,7 +768,7 @@ export async function doDrag(
   tab: Tab,
   ref: string,
   opts: { toRef?: string; dx?: number; dy?: number; wantSnapshot?: boolean; signal?: AbortSignal }
-): Promise<{ dragged: string; snapshot?: SnapshotSummary }> {
+): Promise<{ dragged: string; snapshot?: SnapshotSummary; dropped: boolean }> {
   throwIfAborted(opts.signal)
   const wc = tab.view.webContents
   const loc1 = (await wc.executeJavaScript(locateScript(ref), false)) as {
@@ -553,6 +785,7 @@ export async function doDrag(
 
   const x1 = Math.max(0, loc1.x ?? 0)
   const y1 = Math.max(0, loc1.y ?? 0)
+  tab.recordPointer?.({ kind: 'move', x: x1, y: y1 })
   let x2 = x1
   let y2 = y1
 
@@ -573,40 +806,85 @@ export async function doDrag(
   } else {
     throw new ActionError('拖拽操作必须指定 toRef 目标元素或 dx/dy 偏移像素')
   }
+  tab.recordPointer?.({ kind: 'click', x: x2, y: y2 })
 
   throwIfAborted(opts.signal)
   // 播放起始与终点光标
   void wc.executeJavaScript(laserCursorScript(x1, y1, 'drag'), false).catch(() => {})
   void wc.executeJavaScript(laserCursorScript(x2, y2, 'drag'), false).catch(() => {})
 
-  // 模拟真实轨迹平滑拖动（5 步插值）。拖拽的释放属于语义完成动作：
-  // 取消时必须补发 mouseUp，否则页面停在“按住不放”状态（与点击相反）。
+  // 优先走真实 HTML5 拖放：Chromium 拦截 dragstart 后返回页面生成的 DataTransfer，
+  // 再派发可信 CDP 拖放事件。元素不产生 dragstart（滑块/canvas/文本选择）时
+  // 回退到合成鼠标拖拽，保持 v0.13 的行为。
   let mouseDown = false
+  let interceptEnabled = false
+  let dragData: DragData | null = null
+  let dbg: Electron.Debugger | null = null
+  // 捕获 Promise 放进对象里：闭包内赋值不会让 TS 把外层变量错误收窄成 null。
+  const dragState: { intercepted: Promise<DragData | null> | null } = { intercepted: null }
+  // 先问页面这个元素是否可能产生 HTML5 拖拽；否则直接走合成鼠标轨迹。
+  let dragCandidate = true
+  try {
+    dragCandidate = (await wc.executeJavaScript(dragCandidateScript(ref), false)) === true
+  } catch { /* 页面可能已关闭；交给后续步骤报错 */ }
+  throwIfAborted(opts.signal)
   const send = await gestureSender(tab)
+  // 先装页面侧探针：CDP 命令全部返回成功也可能一个 drop 都没发生。
+  await armDragProbe(wc)
+  let nativeDropped = false
   try {
     throwIfAborted(opts.signal)
+    if (dragCandidate) {
+      dbg = await withPageDebugger(wc, async (pageDebugger) => {
+        await pageDebugger.sendCommand('Input.setInterceptDrags', { enabled: true })
+        interceptEnabled = true
+        dragState.intercepted = waitForDragIntercept(pageDebugger, opts.signal)
+        return pageDebugger
+      })
+    }
     await send({ type: 'mouseMove', x: x1, y: y1 })
     throwIfAborted(opts.signal)
     mouseDown = true
     await send({ type: 'mouseDown', x: x1, y: y1, button: 'left', clickCount: 1 })
-    await delay(50)
+    const deltaX = x2 - x1
+    const deltaY = y2 - y1
+    const distance = Math.hypot(deltaX, deltaY)
+    const thresholdX = Math.round(x1 + (distance ? (deltaX / distance) * 12 : 12))
+    const thresholdY = Math.round(y1 + (distance ? (deltaY / distance) * 12 : 0))
+    await send({ type: 'mouseMove', x: thresholdX, y: thresholdY, button: 'left' }, true)
+    dragData = dragState.intercepted ? await dragState.intercepted : null
     throwIfAborted(opts.signal)
+    const dragChannel = dbg
+    if (dragData && dragChannel) {
+      await dispatchDragEvent(dragChannel, 'dragEnter', thresholdX, thresholdY, dragData)
+      await dispatchDragEvent(dragChannel, 'dragOver', thresholdX, thresholdY, dragData)
+    }
 
     const steps = 7
     for (let i = 1; i <= steps; i++) {
       throwIfAborted(opts.signal)
-      const curX = Math.round(x1 + ((x2 - x1) * i) / steps)
-      const curY = Math.round(y1 + ((y2 - y1) * i) / steps)
-      await send({ type: 'mouseMove', x: curX, y: curY }, true)
+      const curX = Math.round(thresholdX + ((x2 - thresholdX) * i) / steps)
+      const curY = Math.round(thresholdY + ((y2 - thresholdY) * i) / steps)
+      if (dragData && dragChannel) await dispatchDragEvent(dragChannel, 'dragOver', curX, curY, dragData)
+      else await send({ type: 'mouseMove', x: curX, y: curY, button: 'left' }, true)
       await delay(20)
     }
 
     throwIfAborted(opts.signal)
+    if (dragData && dragChannel) await dispatchDragEvent(dragChannel, 'drop', x2, y2, dragData)
     await send({ type: 'mouseUp', x: x2, y: y2, button: 'left', clickCount: 1 })
     mouseDown = false
   } finally {
     gestureSenders.delete(wc)
-    // 中断/异常路径也必须释放鼠标，否则页面可能停在“按住不放”状态
+    // 提前失败时拦截 Promise 可能仍在等待：吞掉它的迟到拒绝，避免未处理异常。
+    void dragState.intercepted?.catch(() => {})
+    if (dbg && dragData && mouseDown) {
+      try {
+        await dispatchDragEvent(dbg, 'dragCancel', x2, y2, dragData)
+      } catch {
+        /* 页面已关闭 */
+      }
+    }
     if (mouseDown) {
       try {
         await send({ type: 'mouseUp', x: x2, y: y2, button: 'left', clickCount: 1 })
@@ -614,11 +892,35 @@ export async function doDrag(
         /* 页面已关闭 */
       }
     }
+    if (dbg && interceptEnabled) {
+      try {
+        await dbg.sendCommand('Input.setInterceptDrags', { enabled: false })
+      } catch {
+        /* 页面已关闭 */
+      }
+    }
+  }
+  const probeAfterNative = await readDragProbe(wc)
+  nativeDropped = probeAfterNative?.drop === true
+  // 后台原生拖放在 X11 最小化/不可见窗口下不会建立系统 DnD 会话，
+  // 页面连 dragstart 都收不到。此时用 DOM 级 DataTransfer 序列补一次，
+  // 保证「拖到目标元素」这类操作在后台仍然有实际效果。
+  let usedDomFallback = false
+  if (!nativeDropped && opts.toRef) {
+    usedDomFallback = await syntheticHtml5Drag(wc, ref, opts.toRef)
   }
   await settle(wc)
 
   const snapshot = opts.wantSnapshot ? await captureSnapshot(wc) : undefined
-  return { dragged: `从 (${x1},${y1}) 拖动至 (${x2},${y2})`, snapshot }
+  // 是否真的产生 drop 只能由页面侧探针证明；命令返回成功不算证据。
+  const probeFinal = await readDragProbe(wc)
+  const dropped = probeFinal?.drop === true
+  const note = dropped
+    ? usedDomFallback
+      ? '（DOM 事件回退：后台原生拖放不可用）'
+      : ''
+    : '（未验证到页面 drop；可能该元素不支持拖放，或页面已重绘）'
+  return { dragged: `从 (${x1},${y1}) 拖动至 (${x2},${y2})${note}`, snapshot, dropped }
 }
 
 export async function inspectTypeTarget(tab: Tab, ref: string): Promise<{ ok: boolean; sensitive?: boolean; label?: string; type?: string; fingerprint?: string }> {
@@ -651,6 +953,7 @@ export async function doType(
     )
   }
   const tag = focus.tag ?? 'unknown'
+  tab.recordPointer?.({ kind: 'input' })
   if (['checkbox', 'radio', 'button', 'submit', 'file'].includes(focus.type ?? '')) {
     throw new ActionError(
       `元素 ${ref} 是 ${focus.type} 类型，不支持输入文本；请改用 browser_click 或 browser_select_option`
@@ -1139,6 +1442,7 @@ export async function doPressKey(tab: Tab, key: string, modifiers: string[] = []
     throw new ActionError(`不支持的按键: ${key}（支持 Enter/Escape/Tab/Arrow*/F1-F12/单字符及 Ctrl/Alt/Shift/Meta 组合）`)
   }
   await sendPageKey(tab, k, parsed.modifiers)
+  tab.recordPointer?.({ kind: 'input' })
   await delay(120)
   return { pressed: k, modifiers: parsed.modifiers }
 }
@@ -1256,8 +1560,11 @@ async function captureFullPage(wc: WebContents, background: boolean, minimized: 
 export async function doScreenshot(tab: Tab, signal?: AbortSignal, opts?: { fullPage?: boolean }): Promise<ToolContent> {
   throwIfAborted(signal)
   const wc = tab.view.webContents
+  // 视图没有挂在窗口上时（其他 MCP 客户端的标签、后台标签）桌面合成器不会为该页产生帧，
+  // capturePage 只会一直等到超时。此时改走 CDP 截图，它直接向渲染器要画面。
+  const composited = tab.isComposited?.() === true
   if (opts?.fullPage) {
-    const background = !tab.canUseWindowInput()
+    const background = !composited || !tab.canUseWindowInput()
     // 最小化时 capturePage 可能等待永远不会产生的合成帧；后台直接走 CDP，
     // 这样整页截图不依赖窗口是否能被桌面合成器显示。
     if (!background) await raceAbort(withDeadline(wc.capturePage(undefined, { stayHidden: true }), PAGE_CAPTURE_TIMEOUT_MS, '页面截图'), signal)
@@ -1271,6 +1578,13 @@ export async function doScreenshot(tab: Tab, signal?: AbortSignal, opts?: { full
     if (img.isEmpty()) throw new ActionError('整页截图失败：图像为空')
     if (full.width > 1440) img = img.resize({ width: 1440 })
     reportProgress(1, 1, '截图完成')
+    return { type: 'image', data: img.toPNG().toString('base64'), mimeType: 'image/png' }
+  }
+  if (!composited) {
+    const shot = await captureBackgroundViewport(wc, signal)
+    let img = nativeImage.createFromBuffer(Buffer.from(shot, 'base64'))
+    if (img.isEmpty()) throw new ActionError('截图失败：浏览器未返回有效图像')
+    if (img.getSize().width > 1440) img = img.resize({ width: 1440 })
     return { type: 'image', data: img.toPNG().toString('base64'), mimeType: 'image/png' }
   }
   // 合成器首帧可能未就绪；等待而不聚焦桌面窗口。
@@ -1347,6 +1661,7 @@ export async function doHover(tab: Tab, ref: string): Promise<{ hovered: string 
   const x = Math.max(0, loc.x ?? 0)
   const y = Math.max(0, loc.y ?? 0)
   void wc.executeJavaScript(laserCursorScript(x, y, 'hover'), false).catch(() => {})
+  tab.recordPointer?.({ kind: 'move', x, y })
   await pageMouse(tab)({ type: 'mouseMove', x, y })
   await delay(150)
   return { hovered: `${loc.tag} @(${x},${y})` }
@@ -1448,6 +1763,24 @@ export async function doElementScreenshot(tab: Tab, ref: string): Promise<ToolCo
         ? `找不到元素 ${ref}：页面可能已变化，请先重新调用 browser_snapshot`
         : `无法定位元素 ${ref}（${rect?.reason ?? 'unknown'}）`
     )
+  }
+  if (tab.isComposited?.() !== true) {
+    // 未挂到窗口的页面不合成：走 CDP 取视口截图再按 bbox 裁剪。
+    // 必须与前台路径使用同一坐标空间：rectScript 返回的是视口内坐标，
+    // 用整页图裁剪会因滚动偏移裁到错误位置（通常是空白区域）。
+    const shot = await captureBackgroundViewport(wc)
+    const fullImage = nativeImage.createFromBuffer(Buffer.from(shot, 'base64'))
+    if (fullImage.isEmpty()) throw new ActionError('截图失败：浏览器未返回有效图像')
+    const vpBg = (await wc.executeJavaScript('({ w: window.innerWidth, h: window.innerHeight })', false)) as { w: number; h: number }
+    const sizeBg = fullImage.getSize()
+    const sxBg = sizeBg.width / Math.max(1, vpBg.w)
+    const syBg = sizeBg.height / Math.max(1, vpBg.h)
+    const cropXBg = Math.min(sizeBg.width - 1, Math.max(0, Math.round((rect.x ?? 0) * sxBg)))
+    const cropYBg = Math.min(sizeBg.height - 1, Math.max(0, Math.round((rect.y ?? 0) * syBg)))
+    const cropWBg = Math.max(1, Math.min(Math.round((rect.width ?? 1) * sxBg), sizeBg.width - cropXBg))
+    const cropHBg = Math.max(1, Math.min(Math.round((rect.height ?? 1) * syBg), sizeBg.height - cropYBg))
+    const croppedBg = fullImage.crop({ x: cropXBg, y: cropYBg, width: cropWBg, height: cropHBg })
+    return { type: 'image', data: croppedBg.toPNG().toString('base64'), mimeType: 'image/png' }
   }
   let image: Electron.NativeImage | null = null
   for (let i = 0; i < 3; i++) {

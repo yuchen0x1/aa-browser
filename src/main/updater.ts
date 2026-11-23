@@ -167,9 +167,17 @@ export class UpdateManager {
     if (!this.getSettings().autoUpdate) return
     this.startupTimer = setTimeout(() => {
       this.startupTimer = null
-      if (this.getSettings().autoUpdate) void this.check()
+      if (this.getSettings().autoUpdate) this.runQuietly(() => this.check())
     }, UPDATE_STARTUP_DELAY_MS)
-    this.timer = setInterval(() => { if (this.getSettings().autoUpdate) void this.checkIfDue() }, UPDATE_INTERVAL_MS)
+    this.timer = setInterval(() => { if (this.getSettings().autoUpdate) this.runQuietly(() => this.checkIfDue()) }, UPDATE_INTERVAL_MS)
+  }
+
+  /**
+   * 定时器里发起的更新检查不能把拒绝漏到进程级：Node 默认会把它当致命错误，
+   * 桌面外壳就会在无提示的情况下退出。失败一律折进更新器自身的 error 状态。
+   */
+  private runQuietly(run: () => Promise<unknown>): void {
+    void run().catch((error: unknown) => this.fail(error, 'check'))
   }
 
   dispose(): void {
@@ -201,7 +209,7 @@ export class UpdateManager {
     this.clearRetry()
     const delay = operation !== 'install' && this.getSettings().autoUpdate ? RETRY_DELAYS[this.retryCount++] : undefined
     if (delay) {
-      this.retryTimer = setTimeout(() => { this.retryTimer = null; void this.retry() }, delay)
+      this.retryTimer = setTimeout(() => { this.retryTimer = null; this.runQuietly(() => this.retry()) }, delay)
     }
     this.patch({ status: 'error', error: message, failedOperation: operation, checkedAt: Date.now(), retryAt: delay ? Date.now() + delay : undefined })
   }

@@ -137,7 +137,7 @@ Eine geschriebene Konfiguration ist **keine** funktionierende Verbindung. Verifi
 
 ## MCP-Tools
 
-**44 Tools** in fünf Gruppen: Navigation & Snapshot (5), Interaktion (9), Lesen & Status (20), Netzwerk & Mock (6), Diagnose & Tabs (4). Tool-Namen im Client können das Präfix `mcp__aa-browser__` tragen.
+**47 tools** in fünf Gruppen: Navigation & Snapshot (5), Interaktion (9), Lesen & Status (20), Netzwerk & Mock (6), Diagnose & Tabs (7). Tool-Namen im Client können das Präfix `mcp__aa-browser__` tragen.
 
 | Gruppe | Tools |
 | --- | --- |
@@ -145,7 +145,7 @@ Eine geschriebene Konfiguration ist **keine** funktionierende Verbindung. Verifi
 | Interaktion | `browser_click`, `browser_type`, `browser_fill_form`, `browser_select_option`, `browser_drag`, `browser_hover`, `browser_scroll`, `browser_press_key`, `browser_upload_file` |
 | Lesen & Status | `browser_extract`, `browser_evaluate`, `browser_dialogs`, `browser_wait`, `browser_screenshot`, `browser_find`, `browser_get_selector`, `browser_cookies`, `browser_storage`, `browser_downloads`, `browser_pdf`, `browser_console` |
 | Netzwerk & Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
-| Diagnose & Tabs | `browser_performance`, `browser_resize`, `browser_tabs` |
+| Diagnose & Tabs | `browser_performance`, `browser_resize`, `browser_tabs`, `browser_window`, `browser_tasks`, `browser_extensions`, `browser_evidence` |
 
 Gemeinsames Verhalten: Die meisten Tools geben zusammen mit ihrem Ergebnis einen Snapshot zurück (`snapshot: false` überspringt ihn), jedes Tool außer `browser_resize` und `browser_downloads` akzeptiert eine `tabId`, ein einzelner Aufruf läuft nach 180 Sekunden in einen Timeout, eine Freigabe wartet bis zu 120 Sekunden, und Netzwerkdetails werden standardmäßig redigiert.
 

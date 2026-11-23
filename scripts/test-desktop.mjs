@@ -41,6 +41,29 @@ if (!process.versions.electron) {
 } else {
   // Do not await app.whenReady() at module top level: Electron waits for its
   // ESM entry to finish evaluating before it can emit ready.
+  // 未处理的 Promise 拒绝在 Electron 主进程里可能直接终结进程（Node 22 默认行为），
+  // 且同步写不出原因。这里先接管并同步记录，再在通过前断言「一条都没有」——
+  // 既能拿到真实堆栈，也不会把缺陷藏起来。
+  const unhandledErrors = []
+  const describeError = (reason) => (reason instanceof Error ? (reason.stack ?? reason.message) : String(reason))
+  process.on('unhandledRejection', (reason) => {
+    const text = describeError(reason)
+    unhandledErrors.push(`unhandledRejection: ${text}`)
+    try {
+      fs.writeSync(2, `[desktop-suite] unhandledRejection: ${text}\n`)
+    } catch {
+      /* 忽略 */
+    }
+  })
+  // 未捕获异常无法继续跑，直接同步落盘后失败退出，避免变成无原因的超时。
+  process.on('uncaughtException', (reason) => {
+    try {
+      fs.writeSync(2, `[desktop-suite] uncaughtException: ${describeError(reason)}\n`)
+    } catch {
+      /* 忽略 */
+    }
+    process.exit(1)
+  })
   void (async () => {
   const { app, webContents, BaseWindow, Menu, screen, clipboard } = await import('electron')
   const runDir = process.env.AA_DESKTOP_TEST_DIR
@@ -239,6 +262,7 @@ if (!process.versions.electron) {
       ws.close()
       await new Promise((resolve) => server.close(resolve))
       await new Promise((resolve) => { app.once('will-quit', resolve); app.quit() })
+      assert.deepEqual(unhandledErrors, [], `desktop suite produced unhandled errors:\n${unhandledErrors.join('\n')}`)
       fs.writeFileSync(path.join(runDir, 'result.json'), JSON.stringify({ status: 'PASS', scale: displayScale, devicePixelRatio: dpr, viewport, contentBounds, placements, displays: displays.map((display) => ({ bounds: display.bounds, workArea: display.workArea, scaleFactor: display.scaleFactor })), checks: results }, null, 2))
       console.log(`PASS: display matrix at ${Math.round(displayScale * 100)}%`)
       return
@@ -314,8 +338,14 @@ if (!process.versions.electron) {
       })
     }
     const settle = (promise) => promise.then((value) => ({ ok: true, value }), (error) => ({ ok: false, error }))
-    // HUD 并发在不同标签上验证；同标签等待按队列串行，不应要求排队调用提前报告执行进度。
-    const concurrentA = settle(call2('browser_wait', { tabId: initial.tabs[0].id, text: '并发A_永不出现', timeoutMs: 9000 }, 'desktop-progress'))
+    // 每个 MCP 客户端只能看到自己的标签；先为客户端 2 建立独立标签，避免越权调用快速结束。
+    const client2Tab = await call2('browser_tabs', { action: 'new', url: base })
+    const client2TabText = (client2Tab.content ?? []).filter((item) => item?.type === 'text').map((item) => item.text).join('\n')
+    const client2TabId = client2TabText.match(/\[(t[a-z0-9]+)\]/)?.[1]
+    assert.ok(client2TabId, client2TabText)
+    callId2 = callId
+    // HUD 并发在不同客户端的独立标签上验证；同标签等待按队列串行。
+    const concurrentA = settle(call2('browser_wait', { tabId: client2TabId, text: '并发A_永不出现', timeoutMs: 9000 }, 'desktop-progress'))
     const concurrentB = settle(tool('browser_wait', { tabId: initial.tabs[1].id, text: '并发B_永不出现', timeoutMs: 9000 }))
     await until(async () => ((await state()).agentActivity?.calls?.length ?? 0) >= 2, 'concurrent calls visible in activity', 5000)
     const visibleCalls = (await state()).agentActivity.calls
@@ -401,8 +431,8 @@ if (!process.versions.electron) {
     }
     assert.ok(initial.update)
     assert.equal(initial.canReopenClosed, false)
-    assert.equal(await ui('document.querySelector("#agent-stop").disabled'), true)
-     pass('initial UI state includes updater, finder and restore availability')
+    assert.equal(await ui('document.querySelector("#agent-stop").disabled'), false, 'connected agents can be paused before their next tool call')
+    pass('initial UI state includes updater, finder and restore availability')
     await click('#btn-settings')
     await until(() => ui('document.querySelector("#set-engine").options.length > 0'), 'settings ready')
      assert.equal(await ui('document.activeElement?.id'), 'btn-close-settings')
@@ -502,7 +532,7 @@ if (!process.versions.electron) {
     await assertSelectedView(restoredA, pageA, pageA)
     pass('clicking a tab attaches only its native page below the shell and focuses it')
 
-    // MCP selection changes the page underneath the shell, without taking shell focus.
+    // visible 模式保留旧行为：客户端在自己的标签间切换页面，但不抢外壳焦点。
     chrome.focus()
     await until(() => webContents.getFocusedWebContents() === chrome, 'shell focus before MCP tab selection')
     await tool('browser_tabs', { action: 'select', tabId: restoredB.id })
@@ -769,9 +799,13 @@ if (!process.versions.electron) {
 
     await ui(`document.querySelector("#omnibox").value=${jsLiteral(draft)}; document.querySelector("#omnibox").dispatchEvent(new Event("input"))`)
     await until(() => ui('!document.querySelector("#suggest-panel").hidden'), 'keyboard history suggestions')
+    // 键盘事件经输入通道异步投递，可能与后续 executeJavaScript 抢跑；先确认地址栏
+    // 仍是焦点目标，再等选中态真正落到第一条建议上，而不是按发送顺序假设已完成。
+    assert.equal(await ui('document.activeElement.id'), 'omnibox', 'omnibox must hold focus for keyboard suggestion navigation')
     const suggestedUrl = await ui('document.querySelector("#suggestion-0 .suggest-url").textContent')
     chrome.sendInputEvent({ type: 'keyDown', keyCode: 'Down' })
     chrome.sendInputEvent({ type: 'keyUp', keyCode: 'Down' })
+    await until(() => ui('document.querySelector("#suggestion-0")?.getAttribute("aria-selected") === "true"'), 'keyboard suggestion highlight')
     assert.equal((await addressSelection()).value, suggestedUrl)
     chrome.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' })
     chrome.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' })
@@ -906,7 +940,7 @@ if (!process.versions.electron) {
     pass('tab switch closes search and isolates asynchronous results')
 
     // 站点权限请求：不再静默拒绝，而是进入人工审批；允许后同会话内查询为 granted
-    await tool('browser_navigate', { url: base + '/perm-fixture', snapshot: false })
+    await tool('browser_tabs', { action: 'new', url: base + '/perm-fixture' })
     await until(async () => (await state()).tabs.some((t) => t.active && t.url.startsWith(base) && !t.loading), 'permission fixture page')
     const permPage = await until(
       () => webContents.getAllWebContents().find((wc) => wc !== chrome && wc.getURL().startsWith(base)) ?? null,
@@ -1081,16 +1115,33 @@ if (!process.versions.electron) {
     assert.equal(saved.tabs[saved.activeIndex].url, activeUrl)
     pass('closing the native window preserves tab order and active tab in the session record')
 
+    // 收尾前断言整个会话没有产生未处理拒绝：否则这些错误只会表现为
+    // 一个没有原因的退出码 1，或者被悄悄吞掉。
+    assert.deepEqual(unhandledErrors, [], `desktop suite produced unhandled errors:\n${unhandledErrors.join('\n')}`)
     fs.writeFileSync(path.join(runDir, 'result.json'), JSON.stringify({ status: 'PASS', checks: results, screenshot: process.env.AA_DESKTOP_SCREENSHOTS === '1' ? 'docs/screenshots/page-find-toolbar.png' : undefined }, null, 2))
     console.log(`PASS: all ${results.length} desktop checks; report ${path.join(runDir, 'result.json')}`)
     ws.close()
     server.close()
   } catch (error) {
-    console.error('FAIL:', error)
+    // 同步写 stderr：管道上的 console.error 是异步的，紧跟其后的 app.exit(1)
+    // 会直接把缓冲区丢掉，CI 里就只剩一个没有原因的「exit code 1」。
+    try {
+      fs.writeSync(2, `FAIL: ${error?.stack ?? error}\n`)
+    } catch {
+      /* 忽略 */
+    }
     fs.writeFileSync(path.join(runDir, 'result.json'), JSON.stringify({ status: 'FAIL', checks: results, error: error.stack }, null, 2))
     ws?.close()
     server.close()
     app.exit(1)
   }
-  })().catch((error) => { console.error(error); process.exit(1) })
+  })().catch((error) => {
+    // 同上：必须同步落盘，否则 process.exit 会吞掉诊断信息。
+    try {
+      fs.writeSync(2, `FAIL (outer): ${error?.stack ?? String(error)}\n`)
+    } catch {
+      /* 忽略 */
+    }
+    process.exit(1)
+  })
 }

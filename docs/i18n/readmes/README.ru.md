@@ -137,7 +137,7 @@ npm start          # launch the built app
 
 ## Инструменты MCP
 
-**44 инструмента** в пяти группах: навигация и снапшоты (5), взаимодействие (9), чтение и состояние (20), сеть и Mock (6), диагностика и вкладки (4). Имена инструментов в клиенте могут иметь префикс `mcp__aa-browser__`.
+**47 инструментов** в пяти группах: навигация и снапшоты (5), взаимодействие (9), чтение и состояние (20), сеть и Mock (6), диагностика и вкладки (7). Имена инструментов в клиенте могут иметь префикс `mcp__aa-browser__`.
 
 | Группа | Инструменты |
 | --- | --- |
@@ -145,7 +145,7 @@ npm start          # launch the built app
 | Взаимодействие | `browser_click`, `browser_type`, `browser_fill_form`, `browser_select_option`, `browser_drag`, `browser_hover`, `browser_scroll`, `browser_press_key`, `browser_upload_file` |
 | Чтение и состояние | `browser_extract`, `browser_evaluate`, `browser_dialogs`, `browser_wait`, `browser_screenshot`, `browser_find`, `browser_get_selector`, `browser_cookies`, `browser_storage`, `browser_downloads`, `browser_pdf`, `browser_console` |
 | Сеть и Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
-| Диагностика и вкладки | `browser_performance`, `browser_resize`, `browser_tabs` |
+| Диагностика и вкладки | `browser_performance`, `browser_resize`, `browser_tabs`, `browser_window`, `browser_tasks`, `browser_extensions`, `browser_evidence` |
 
 Общее поведение: большинство инструментов возвращают снапшот вместе с результатом (`snapshot: false` пропускает его), каждый инструмент, кроме `browser_resize` и `browser_downloads`, принимает `tabId`, один вызов завершается по тайм-ауту через 180 секунд, подтверждение ожидается до 120 секунд, а сетевые детали по умолчанию маскируются.
 

@@ -498,9 +498,12 @@ async function main() {
       peers.push(clientA)
       const clientB = await connectPeer()
       peers.push(clientB)
-      const initialList = mcp.text(await clientA.call('browser_tabs', { action: 'list' }).done)
-      sameTabId = /^\d+\. \[([^\]]+)\] ★活动/m.exec(initialList)?.[1]
-      if (!sameTabId) throw new Error('并发测试无法确定固定 tabId')
+      // 每个 MCP 客户端现在拥有独立的标签视图；不要从主 bridge 的活动标签
+      // 推断 clientA 可见的 tabId。由 clientA 自己创建测试标签，既符合隔离契约，
+      // 也让后续同标签串行/不同标签并行测试使用明确的客户端所有权。
+      const createdSame = mcp.text(await clientA.call('browser_tabs', { action: 'new', url: testPageUrl }).done)
+      sameTabId = /已新建标签页: \[([^\]]+)\]/.exec(createdSame)?.[1]
+      if (!sameTabId) throw new Error('并发测试无法创建固定 tabId')
       const ready = await clientA.call('browser_navigate', { tabId: sameTabId, url: testPageUrl, snapshot: false }).done
       if (!navigationOK(ready, testPageUrl)) throw new Error('并发测试标签初始化失败')
       const reset = await clientA.call('browser_evaluate', {
@@ -511,7 +514,9 @@ async function main() {
       const same = serialFixtures.get('same')
       const sameAUrl = `${testOrigin}/serial-a?case=same`
       const sameBUrl = `${testOrigin}/serial-b?case=same`
-      const navB = clientB.call('browser_navigate', { tabId: sameTabId, url: sameBUrl, snapshot: false })
+      // 标签归属按 MCP 客户端隔离；并发队列测试在同一 clientA 内发起两个调用，
+      // 另一个 clientB 只验证自己创建的独立标签，不跨客户端借用 tabId。
+      const navB = clientA.call('browser_navigate', { tabId: sameTabId, url: sameBUrl, snapshot: false })
       await waitFor(same.arrived.b.promise, '同标签 B 到达 HTTP barrier')
       check('同标签 B 已到服务端且主文档仍 pending', isHoldingB(same) && !navB.settled)
       const navA = clientA.call('browser_navigate', { tabId: sameTabId, url: sameAUrl, snapshot: false })
@@ -534,10 +539,10 @@ async function main() {
 
       // 独立 tabId 的 A 必须在 B 仍持有 HTTP barrier 时到达并完成；
       // 不能用 Promise.all 最终都成功来代替真正发生并行的证据。
-      const newTab = await clientB.call('browser_tabs', { action: 'new', url: testPageUrl }).done
+      const newTab = await clientA.call('browser_tabs', { action: 'new', url: testPageUrl }).done
       otherTabId = /已新建标签页: \[([^\]]+)\]/.exec(mcp.text(newTab))?.[1]
       if (newTab.isError || !otherTabId || otherTabId === sameTabId) throw new Error('并行测试无法创建独立 tabId')
-      const otherReady = await clientB.call('browser_navigate', { tabId: otherTabId, url: testPageUrl, snapshot: false }).done
+      const otherReady = await clientA.call('browser_navigate', { tabId: otherTabId, url: testPageUrl, snapshot: false }).done
       if (!navigationOK(otherReady, testPageUrl)) throw new Error('并行测试标签初始化失败')
       for (const tabId of [sameTabId, otherTabId]) {
         const cleared = await clientA.call('browser_evaluate', {
@@ -548,7 +553,7 @@ async function main() {
       const parallel = serialFixtures.get('parallel')
       const parallelAUrl = `${testOrigin}/serial-a?case=parallel`
       const parallelBUrl = `${testOrigin}/serial-b?case=parallel`
-      const parallelB = clientB.call('browser_navigate', { tabId: otherTabId, url: parallelBUrl, snapshot: false })
+      const parallelB = clientA.call('browser_navigate', { tabId: otherTabId, url: parallelBUrl, snapshot: false })
       await waitFor(parallel.arrived.b.promise, '不同标签 B 到达 HTTP barrier')
       check('不同 tabId 的 B 已到服务端且仍 pending', isHoldingB(parallel) && !parallelB.settled)
       const parallelA = clientA.call('browser_navigate', { tabId: sameTabId, url: parallelAUrl, snapshot: false })

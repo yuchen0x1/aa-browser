@@ -137,7 +137,7 @@ npm start          # launch the built app
 
 ## MCP 도구
 
-다섯 그룹에 걸쳐 **44개 도구**: 탐색과 스냅샷(5), 상호작용(9), 읽기와 상태(20), 네트워크와 Mock(6), 진단과 탭(4). 클라이언트의 도구 이름에는 `mcp__aa-browser__` 접두사가 붙을 수 있습니다.
+다섯 그룹에 걸쳐 **47개 도구**: 탐색과 스냅샷(5), 상호작용(9), 읽기와 상태(20), 네트워크와 Mock(6), 진단과 탭(7). 클라이언트의 도구 이름에는 `mcp__aa-browser__` 접두사가 붙을 수 있습니다.
 
 | 그룹 | 도구 |
 | --- | --- |
@@ -145,7 +145,7 @@ npm start          # launch the built app
 | 상호작용 | `browser_click`, `browser_type`, `browser_fill_form`, `browser_select_option`, `browser_drag`, `browser_hover`, `browser_scroll`, `browser_press_key`, `browser_upload_file` |
 | 읽기와 상태 | `browser_extract`, `browser_evaluate`, `browser_dialogs`, `browser_wait`, `browser_screenshot`, `browser_find`, `browser_get_selector`, `browser_cookies`, `browser_storage`, `browser_downloads`, `browser_pdf`, `browser_console` |
 | 네트워크와 Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
-| 진단과 탭 | `browser_performance`, `browser_resize`, `browser_tabs` |
+| 진단과 탭 | `browser_performance`, `browser_resize`, `browser_tabs`, `browser_window`, `browser_tasks`, `browser_extensions`, `browser_evidence` |
 
 공통 동작: 대부분의 도구는 결과와 함께 스냅샷을 반환합니다(`snapshot: false`로 생략). `browser_resize`와 `browser_downloads`를 제외한 모든 도구는 `tabId`를 받으며, 단일 호출은 180초 후 시간 초과되고, 승인은 최대 120초 대기하며, 네트워크 세부 정보는 기본적으로 마스킹됩니다.
 

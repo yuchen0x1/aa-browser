@@ -11,6 +11,7 @@ import path from 'node:path'
 import { EventEmitter } from 'node:events'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Script, createContext } from 'node:vm'
+import { randomUUID } from 'node:crypto'
 import test from 'node:test'
 import { TOOL_DEFS, TOOL_ANNOTATIONS } from '../src/shared/tool-defs.mjs'
 
@@ -24,6 +25,8 @@ const expectedImports = [
   "import os from 'node:os'",
   "import path from 'node:path'",
   "import process from 'node:process'",
+  // 桥用随机客户端会话 id 让主进程区分重连实例；只依赖 Node 内建 crypto。
+  "import { randomUUID } from 'node:crypto'",
   "import { spawn } from 'node:child_process'",
   "import { fileURLToPath } from 'node:url'",
   "import WebSocket from 'ws'",
@@ -67,7 +70,13 @@ function createFixture() {
 
     constructor(url) {
       super()
-      assert.equal(url, 'ws://127.0.0.1:12345/?token=fixture-token')
+      // 桥用 URL + searchParams 构造端点并附带客户端会话 id；
+      // 这里只校验协议、主机与 token，客户端 id 必须是每次连接唯一的 UUID。
+      const endpoint = new URL(String(url))
+      assert.equal(endpoint.protocol, 'ws:')
+      assert.equal(endpoint.host, '127.0.0.1:12345')
+      assert.equal(endpoint.searchParams.get('token'), 'fixture-token')
+      assert.match(endpoint.searchParams.get('client') ?? '', /^[0-9a-f-]{36}$/i)
       this.readyState = FakeSocket.CONNECTING
       this.sent = []
       this.attempts = []
@@ -152,6 +161,10 @@ function createFixture() {
     process: processFixture,
     spawn: forbidden,
     fileURLToPath,
+    randomUUID,
+    // 桥用 new URL(...) 拼装 ws 端点（附带 token 与客户端会话 id），
+    // VM 沙箱只注入显式白名单内的全局对象。
+    URL,
     WebSocket: FakeSocket,
     TOOL_DEFS,
     TOOL_ANNOTATIONS,

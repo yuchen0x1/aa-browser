@@ -1,4 +1,4 @@
-import type { TabInfo, UiState, DownloadInfo, HistoryEntry, AppSettings, SettingsView, AgentInfo, UpdateState, PagePointerForward, ExtensionInfo } from '@shared/types'
+import type { TabInfo, UiState, DownloadInfo, HistoryEntry, AppSettings, SettingsView, AgentInfo, UpdateState, PagePointerForward, ExtensionInfo, BackgroundMode, MonitorState, AgentTaskRecord } from '@shared/types'
 import { resolveLocale, translate, type Locale, type LocaleKey } from '@shared/locale'
 
 /** 与主进程 clients.ts 的 ClientDetectResult / ClientSetupResult 对应 */
@@ -23,6 +23,7 @@ interface AgentActivityState {
   tool?: string
   startedAt?: number
   resumeAt?: number
+  tasks?: AgentTaskRecord[]
   calls?: {
     id: number
     tool: string
@@ -52,6 +53,14 @@ declare global {
       reload: () => Promise<void>
       submit: (value: string) => Promise<void>
       devtools: () => Promise<void>
+      windowMode: (mode?: BackgroundMode) => Promise<BackgroundMode>
+      monitorStart: (tabId?: string) => Promise<MonitorState | null>
+      monitorStop: () => Promise<MonitorState | null>
+      monitorHistoryFrame: (capturedAt: number) => Promise<unknown>
+      monitorView: (visible: boolean) => Promise<boolean>
+      monitorTakeover: () => Promise<MonitorState | null>
+      monitorRelease: () => Promise<MonitorState | null>
+      taskAction: (action: 'pause' | 'resume' | 'cancel', id?: number, client?: number) => Promise<boolean>
       decideApproval: (id: string, allowed: boolean) => Promise<boolean>
       interruptAgent: () => Promise<boolean>
       resumeAgent: () => Promise<boolean>
@@ -81,6 +90,7 @@ declare global {
       updateRetry: () => Promise<UpdateState>
       updateWake: () => Promise<UpdateState>
       onState: (cb: (state: UiState) => void) => void
+      onMonitorFrame: (cb: (frame: unknown) => void) => void
       onFocusOmnibox: (cb: () => void) => void
       onFocusFind: (cb: () => void) => void
       onOpenExtensions: (cb: () => void) => void
@@ -107,6 +117,23 @@ const agentActivityAction = document.getElementById('agent-activity-action') as 
 const agentActivityCalls = document.getElementById('agent-activity-calls') as HTMLElement | null
 const approvalPanel = document.getElementById('approval-panel') as HTMLDivElement
 const btnFeed = document.getElementById('btn-feed') as HTMLButtonElement | null
+const btnMonitor = document.getElementById('btn-monitor') as HTMLButtonElement | null
+const btnTasks = document.getElementById('btn-tasks') as HTMLButtonElement | null
+const monitorPanel = document.getElementById('monitor-panel') as HTMLDivElement | null
+const taskCenterPanel = document.getElementById('task-center-panel') as HTMLDivElement | null
+const taskCenterStatus = document.getElementById('task-center-status') as HTMLSpanElement | null
+const taskRunningList = document.getElementById('task-running-list') as HTMLDivElement | null
+const taskHistoryList = document.getElementById('task-history-list') as HTMLDivElement | null
+const btnCloseTasks = document.getElementById('btn-close-tasks') as HTMLButtonElement | null
+const btnTaskPause = document.getElementById('btn-task-pause') as HTMLButtonElement | null
+const btnTaskResume = document.getElementById('btn-task-resume') as HTMLButtonElement | null
+const monitorFrame = document.getElementById('monitor-frame') as HTMLImageElement | null
+const monitorMeta = document.getElementById('monitor-meta') as HTMLDivElement | null
+const monitorStatus = document.getElementById('monitor-status') as HTMLSpanElement | null
+const monitorHistory = document.getElementById('monitor-history') as HTMLDivElement | null
+const btnCloseMonitor = document.getElementById('btn-close-monitor') as HTMLButtonElement | null
+const btnMonitorTakeover = document.getElementById('btn-monitor-takeover') as HTMLButtonElement | null
+const btnMonitorRelease = document.getElementById('btn-monitor-release') as HTMLButtonElement | null
 const feedDrawer = document.getElementById('action-feed-drawer') as HTMLDivElement | null
 const feedList = document.getElementById('action-feed-list') as HTMLDivElement | null
 const btnCloseFeed = document.getElementById('btn-close-feed') as HTMLButtonElement | null
@@ -128,6 +155,7 @@ const setFullSnapshot = document.getElementById('set-full-snapshot') as HTMLInpu
 const setOpApproval = document.getElementById('set-op-approval') as HTMLInputElement | null
 const setIsolatedSessions = document.getElementById('set-isolated-sessions') as HTMLInputElement | null
 const setRestoreSession = document.getElementById('set-restore-session') as HTMLInputElement | null
+const setBackgroundMode = document.getElementById('set-background-mode') as HTMLSelectElement | null
 const setDownloadDir = document.getElementById('set-download-dir') as HTMLInputElement | null
 const setAllowedSites = document.getElementById('set-allowed-sites') as HTMLTextAreaElement | null
 const setAgentInfo = document.getElementById('set-agent-info')
@@ -327,6 +355,37 @@ function applyLocale(locale: Locale): void {
   setText('settings-isolated-hint', 'isolatedSessionsHint')
   setText('settings-restore-label', 'restoreSession')
   setText('settings-restore-hint', 'restoreSessionHint')
+  setText('settings-background-mode-label', 'backgroundMode')
+  setText('settings-background-mode-hint', 'backgroundModeHint')
+  const taskTitle = document.getElementById('task-center-title')
+  const taskHistoryHeading = document.querySelector('.task-history-heading')
+  const monitorTitle = document.getElementById('monitor-title')
+  if (taskTitle) taskTitle.textContent = uiText('后台任务中心', 'Background tasks')
+  if (taskHistoryHeading) taskHistoryHeading.textContent = uiText('最近任务', 'Recent tasks')
+  if (taskCenterStatus && !state.agentActivity?.active && !state.agentActivity?.paused) taskCenterStatus.textContent = uiText('空闲', 'Idle')
+  if (btnTaskPause) btnTaskPause.textContent = uiText('暂停全部', 'Pause all')
+  if (btnTaskResume) btnTaskResume.textContent = uiText('恢复全部', 'Resume all')
+  if (monitorTitle) monitorTitle.textContent = uiText('后台实时预览', 'Background preview')
+  if (btnMonitorTakeover) btnMonitorTakeover.textContent = uiText('人工接管', 'Take over')
+  if (btnMonitorRelease) btnMonitorRelease.textContent = uiText('交还 AI', 'Return to AI')
+  if (btnTasks) {
+    btnTasks.title = uiText('后台任务', 'Background tasks')
+    btnTasks.setAttribute('aria-label', uiText('打开后台任务中心', 'Open background task center'))
+  }
+  if (btnMonitor) {
+    btnMonitor.title = uiText('后台实时预览', 'Background live preview')
+    btnMonitor.setAttribute('aria-label', uiText('打开后台实时预览', 'Open background live preview'))
+  }
+  if (setBackgroundMode) {
+    const labels: Record<string, [string, string]> = {
+      visible: ['可见（前台）', 'Visible (foreground)'],
+      background: ['后台（不抢焦点）', 'Background (no focus steal)'],
+      minimized: ['最小化', 'Minimized'],
+      hidden: ['隐藏', 'Hidden'],
+      'background-visual': ['后台 + 实时预览', 'Background + live preview']
+    }
+    for (const option of Array.from(setBackgroundMode.options)) option.textContent = labels[option.value]?.[activeLocale === 'en-US' ? 1 : 0] ?? option.value
+  }
   setText('settings-download-dir-label', 'downloadDir')
   setAttr('set-download-dir', 'placeholder', 'downloadDirPlaceholder')
   setText('settings-allowlist-label', 'siteAllowlist')
@@ -448,7 +507,8 @@ let previousExtent = -1
 function syncOverlayExtent(): void {
   cancelAnimationFrame(extentFrame)
   extentFrame = requestAnimationFrame(() => {
-    const panels = [suggestPanel, dlPanel, feedDrawer]
+    // 预览面板同样挂在外壳视图内；不参与高度上报会被工具栏高度裁切。
+    const panels = [suggestPanel, dlPanel, feedDrawer, monitorPanel, taskCenterPanel]
     const extent = Math.ceil(Math.max(0, ...panels.filter((el) => el && !el.hidden).map((el) => el!.getBoundingClientRect().bottom + 8)))
     if (extent !== previousExtent) {
       previousExtent = extent
@@ -456,11 +516,12 @@ function syncOverlayExtent(): void {
     }
     btnDownloads?.setAttribute('aria-expanded', String(!dlPanel?.hidden))
     btnFeed?.setAttribute('aria-expanded', String(!feedDrawer?.hidden))
+    btnMonitor?.setAttribute('aria-expanded', String(!monitorPanel?.hidden))
   })
 }
 const overlayObserver = new MutationObserver(syncOverlayExtent)
 const overlayResize = new ResizeObserver(syncOverlayExtent)
-for (const panel of [suggestPanel, dlPanel, feedDrawer]) {
+for (const panel of [suggestPanel, dlPanel, feedDrawer, monitorPanel, taskCenterPanel]) {
   if (!panel) continue
   overlayObserver.observe(panel, { attributes: true, attributeFilter: ['hidden'], childList: true, subtree: true })
   overlayResize.observe(panel)
@@ -641,7 +702,8 @@ function renderTabs(): void {
   const sameTabs = renderedTabLocale === activeLocale && renderedTabs.length === next.length && next.every((tab, i) => {
     const previous = renderedTabs[i]
     return previous.id === tab.id && previous.title === tab.title && previous.url === tab.url &&
-      previous.favicon === tab.favicon && previous.loading === tab.loading && previous.isolated === tab.isolated
+      previous.favicon === tab.favicon && previous.loading === tab.loading && previous.isolated === tab.isolated &&
+      previous.agentClientId === tab.agentClientId
   })
   const previous = renderedTabs
   renderedTabs = next
@@ -663,7 +725,7 @@ function renderTabs(): void {
   for (const t of next) {
     const el = document.createElement('div')
     el.className = 'tab' + (t.active ? ' active' : '')
-    el.title = `${t.title}\n${t.url}${t.isolated ? `\n${uiText('（隔离会话：不共享登录态）', '(Isolated session: sign-in state is not shared)')}` : ''}`
+    el.title = `${t.title}\n${t.url}${t.isolated ? `\n${uiText('（隔离会话：不共享登录态）', '(Isolated session: sign-in state is not shared)')}` : ''}${t.agentClientId === undefined ? '' : `\nAgent #${t.agentClientId}`}`
     el.setAttribute('role', 'tab')
     el.setAttribute('aria-selected', String(t.active))
     el.tabIndex = t.active ? 0 : -1
@@ -695,6 +757,15 @@ function renderTabs(): void {
     title.className = 'title'
     title.textContent = t.title || uiText('无标题', 'Untitled')
     el.appendChild(title)
+
+    if (t.agentClientId !== undefined) {
+      const owner = document.createElement('span')
+      owner.className = 'tab-owner'
+      owner.textContent = `A${t.agentClientId}`
+      owner.title = uiText(`Agent 会话 ${t.agentClientId}`, `Agent session ${t.agentClientId}`)
+      owner.setAttribute('aria-label', owner.title)
+      el.appendChild(owner)
+    }
 
     // 隔离会话标签带锁标识：用户必须能一眼看出哪些标签不共享登录态
     if (t.isolated) {
@@ -840,7 +911,9 @@ function renderAgentActivity(): void {
     const remaining = resumeAt ? Math.max(0, Math.ceil((resumeAt - Date.now()) / 1000)) : 0
     if (agentActivityDetail) {
       agentActivityDetail.textContent = paused
-        ? remaining > 0 ? uiText(`已中断，${remaining} 秒后自动继续`, `Interrupted; continuing in ${remaining}s`) : uiText('已中断，等待自动继续…', 'Interrupted; waiting to continue…')
+        ? resumeAt
+          ? remaining > 0 ? uiText(`已中断，${remaining} 秒后自动继续`, `Interrupted; continuing in ${remaining}s`) : uiText('已中断，等待自动继续…', 'Interrupted; waiting to continue…')
+          : uiText('已由用户暂停，等待手动恢复', 'Paused by the user; resume manually')
         : uiText('浏览器由 AI 控制', 'Browser controlled by AI')
     }
     if (remaining <= 0 && agentActivityTimer) {
@@ -974,6 +1047,157 @@ function renderFeed(): void {
     fragment.appendChild(el)
   }
   feedList.replaceChildren(fragment)
+}
+
+interface MonitorFramePayload {
+  tabId: string
+  url: string
+  title: string
+  capturedAt: number
+  width: number
+  height: number
+  image: string
+  currentTask?: string
+  pointer?: { kind: string; x?: number; y?: number }
+}
+
+function renderMonitor(): void {
+  if (!monitorPanel) return
+  const monitor = state.monitor
+  const enabled = !!monitor?.enabled
+  btnMonitor?.classList.toggle('is-active', enabled)
+  if (monitorStatus) {
+    const status = monitor?.control === 'human'
+      ? uiText('人工接管中（AI 已锁定）', 'Human takeover (AI locked)')
+      : monitor?.status === 'error'
+        ? uiText('预览错误', 'Preview error')
+        : enabled ? uiText(`预览中 · 标签 ${monitor?.tabId ?? ''}`, `Previewing · tab ${monitor?.tabId ?? ''}`) : uiText('未开启', 'Off')
+    monitorStatus.textContent = status
+  }
+  if (btnMonitorTakeover) btnMonitorTakeover.hidden = monitor?.control === 'human'
+  if (btnMonitorRelease) btnMonitorRelease.hidden = monitor?.control !== 'human'
+  if (monitorHistory) {
+    monitorHistory.textContent = ''
+    for (const item of (monitor?.history ?? []).slice(-8).reverse()) {
+      const frame = document.createElement('button')
+      frame.type = 'button'
+      frame.className = 'monitor-history-item'
+      frame.textContent = new Date(item.capturedAt).toLocaleTimeString()
+      frame.title = `${item.title}\n${item.url}`
+      frame.addEventListener('click', () => void openMonitorHistory(item.capturedAt))
+      monitorHistory.appendChild(frame)
+    }
+  }
+}
+
+function applyMonitorFrame(raw: unknown): void {
+  if (!raw || typeof raw !== 'object') return
+  const frame = raw as Partial<MonitorFramePayload>
+  if (typeof frame.image !== 'string' || !monitorFrame) return
+  monitorFrame.src = `data:image/png;base64,${frame.image}`
+  monitorFrame.hidden = false
+  if (monitorMeta) {
+    const action = frame.pointer?.kind === 'click' ? uiText('点击', 'click') : frame.pointer?.kind === 'input' ? uiText('输入', 'input') : ''
+    const pointer = frame.pointer?.x !== undefined && frame.pointer?.y !== undefined
+      ? ` · ${action ? `${action} ` : ''}${uiText('鼠标', 'pointer')} (${Math.round(frame.pointer.x)}, ${Math.round(frame.pointer.y)})`
+      : action ? ` · ${action}` : ''
+    monitorMeta.textContent = `${frame.title ?? ''} · ${frame.url ?? ''} · ${frame.width ?? 0}×${frame.height ?? 0}${pointer}${frame.currentTask ? ` · ${frame.currentTask}` : ''}`
+  }
+}
+
+function taskStatusLabel(status: AgentTaskRecord['status']): string {
+  const labels: Record<AgentTaskRecord['status'], [string, string]> = {
+    running: ['运行中', 'Running'],
+    cancelling: ['正在取消', 'Cancelling'],
+    completed: ['已完成', 'Completed'],
+    failed: ['失败', 'Failed'],
+    cancelled: ['已取消', 'Cancelled'],
+    interrupted: ['已中断', 'Interrupted']
+  }
+  return labels[status][activeLocale === 'en-US' ? 1 : 0]
+}
+
+function renderTaskRow(task: AgentTaskRecord, active: boolean): HTMLDivElement {
+  const row = document.createElement('div')
+  row.className = 'task-row'
+  const head = document.createElement('div')
+  head.className = 'task-row-head'
+  const name = document.createElement('strong')
+  name.className = 'task-row-tool'
+  name.textContent = task.tool
+  const meta = document.createElement('span')
+  meta.className = 'task-row-meta'
+  meta.textContent = `#${task.id} · A${task.client} · ${taskStatusLabel(task.status)}`
+  head.append(name, meta)
+  if (active && task.status !== 'cancelling') {
+    const cancel = document.createElement('button')
+    cancel.type = 'button'
+    cancel.className = 'task-row-cancel'
+    cancel.textContent = uiText('取消', 'Cancel')
+    cancel.setAttribute('aria-label', uiText(`取消客户端 ${task.client} 的任务 ${task.tool}`, `Cancel ${task.tool} from client ${task.client}`))
+    cancel.addEventListener('click', () => void window.aa.taskAction('cancel', task.id, task.client))
+    head.appendChild(cancel)
+  }
+  row.appendChild(head)
+  const details = task.error || task.message
+  if (details) {
+    const message = document.createElement('div')
+    message.className = `task-row-message${task.status === 'failed' ? ' task-row-error' : ''}`
+    message.textContent = details
+    row.appendChild(message)
+  }
+  if (active && typeof task.progress === 'number' && Number.isFinite(task.progress)) {
+    const progress = document.createElement('progress')
+    progress.className = 'task-row-progress'
+    if (typeof task.total === 'number' && task.total > 0) {
+      progress.max = task.total
+      progress.value = Math.max(0, Math.min(task.total, task.progress))
+    } else {
+      progress.removeAttribute('max')
+      progress.removeAttribute('value')
+    }
+    progress.setAttribute('aria-label', uiText('任务进度', 'Task progress'))
+    row.appendChild(progress)
+  }
+  return row
+}
+
+function renderTaskCenter(): void {
+  if (!taskCenterPanel) return
+  const activity = state.agentActivity ?? { active: false, paused: state.agentInterrupted, calls: [] }
+  const tasks = activity.tasks ?? []
+  const running = tasks.filter((task) => task.status === 'running' || task.status === 'cancelling')
+  const history = tasks.filter((task) => task.status !== 'running' && task.status !== 'cancelling')
+  if (taskCenterStatus) {
+    taskCenterStatus.textContent = activity.paused || state.agentInterrupted
+      ? uiText('已暂停', 'Paused')
+      : running.length ? uiText(`运行中 · ${running.length}`, `Running · ${running.length}`) : uiText('空闲', 'Idle')
+  }
+  if (btnTaskPause) btnTaskPause.hidden = !!(activity.paused || state.agentInterrupted)
+  if (btnTaskResume) btnTaskResume.hidden = !(activity.paused || state.agentInterrupted)
+  if (taskRunningList) {
+    taskRunningList.replaceChildren(...running.map((task) => renderTaskRow(task, true)))
+    if (!running.length) {
+      const empty = document.createElement('div')
+      empty.className = 'task-empty'
+      empty.textContent = uiText('当前没有运行中的任务', 'No running tasks')
+      taskRunningList.appendChild(empty)
+    }
+  }
+  if (taskHistoryList) {
+    taskHistoryList.replaceChildren(...history.slice(0, 30).map((task) => renderTaskRow(task, false)))
+    if (!history.length) {
+      const empty = document.createElement('div')
+      empty.className = 'task-empty'
+      empty.textContent = uiText('暂无任务记录', 'No task history')
+      taskHistoryList.appendChild(empty)
+    }
+  }
+}
+
+async function openMonitorHistory(capturedAt: number): Promise<void> {
+  const frame = await window.aa.monitorHistoryFrame(capturedAt)
+  if (frame) applyMonitorFrame(frame)
 }
 
 function formatBytes(n: number): string {
@@ -1304,6 +1528,8 @@ function applyState(next: UiState): void {
   renderTabs()
   renderToolbar()
   renderFeed()
+  renderMonitor()
+  renderTaskCenter()
   renderDownloads()
   renderUpdate(next.update)
   renderFind()
@@ -1362,15 +1588,21 @@ tabsEl.addEventListener('keydown', (event: KeyboardEvent) => {
   if (id) void window.aa.tabSelect(id, false)
 })
 
-type DrawerKind = 'dl' | 'feed'
+type DrawerKind = 'dl' | 'feed' | 'tasks' | 'monitor'
 function drawerPanel(kind: DrawerKind): HTMLDivElement | null {
-  return kind === 'dl' ? dlPanel : feedDrawer
+  if (kind === 'dl') return dlPanel
+  if (kind === 'feed') return feedDrawer
+  return kind === 'tasks' ? taskCenterPanel : monitorPanel
 }
 function drawerTrigger(kind: DrawerKind): HTMLElement | null {
-  return kind === 'dl' ? btnDownloads : btnFeed
+  if (kind === 'dl') return btnDownloads
+  if (kind === 'feed') return btnFeed
+  return kind === 'tasks' ? btnTasks : btnMonitor
 }
 function drawerClose(kind: DrawerKind): HTMLElement | null {
-  return kind === 'dl' ? btnCloseDownloads : btnCloseFeed
+  if (kind === 'dl') return btnCloseDownloads
+  if (kind === 'feed') return btnCloseFeed
+  return kind === 'tasks' ? btnCloseTasks : btnCloseMonitor
 }
 function drawerOpen(kind: DrawerKind): boolean {
   const panel = drawerPanel(kind)
@@ -1379,16 +1611,21 @@ function drawerOpen(kind: DrawerKind): boolean {
 
 /** 键盘打开抽屉后把焦点移入（通用聚焦关闭按钮），关闭时再还给触发按钮。 */
 function openDrawer(kind: DrawerKind): void {
-  if (kind === 'dl') {
-    if (feedDrawer) feedDrawer.hidden = true
-    if (dlPanel) dlPanel.hidden = false
-  } else {
-    if (dlPanel) dlPanel.hidden = true
-    if (feedDrawer) feedDrawer.hidden = false
+  const closingMonitor = drawerOpen('monitor') && kind !== 'monitor'
+  for (const other of ['dl', 'feed', 'tasks', 'monitor'] as const) {
+    const panel = drawerPanel(other)
+    if (panel) panel.hidden = other !== kind
   }
   focusIfPossible(drawerClose(kind))
-  drawerTrigger('dl')?.setAttribute('aria-expanded', String(kind === 'dl'))
-  drawerTrigger('feed')?.setAttribute('aria-expanded', String(kind === 'feed'))
+  for (const item of ['dl', 'feed', 'tasks', 'monitor'] as const) {
+    drawerTrigger(item)?.setAttribute('aria-expanded', String(item === kind))
+  }
+  if (closingMonitor) {
+    void window.aa.monitorView(false)
+    monitorFrame?.removeAttribute('src')
+  }
+  if (kind === 'monitor') void window.aa.monitorView(true)
+  syncOverlayExtent()
 }
 
 /** restoreFocus=false 用于外部鼠标点击：只收起面板，不把焦点抢回触发按钮。 */
@@ -1398,6 +1635,11 @@ function closeDrawer(kind: DrawerKind, restoreFocus = true): void {
   const hadFocusInside = panel.contains(document.activeElement)
   panel.hidden = true
   drawerTrigger(kind)?.setAttribute('aria-expanded', 'false')
+  if (kind === 'monitor') {
+    void window.aa.monitorView(false)
+    monitorFrame?.removeAttribute('src')
+  }
+  syncOverlayExtent()
   if (!restoreFocus) {
     if (hadFocusInside && document.activeElement instanceof HTMLElement) document.activeElement.blur()
     return
@@ -1412,8 +1654,11 @@ btnDownloads?.addEventListener('click', () => {
 btnCloseDownloads?.addEventListener('click', () => closeDrawer('dl'))
 document.addEventListener('click', (e) => {
   const target = e.target as Node
-  if (drawerOpen('feed') && !btnFeed?.contains(target) && !feedDrawer?.contains(target)) closeDrawer('feed', false)
-  if (drawerOpen('dl') && !btnDownloads?.contains(target) && !dlPanel?.contains(target)) closeDrawer('dl', false)
+  for (const kind of ['dl', 'feed', 'tasks', 'monitor'] as const) {
+    const panel = drawerPanel(kind)
+    const trigger = drawerTrigger(kind)
+    if (panel && !panel.hidden && !trigger?.contains(target) && !panel.contains(target)) closeDrawer(kind, false)
+  }
 })
 
 btnFeed?.addEventListener('click', () => {
@@ -1421,6 +1666,39 @@ btnFeed?.addEventListener('click', () => {
   else openDrawer('feed')
 })
 btnCloseFeed?.addEventListener('click', () => closeDrawer('feed'))
+btnTasks?.addEventListener('click', () => {
+  if (drawerOpen('tasks')) closeDrawer('tasks')
+  else openDrawer('tasks')
+})
+btnCloseTasks?.addEventListener('click', () => closeDrawer('tasks'))
+btnTaskPause?.addEventListener('click', async () => {
+  await window.aa.taskAction('pause')
+  await window.aa.getState().then(applyState)
+})
+btnTaskResume?.addEventListener('click', async () => {
+  await window.aa.taskAction('resume')
+  await window.aa.getState().then(applyState)
+})
+btnMonitor?.addEventListener('click', async () => {
+  if (!monitorPanel) return
+  if (!monitorPanel.hidden) {
+    closeDrawer('monitor')
+    return
+  }
+  openDrawer('monitor')
+  if (!state.monitor?.enabled) {
+    await window.aa.monitorStart(state.activeId ?? undefined)
+  }
+  // 等面板完成布局（截图/元数据可能刚填充）后再上报高度，避免原生视图仍停在工具栏高度。
+  requestAnimationFrame(() => syncOverlayExtent())
+  renderMonitor()
+})
+btnCloseMonitor?.addEventListener('click', () => {
+  closeDrawer('monitor')
+  if (monitorFrame) monitorFrame.removeAttribute('src')
+})
+btnMonitorTakeover?.addEventListener('click', () => void window.aa.monitorTakeover())
+btnMonitorRelease?.addEventListener('click', () => void window.aa.monitorRelease())
 
 /* ── 设置面板：连接 AI 客户端 ─────────────── */
 /** 路径仅供本机展开查看；可分享的诊断由主进程白名单生成。 */
@@ -1805,7 +2083,7 @@ function currentSettingsRequest(request: number): boolean {
 /** 先锁定再发 IPC；inert 也隔离更新/客户端按钮，不改它们自身的禁用规则。 */
 function setSettingsReady(ready: boolean): void {
   settingsReady = ready
-  for (const control of [setEngine, setEngineUrl, setLocale, setTheme, setFullSnapshot, setOpApproval, setIsolatedSessions, setRestoreSession, setAutoUpdate, setUpdateChannel, setDownloadDir, setAllowedSites]) {
+  for (const control of [setEngine, setEngineUrl, setLocale, setTheme, setFullSnapshot, setOpApproval, setIsolatedSessions, setRestoreSession, setBackgroundMode, setAutoUpdate, setUpdateChannel, setDownloadDir, setAllowedSites]) {
     if (control) control.disabled = !ready
   }
   if (settingsBody) {
@@ -1884,6 +2162,7 @@ async function openSettings(): Promise<boolean> {
     if (setOpApproval) setOpApproval.checked = !!view.settings.requireOperationApproval
     if (setIsolatedSessions) setIsolatedSessions.checked = !!view.settings.isolatedSessions
     if (setRestoreSession) setRestoreSession.checked = view.settings.restoreSession !== false
+    if (setBackgroundMode) setBackgroundMode.value = view.settings.backgroundMode || 'visible'
     if (setAutoUpdate) setAutoUpdate.checked = view.settings.autoUpdate !== false
     if (setUpdateChannel) setUpdateChannel.value = view.settings.updateChannel || 'stable'
     if (setDownloadDir) setDownloadDir.value = view.settings.downloadDir
@@ -2003,6 +2282,7 @@ document.getElementById('btn-save-settings')?.addEventListener('click', async ()
   if (setOpApproval) patch.requireOperationApproval = setOpApproval.checked
   if (setIsolatedSessions) patch.isolatedSessions = setIsolatedSessions.checked
   if (setRestoreSession) patch.restoreSession = setRestoreSession.checked
+  if (setBackgroundMode) patch.backgroundMode = setBackgroundMode.value as BackgroundMode
   if (setAutoUpdate) patch.autoUpdate = setAutoUpdate.checked
   if (setUpdateChannel) patch.updateChannel = setUpdateChannel.value === 'beta' ? 'beta' : 'stable'
   if (setDownloadDir) patch.downloadDir = setDownloadDir.value
@@ -2100,6 +2380,7 @@ omnibox.addEventListener('blur', () => {
 omnibox.addEventListener('input', onOmniboxInput)
 
 window.aa.onState(applyState)
+window.aa.onMonitorFrame(applyMonitorFrame)
 window.aa.onOpenExtensions(() => {
   void openSettings().then((ready) => {
     if (!ready || !settingsModal || settingsModal.hidden) return

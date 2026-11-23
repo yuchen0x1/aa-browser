@@ -509,6 +509,32 @@ if (!process.versions.electron) {
     await click('#btn-feed')
     await send(live)
 
+    // The preview panel lives inside the chrome view; without its own extent report the native view
+    // stays at toolbar height and the panel is clipped. Assert the real native bounds, not just DOM.
+    await click('#btn-monitor')
+    await pause(300)
+    const monitorLayout = await ui(`(() => {
+      const panel = document.querySelector('#monitor-panel')
+      const r = panel.getBoundingClientRect()
+      return { hidden: panel.hidden, bottom: r.bottom, expanded: document.querySelector('#btn-monitor').getAttribute('aria-expanded') }
+    })()`)
+    const monitorChrome = win.contentView.children.find(view => view.webContents === chrome)
+    check('monitor panel is expanded inside the native chrome view instead of being clipped',
+      !monitorLayout.hidden && monitorLayout.expanded === 'true' && monitorLayout.bottom + 8 <= monitorChrome.getBounds().height,
+      { ...monitorLayout, chromeHeight: monitorChrome.getBounds().height })
+    await until(() => ui('document.querySelector("#monitor-frame").naturalWidth > 0'), 'monitor preview image rendered')
+    const monitorFrame = await ui('({width:document.querySelector("#monitor-frame").naturalWidth,height:document.querySelector("#monitor-frame").naturalHeight})')
+    check('monitor preview contains a decoded page image', monitorFrame.width > 0 && monitorFrame.height > 0, monitorFrame)
+    await capture('monitor-panel')
+    await click('#btn-monitor')
+    await pause(200)
+    check('closing monitor panel shrinks the overlay extent again',
+      await ui(`document.querySelector('#monitor-panel').hidden && document.querySelector('#btn-monitor').getAttribute('aria-expanded') === 'false'`))
+    const stoppedMonitor = await ui('window.aa.monitorStop()')
+    check('UI preview test stops its capture session', !stoppedMonitor?.enabled, stoppedMonitor)
+    await pause(700)
+    await send(live)
+
     for (const [width,height] of [[1920,1080],[1600,900],[1366,768],[1280,720],[1024,768],[960,640]]) {
       win.setContentSize(width,height)
       // Windows rounds content size to even pixels at forced DPI (1366 -> 1368) and
@@ -584,7 +610,11 @@ if (!process.versions.electron) {
     chrome.focus()
     await ui('document.querySelector(".agent-call-stop").focus()')
     await send({...live,agentActivity:{active:false,paused:false,calls:[]}})
-    check('last agent call completion has a neutral focus fallback without an open drawer', await ui('document.activeElement.id === "btn-feed"') && webContents.getFocusedWebContents() === chrome)
+    const agentCompletionFocus = await ui('({id:document.activeElement.id,hasFocus:document.hasFocus()})')
+    const focusedAfterAgentCompletion = webContents.getFocusedWebContents()
+    check('last agent call completion has a neutral focus fallback without an open drawer',
+      agentCompletionFocus.id === 'btn-feed' && focusedAfterAgentCompletion === chrome,
+      { ...agentCompletionFocus, focusedURL: focusedAfterAgentCompletion?.getURL() ?? null, monitorEnabled: (await ui('window.aa.getState()')).monitor?.enabled })
 
     let finishSetup
     let setupCalls = 0

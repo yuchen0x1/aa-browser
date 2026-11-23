@@ -384,7 +384,7 @@ try {
   await test('navigation timeout stops and drains raw loadURL before releasing the tab', options, async () => {
     let timeoutCallback
     const tabsModule = { exports: {} }
-    const tabDeps = { electron: {}, './network': {}, './dialogs': {}, './closed-shadow': {} }
+    const tabDeps = { electron: {}, 'node:async_hooks': require('node:async_hooks'), './network': {}, './dialogs': {}, './closed-shadow': {} }
     const tabsFile = path.join(out, 'main/tabs.js')
     compileFunction(fs.readFileSync(tabsFile, 'utf8'), ['require', 'module', 'exports', 'setTimeout', 'clearTimeout'], { filename: tabsFile })(
       (name) => { assert.ok(Object.hasOwn(tabDeps, name), `Unexpected tabs dependency: ${name}`); return tabDeps[name] },

@@ -14,6 +14,8 @@ export interface TabInfo {
   isolated?: boolean
   /** 是否由跨会话恢复重建（沿用上次的标签 id） */
   restored?: boolean
+  /** 当前 MCP 连接拥有的标签；未归属标签可由第一个使用它的 Agent 认领。 */
+  agentClientId?: number
   canBack: boolean
   canForward: boolean
 }
@@ -68,6 +70,14 @@ export interface AgentActivityState {
   resumeAt?: number
   /** 所有正在执行的调用，按开始时间排序；无并发时可能只有一项。 */
   calls?: AgentCallInfo[]
+  /** 最近任务记录（不包含调用参数或页面正文）。 */
+  tasks?: AgentTaskRecord[]
+}
+
+export interface AgentTaskRecord extends AgentCallInfo {
+  status: 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
+  finishedAt?: number
+  error?: string
 }
 
 export interface UiState {
@@ -88,6 +98,24 @@ export interface UiState {
   canReopenClosed?: boolean
   /** 原生窗口完整内容高度（外壳 WebContentsView 可能只覆盖工具栏和浮层）。 */
   windowHeight?: number
+  /** 当前窗口运行策略。 */
+  backgroundMode?: BackgroundMode
+  /** 实时后台预览与人工接管状态。 */
+  monitor?: MonitorState
+}
+
+/** Electron 窗口的真实运行策略，不改变浏览器会话、Cookie 或 Storage。 */
+export type BackgroundMode = 'visible' | 'background' | 'minimized' | 'hidden' | 'background-visual'
+
+export interface MonitorState {
+  enabled: boolean
+  tabId?: string
+  control: 'ai' | 'human'
+  status: 'idle' | 'capturing' | 'paused' | 'error'
+  currentTask?: string
+  lastFrameAt?: number
+  frameSeq: number
+  history: { file: string; capturedAt: number; tabId: string; title: string; url: string; width: number; height: number }[]
 }
 
 export interface FindState {
@@ -162,6 +190,8 @@ export interface AppSettings {
   updateChannel: 'stable' | 'beta'
   /** 重启后恢复上次打开的普通标签页 */
   restoreSession: boolean
+  /** 窗口运行策略；切换不会破坏登录态。 */
+  backgroundMode: BackgroundMode
 }
 
 /** 设置面板返回值 */

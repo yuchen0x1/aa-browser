@@ -25,7 +25,7 @@ export type LocaleKey =
   | 'agentService' | 'loading' | 'save' | 'saving' | 'saved' | 'saveFailed' | 'autoLocale'
   | 'defaultSearchEngine' | 'customSearchAddress' | 'isolatedSessionsHint' | 'downloadDirPlaceholder'
   | 'siteAllowlistHint' | 'siteAllowlistPlaceholder' | 'updateHint' | 'clientSetupHint'
-  | 'restoreSession' | 'restoreSessionHint' | 'settingsSubtitle' | 'settingsSections'
+  | 'restoreSession' | 'restoreSessionHint' | 'backgroundMode' | 'backgroundModeHint' | 'settingsSubtitle' | 'settingsSections'
   | 'settingsNavGeneral' | 'settingsNavBrowsing' | 'settingsNavData' | 'settingsNavAi'
   | 'settingsNavExtensions'
   | 'settingsDescGeneral' | 'settingsDescBrowsing' | 'settingsDescData' | 'settingsDescAi'
@@ -60,6 +60,8 @@ const catalogs: Record<Locale, Record<LocaleKey, string>> = {
     clientSetupHint: '写入前自动备份，只改 aa-browser 一个键。写入后请在客户端确认工具已加载。',
     restoreSession: '重启后恢复上次打开的标签页',
     restoreSessionHint: '只恢复普通网页标签，不恢复隔离标签、内部页和 file/data 地址。关闭后下次启动打开新标签页。',
+    backgroundMode: '后台运行模式',
+    backgroundModeHint: '只改变窗口显示方式；Cookie、Storage 与登录态保持不变。',
     settingsSubtitle: '调整浏览、快照与 AI 连接行为', settingsSections: '设置分区',
     settingsNavGeneral: '通用', settingsNavBrowsing: '浏览与快照', settingsNavData: '数据与下载', settingsNavAi: 'AI 集成',
     settingsNavExtensions: '扩展',
@@ -102,6 +104,8 @@ const catalogs: Record<Locale, Record<LocaleKey, string>> = {
     clientSetupHint: 'Aa Browser backs up the configuration and changes only the aa-browser entry. Confirm in the client that it loaded the tools.',
     restoreSession: 'Restore the tabs from the last session on restart',
     restoreSessionHint: 'Only regular web tabs are restored; isolated tabs, internal pages and file/data URLs are skipped. When off, the next launch starts with a new tab.',
+    backgroundMode: 'Background run mode',
+    backgroundModeHint: 'Changes only how the window is shown; cookies, Storage and sign-in state are preserved.',
     settingsSubtitle: 'Tune browsing, snapshots and AI connection behavior', settingsSections: 'Settings sections',
     settingsNavGeneral: 'General', settingsNavBrowsing: 'Browsing', settingsNavData: 'Data', settingsNavAi: 'AI integration',
     settingsNavExtensions: 'Extensions',
