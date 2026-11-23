@@ -2,7 +2,7 @@
   "name": "aa-browser",
   "productName": "Aa Browser",
   "desktopName": "aa-browser.desktop",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "description": "AI-native browser — browse like a human, drive like an agent (为 Agent 而生的浏览器)",
   "license": "MIT",
   "author": {
@@ -43,6 +43,7 @@
     "test:bridge-lifecycle": "node scripts/test-bridge-lifecycle.mjs && node scripts/test-bridge-autolaunch-paths.mjs",
     "test:bridge-restart-replay": "node scripts/test-bridge-restart-replay.mjs",
     "test:agent-cancellation": "node scripts/test-agent-cancellation.mjs",
+    "test:task-center": "node --experimental-strip-types scripts/test-task-center.mjs",
     "test:session-permissions": "node scripts/test-session-permissions.mjs",
     "test:approval-parity": "node scripts/test-tools-approval-runtime.mjs",
     "test:bridge-autolaunch": "node scripts/test-bridge-autolaunch.mjs",

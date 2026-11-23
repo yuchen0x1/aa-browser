@@ -1,7 +1,7 @@
 import { WebContentsView, WebContents, session } from 'electron'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { Session } from 'electron'
-import type { TabInfo } from '@shared/types'
+import type { TabInfo, TabRecoveryInfo } from '@shared/types'
 import { NetworkCapture } from './network'
 import { installDialogGuard } from './dialogs'
 import { installClosedShadowCapture } from './closed-shadow'
@@ -42,6 +42,8 @@ export interface Tab {
   restored: boolean
   /** MCP 客户端连接所有者；进程重启后不恢复该标记。 */
   agentClientId?: number
+  recovery: TabRecoveryInfo
+  recoveryTimer?: ReturnType<typeof setTimeout>
 }
 
 /**
@@ -127,6 +129,8 @@ export function isUrlAllowed(url: string, rules: string[], newtabUrl: string): b
 let idSeq = 0
 const genId = (): string => `t${Date.now().toString(36)}${(idSeq++).toString(36)}`
 const NAVIGATION_TIMEOUT_MS = 20_000
+const MAX_RECOVERY_ATTEMPTS = 2
+const RECOVERY_TIMEOUT_MS = 15_000
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string, onTimeout?: () => void): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined
@@ -178,6 +182,7 @@ export class TabManager {
   }
 
   onChange: () => void = () => {}
+  onRecovery: ((tab: Tab) => void) | null = null
   /** 由主进程注入：为页面 WebContents 注册右键菜单（需访问 owner window） */
   onContextMenu: ((wc: WebContents) => void) | null = null
   /** 由主进程注入：页面完成导航时记录历史（url, title） */
@@ -354,7 +359,8 @@ export class TabManager {
       isWindowMinimized: () => this.isWindowMinimized(),
       isComposited: () => this.isViewAttached?.(view) ?? false,
       keepRendering,
-      recordPointer: (pointer) => this.onAgentPointer?.(tab, pointer)
+      recordPointer: (pointer) => this.onAgentPointer?.(tab, pointer),
+      recovery: { status: 'healthy', attempts: 0 }
     }
     this.attachEvents(tab)
     this.tabs.push(tab)
@@ -494,6 +500,7 @@ export class TabManager {
       this.tabs.splice(idx, 0, tab)
       return
     }
+    this.clearRecoveryTimer(tab)
     if (remember && !tab.isolated && tab.url !== this.newtabUrl && /^(https?|file):/i.test(tab.url)) {
       this.recentlyClosed.push(tab.url)
       if (this.recentlyClosed.length > 20) this.recentlyClosed.shift()
@@ -569,6 +576,57 @@ export class TabManager {
     for (const t of [...this.tabs]) this.closeTab(t.id, false)
   }
 
+  private notifyRecovery(tab: Tab): void {
+    this.onRecovery?.(tab)
+    this.onChange()
+  }
+
+  private clearRecoveryTimer(tab: Tab): void {
+    if (!tab.recoveryTimer) return
+    clearTimeout(tab.recoveryTimer)
+    tab.recoveryTimer = undefined
+  }
+
+  private markRecovered(tab: Tab): void {
+    if (tab.recovery.status !== 'recovering') return
+    this.clearRecoveryTimer(tab)
+    tab.recovery = { ...tab.recovery, status: 'recovered', recoveredAt: Date.now(), error: undefined }
+    this.notifyRecovery(tab)
+  }
+
+  private recoverTab(tab: Tab, reason: 'crash' | 'unresponsive'): void {
+    const wc = tab.view.webContents
+    if (tab.recovery.status === 'recovering' || tab.recovery.status === 'failed') return
+    if (tab.recovery.attempts >= MAX_RECOVERY_ATTEMPTS || wc.isDestroyed()) {
+      this.clearRecoveryTimer(tab)
+      tab.recovery = {
+        ...tab.recovery,
+        status: 'failed',
+        reason,
+        error: wc.isDestroyed() ? '渲染进程已销毁，无法恢复' : '已达到最大自动恢复次数'
+      }
+      this.notifyRecovery(tab)
+      return
+    }
+    tab.recovery = { status: 'recovering', attempts: tab.recovery.attempts + 1, reason, lastAttemptAt: Date.now() }
+    this.clearRecoveryTimer(tab)
+    tab.recoveryTimer = setTimeout(() => {
+      tab.recoveryTimer = undefined
+      if (tab.recovery.status !== 'recovering') return
+      tab.recovery = { ...tab.recovery, status: 'failed', error: '页面恢复超时' }
+      this.notifyRecovery(tab)
+    }, RECOVERY_TIMEOUT_MS)
+    tab.recoveryTimer.unref?.()
+    this.notifyRecovery(tab)
+    try {
+      wc.reload()
+    } catch (error) {
+      this.clearRecoveryTimer(tab)
+      tab.recovery = { ...tab.recovery, status: 'failed', error: error instanceof Error ? error.message : String(error) }
+      this.notifyRecovery(tab)
+    }
+  }
+
   private attachEvents(tab: Tab): void {
     const wc = tab.view.webContents
 
@@ -595,8 +653,10 @@ export class TabManager {
       if (history.getActiveIndex() > 0 && history.getEntryAtIndex(0)?.url === 'about:blank') {
         history.removeEntryAtIndex(0)
       }
+      this.markRecovered(tab)
       this.onChange()
     })
+    wc.on('responsive', () => this.markRecovered(tab))
     wc.on('page-title-updated', (_e, title) => {
       tab.title = title || tab.title
       this.onChange()
@@ -622,7 +682,11 @@ export class TabManager {
       // 后续标签恢复 backgroundThrottling，并让监控/视觉工具下次重新持有。
       this.renderUsers.delete(wc)
       this.syncRendering(wc)
+      this.recoverTab(tab, 'crash')
       this.onChange()
+    })
+    wc.on('unresponsive', () => {
+      this.recoverTab(tab, 'unresponsive')
     })
     wc.on('console-message', (event) => {
       const msg = readConsoleMessage([event])
@@ -708,6 +772,7 @@ export class TabManager {
       isolated: t.isolated,
       restored: t.restored,
       agentClientId: t.agentClientId,
+      recovery: { ...t.recovery },
       canBack: this.canBack(t),
       canForward: this.canForward(t)
     }))

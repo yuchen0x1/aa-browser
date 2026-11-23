@@ -6,6 +6,7 @@
 
 | 版本 | 完整 Release 正文 |
 | --- | --- |
+| v0.15.0 | [bodies/v0.15.0.md](./bodies/v0.15.0.md) |
 | v0.14.0 | [bodies/v0.14.0.md](./bodies/v0.14.0.md) |
 | v0.13.0 | [bodies/v0.13.0.md](./bodies/v0.13.0.md) |
 | v0.12.1 | [bodies/v0.12.1.md](./bodies/v0.12.1.md) |

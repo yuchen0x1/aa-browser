@@ -2,6 +2,12 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
+## v0.15.0 — 2026-11-24
+
+- **Renderer recovery**: crashed or unresponsive tabs now expose a recovery state, perform bounded reload recovery, and report failure instead of silently remaining unusable.
+- **Task state machine**: added a strict, auditable task lifecycle with recovery reasons, retry limits, and confirmation gates for high-risk retries.
+- **Compatibility**: recovery metadata is optional in `TabInfo`, so existing MCP clients continue to work.
+
 ## v0.14.0 — 2026-11-23
 
 - **统一后台窗口策略**：新增 `visible`、`background`、`minimized`、`hidden` 和 `background-visual` 五种真实 Electron 模式；切换模式不重建标签、不破坏 Cookie、Storage 或登录态。
@@ -9,14 +15,14 @@
 - **人工接管锁**：预览面板和 `browser_window takeover/release` 可暂停/交还 AI，暂停期间仅允许释放和任务管理控制调用，避免 AI 与人工输入竞态。
 - **后台任务中心**：新增 `browser_tasks`，支持按 MCP 客户端列出并发调用、取消、暂停和恢复；原有按标签队列与渲染租约继续生效。
 - **输入遥测与审计**：后台点击、拖拽、输入位置进入预览元数据；拖拽改用 Chromium `dragIntercepted` 返回的原生 DataTransfer 数据，不再发送合成文本。新增 `docs/BACKGROUND_CONTROL.md`，记录 15 项后台能力审计、特殊网站策略和竞品取舍。
-- **回归覆盖**：真实 Electron + stdio MCP 后台套件 11 项通过，覆盖最小化 hover / 输入 / 滚动 / 原生拖放 / Enter 提交 / 截图、隐藏预览、窗口模式切换、审批唤醒、人工接管与释放、多客户端隔离、任务取消与队列释放、Windows 遮挡窗口；桌面回归 58/58、Windows 30 分钟 soak（`timerDelta` 1802、预览 3531 帧、历史与磁盘各 20 张、私有内存末次低于首次、Win32 前台窗口始终不是浏览器）和 DPI 100%–200% 矩阵均通过。物理多显示器、真实 DRM、第三方登录/2FA、生产签名、升级/回滚与崩溃注入恢复仍未验证。
+- **回归覆盖**：真实 Electron + stdio MCP 后台套件 11 项通过，覆盖最小化 hover / 输入 / 滚动 / 原生拖放 / Enter 提交 / 截图、隐藏预览、窗口模式切换、审批唤醒、人工接管与释放、多客户端隔离、任务取消与队列释放、Windows 遮挡窗口；桌面回归 58/58、Windows 30 分钟 soak 和 DPI 100%–200% 矩阵均通过。物理多显示器、真实 DRM、第三方登录/2FA、生产签名、升级/回滚与崩溃注入恢复仍未验证。
 
 ### 工作流与 CI 修复
 
-- **CI 拆分为 static / unit / desktop / release 四个 job**：静态检查与 Node-only 套件不再等待双平台 Electron，任一平台失败不再把其余 16 个套件直接标成 skipped；单个套件失败会写进 `::error::` 分组，一次运行即可看到完整失败面。
-- **隐藏窗口预览回归改为按平台断言**：ubuntu-24.04 + Xvfb 的桌面没有可供 `capturePage`/CDP 使用的合成表面，实测三种截图路径全部超时。Windows 仍断言真实非空预览帧；其它平台断言窗口确实隐藏、监控以可诊断的错误收尾而非静默挂死，出帧能力由 `background` 模式继续覆盖。
-- **PR 触发收窄到 `main` 并取消过期运行**：`pull_request` 不再对任意目标分支触发，同一 PR 的新推送会取消旧运行，`main` 推送与标签构建仍保持排队。
-- **删除 `sync-release-readme.yml`**：其 `workflow_run` 触发在 CI 失败时必然 skip、每周固定跑一次空转，替换为 `release-verify.yml`（在 Release 发布、标签推送和每周定时上校验资产、摘要、元数据与正文归档）以及独立的 `audit.yml`（每周依赖审计）。
+- **CI 拆分为 static / unit / desktop / release 四个 job**：静态检查与 Node-only 套件不再等待双平台 Electron，任一平台失败不再把其余套件直接标成 skipped。
+- **隐藏窗口预览回归改为按平台断言**：Linux 无合成表面时报告可诊断错误；Windows 仍断言真实非空预览帧。
+- **PR 触发收窄到 `main` 并取消过期运行**：同一 PR 的新推送会取消旧运行，`main` 推送与标签构建仍保持排队。
+- **发布校验工作流**：使用 `release-verify.yml` 校验资产、摘要、元数据与正文归档，并由独立 `audit.yml` 执行依赖审计。
 
 ## v0.13.0 — 2026-11-23
 

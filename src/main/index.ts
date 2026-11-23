@@ -1121,6 +1121,7 @@ app.whenReady().then(async () => {
   tabManager = new TabManager(newtabUrl(), searchUrlBase())
   finder = new PageFinder(tabManager, pushState)
   tabManager.onChange = onTabChange
+  tabManager.onRecovery = () => pushState()
   tabManager.isWindowForeground = () => !!win && win.isVisible() && !win.isMinimized() && win.isFocused()
   tabManager.isWindowMinimized = () => !!win && win.isMinimized()
   tabManager.isViewAttached = (view) => !!win && !win.isDestroyed() && win.contentView.children.includes(view)

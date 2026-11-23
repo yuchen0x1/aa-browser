@@ -1,6 +1,17 @@
 /** 共享类型定义：主进程 / 渲染进程 / CLI 三方共用的协议契约 */
 
 /** 浏览器外壳 UI 需要的标签信息 */
+export type TabRecoveryStatus = 'healthy' | 'recovering' | 'recovered' | 'failed'
+
+export interface TabRecoveryInfo {
+  status: TabRecoveryStatus
+  attempts: number
+  reason?: 'crash' | 'unresponsive'
+  lastAttemptAt?: number
+  recoveredAt?: number
+  error?: string
+}
+
 export interface TabInfo {
   id: string
   /** 标签创建时间（毫秒时间戳） */
@@ -16,6 +27,7 @@ export interface TabInfo {
   restored?: boolean
   /** 当前 MCP 连接拥有的标签；未归属标签可由第一个使用它的 Agent 认领。 */
   agentClientId?: number
+  recovery?: TabRecoveryInfo
   canBack: boolean
   canForward: boolean
 }

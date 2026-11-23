@@ -61,7 +61,7 @@ jobs:
             test:security test:updater test:update-restart test:release \
             test:installer test:bridge test:bridge-connection-race \
             test:bridge-lifecycle test:bridge-restart-replay \
-            test:agent-cancellation test:session-permissions test:approval-parity
+            test:agent-cancellation test:task-center test:session-permissions test:approval-parity
           do
             echo "::group::$suite"
             if npm run "$suite"; then echo "::endgroup::"; else echo "::error::$suite failed"; failed+=("$suite"); echo "::endgroup::"; fi
