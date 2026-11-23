@@ -2,7 +2,13 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { writeJsonAtomic } from './atomic-json'
-import type { BackgroundMode } from '@shared/types'
+
+/**
+ * 本文件被多个隔离的 Node TypeScript 固件单独编译（test:stores、test:printing 等），
+ * 它们没有 @shared 路径映射。这里保留与 src/shared/types.ts 一致的字面量联合类型，
+ * 让设置存储不依赖任何路径别名；UI 与共享类型仍从单一来源导出。
+ */
+type BackgroundMode = 'visible' | 'background' | 'minimized' | 'hidden' | 'background-visual'
 
 export interface AppSettings {
   /** UI language: auto follows system/browser locale; manual values pin the catalog. */
