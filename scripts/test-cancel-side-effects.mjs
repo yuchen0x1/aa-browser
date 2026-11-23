@@ -149,7 +149,7 @@ try {
         doStorage: (...args) => { calls.push('storageDispatch'); return actions.doStorage(...args) },
         doUploadFile: (...args) => { calls.push('uploadDispatch'); return actions.doUploadFile(...args) }
       }, './frames': frames, './evidence': evidence,
-      './tabs': {}, './network': {}, './dialogs': {}, './assertions': {}, './visual': {}, './contrast': {}, './viewport': {},
+      './tabs': {}, './network': {}, './dialogs': {}, './assertions': {}, './visual': {}, './contrast': {}, './viewport': {}, './cloudflare': {},
       './extensions': { getExtensionManager: () => ({}) }
     })
     const tools = buildTools(tabs, 'about:blank', '', {}, {}, approvals, (entry) => logs.push(entry),
