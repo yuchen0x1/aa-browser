@@ -26,7 +26,8 @@ try {
     compilerOptions: {
       target: 'ES2022', module: 'NodeNext', moduleResolution: 'NodeNext', strict: true,
       esModuleInterop: true, skipLibCheck: true, types: ['node'],
-      rootDir: path.join(root, 'src'), outDir: path.join(runDir, 'compiled')
+      rootDir: path.join(root, 'src'), outDir: path.join(runDir, 'compiled'),
+      paths: { '@shared/*': [path.join(root, 'src/shared/*')] }
     },
     files: ['main/clients.ts', 'main/downloads.ts'].map((file) => path.join(root, 'src', file))
   }))
