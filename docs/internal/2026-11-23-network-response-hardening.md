@@ -4,7 +4,7 @@
 
 本轮从实际 `main` / v0.12.0 源码继续推进 P1 网络治理，不改变 Electron、MCP 或用户数据架构。确认的缺口是：`Network.getResponseBody` 原先把完整响应交给工具层，`clipBody()` 只按字符截断，JSON、表单和授权文本可能在默认网络详情中原样进入 Agent。
 
-本轮交付 v0.12.1 候选修复：
+本轮交付并发布 v0.12.1：
 
 - `NetworkCapture.getResponseBody()` 在主进程边界按 1 MiB 字节上限截断；文本使用 UTF-8 安全边界，base64 响应按编码边界截断并保留原始大小估算。
 - `clipBody()` 区分文本、二进制和截断结果；默认对 JSON 敏感键、表单键值以及 Bearer / Basic 凭据做内容级脱敏。
@@ -26,7 +26,7 @@
 
 - Chromium CDP 返回原始响应到主进程时，原文仍可能短暂存在；本轮只保证不把超限/未脱敏原文继续穿过 MCP 边界。
 - `NetRequest` 的原始请求/响应头仍在进程内存保留；EV-014 的捕获阶段敏感值分级存储和审批后一次性取回尚未宣称完成。
-- 未在本机宣称 Authenticode、真实 Linux 安装升级、旧版回滚或公开 Release 已成功；这些证据仍需标签 CI / GitHub Release 核对。
+- 未在本机宣称 Authenticode、真实旧版升级/回滚或 Linux 实机安装；标签 CI 已完成跨平台打包、安装/MCP 冒烟和公开 Release 资产核验。
 
 ## 研究依据
 
