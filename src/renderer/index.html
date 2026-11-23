@@ -44,6 +44,10 @@
         <button id="btn-feed" type="button" class="navbtn" aria-label="查看 Agent 活动记录" title="查看 Agent 实时活动日志" aria-controls="action-feed-drawer" aria-expanded="false">
           <svg width="15" height="15" viewBox="0 0 16 16"><path d="M2.5 4h11M2.5 8h11M2.5 12h7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
         </button>
+        <button id="btn-tasks" type="button" class="navbtn" aria-label="打开后台任务中心" title="后台任务" aria-controls="task-center-panel" aria-expanded="false">
+          <svg width="15" height="15" viewBox="0 0 16 16"><path d="M2.5 3.5h2M7 3.5h6.5M2.5 8h2M7 8h6.5M2.5 12.5h2M7 12.5h6.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><path d="m2.3 3.5.7.7 1-1.2m-1.7 5 .7.7 1-1.2m-1.7 5 .7.7 1-1.2" stroke="currentColor" stroke-width="1.1" fill="none"/></svg>
+        </button>
+        <button id="btn-monitor" type="button" class="navbtn" aria-label="打开后台实时预览" title="后台实时预览" aria-controls="monitor-panel" aria-expanded="false">◉</button>
         <button id="btn-downloads" type="button" class="navbtn" aria-label="打开下载列表" title="下载" aria-controls="download-panel" aria-expanded="false">
           <svg width="15" height="15" viewBox="0 0 16 16"><path d="M8 1.5v8M4.5 6.5L8 10l3.5-3.5M2.5 13.5h11" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
@@ -100,6 +104,34 @@
             <button id="agent-activity-action" type="button" class="agent-activity-action">中断</button>
           </div>
         </div>
+      </div>
+      <div id="monitor-panel" class="monitor-panel" hidden>
+        <div class="drawer-header">
+          <span id="monitor-title">后台实时预览</span>
+          <button id="btn-close-monitor" type="button" class="drawer-close" aria-label="关闭后台实时预览">×</button>
+        </div>
+        <div class="monitor-toolbar">
+          <span id="monitor-status" role="status">未开启</span>
+          <button id="btn-monitor-takeover" type="button" class="settings-btn settings-btn-secondary">人工接管</button>
+          <button id="btn-monitor-release" type="button" class="settings-btn settings-btn-primary" hidden>交还 AI</button>
+        </div>
+        <img id="monitor-frame" class="monitor-frame" alt="后台网页实时画面" hidden />
+        <div id="monitor-meta" class="monitor-meta"></div>
+        <div id="monitor-history" class="monitor-history" aria-label="截图历史"></div>
+      </div>
+      <div id="task-center-panel" class="task-center-panel" hidden>
+        <div class="drawer-header">
+          <span id="task-center-title">后台任务中心</span>
+          <button id="btn-close-tasks" type="button" class="drawer-close" aria-label="关闭后台任务中心">×</button>
+        </div>
+        <div class="task-center-toolbar">
+          <span id="task-center-status" role="status">空闲</span>
+          <button id="btn-task-pause" type="button" class="settings-btn settings-btn-secondary">暂停</button>
+          <button id="btn-task-resume" type="button" class="settings-btn settings-btn-primary" hidden>恢复</button>
+        </div>
+        <div id="task-running-list" class="task-list task-running-list" aria-label="运行中的任务"></div>
+        <div class="task-history-heading">最近任务</div>
+        <div id="task-history-list" class="task-list task-history-list" aria-label="最近任务记录"></div>
       </div>
       <div id="settings-modal" class="settings-modal" hidden>
         <div class="settings-card" role="dialog" aria-modal="true" aria-labelledby="settings-title">
@@ -223,6 +255,23 @@
                       <input type="checkbox" id="set-restore-session" />
                       <span class="settings-switch-track" aria-hidden="true"></span>
                     </label>
+                  </div>
+                  <div class="settings-group settings-row">
+                    <div class="settings-row-text">
+                      <label id="settings-background-mode-label" class="settings-label" for="set-background-mode">后台运行模式</label>
+                      <div id="settings-background-mode-hint" class="settings-hint">只改变窗口显示方式；Cookie、Storage 与登录态保持不变。</div>
+                    </div>
+                    <div class="settings-control">
+                      <div class="settings-select-wrap">
+                        <select id="set-background-mode" class="settings-select">
+                          <option value="visible">可见（前台）</option>
+                          <option value="background">后台（不抢焦点）</option>
+                          <option value="minimized">最小化</option>
+                          <option value="hidden">隐藏</option>
+                          <option value="background-visual">后台 + 实时预览</option>
+                        </select>
+                      </div>
+                    </div>
                   </div>
                   <div class="settings-group settings-row">
                     <div class="settings-row-text">

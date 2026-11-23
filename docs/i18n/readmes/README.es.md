@@ -137,7 +137,7 @@ Una configuración escrita **no** es una conexión funcional. Verifícala con `n
 
 ## Herramientas MCP
 
-**44 herramientas** en cinco grupos: navegación y snapshot (5), interacción (9), lectura y estado (20), red y Mock (6), diagnóstico y pestañas (4). Los nombres de herramienta en el cliente pueden llevar el prefijo `mcp__aa-browser__`.
+**47 herramientas** en cinco grupos: navegación y snapshot (5), interacción (9), lectura y estado (20), red y Mock (6), diagnóstico y pestañas (7). Los nombres de herramienta en el cliente pueden llevar el prefijo `mcp__aa-browser__`.
 
 | Grupo | Herramientas |
 | --- | --- |
@@ -145,7 +145,7 @@ Una configuración escrita **no** es una conexión funcional. Verifícala con `n
 | Interacción | `browser_click`, `browser_type`, `browser_fill_form`, `browser_select_option`, `browser_drag`, `browser_hover`, `browser_scroll`, `browser_press_key`, `browser_upload_file` |
 | Lectura y estado | `browser_extract`, `browser_evaluate`, `browser_dialogs`, `browser_wait`, `browser_screenshot`, `browser_find`, `browser_get_selector`, `browser_cookies`, `browser_storage`, `browser_downloads`, `browser_pdf`, `browser_console` |
 | Red y Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
-| Diagnóstico y pestañas | `browser_performance`, `browser_resize`, `browser_tabs` |
+| Diagnóstico y pestañas | `browser_performance`, `browser_resize`, `browser_tabs`, `browser_window`, `browser_tasks`, `browser_extensions`, `browser_evidence` |
 
 Comportamiento común: la mayoría de las herramientas devuelven un snapshot junto con su resultado (`snapshot: false` lo omite), todas las herramientas excepto `browser_resize` y `browser_downloads` aceptan un `tabId`, una llamada individual expira a los 180 segundos, la aprobación espera hasta 120 segundos y los detalles de red se redactan por defecto.
 

@@ -44,12 +44,14 @@ async function testRenderer() {
     imeBoundary: 'Composition/key events exercise real renderer handlers; this is not a physical Windows IME acceptance test.',
     checks: [], errors: [], blockedRequests: []
   }
+  let stage = 'profile setup'
   try {
     assert.ok(directory, 'Launch through Node to create a disposable profile')
     const profile = path.join(directory, 'profile')
     fs.mkdirSync(profile, { recursive: true })
     app.setPath('userData', profile)
     app.setPath('sessionData', profile)
+    stage = 'Electron startup'
     await app.whenReady()
     session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
       const allowed = /^(file:|data:|about:)/.test(details.url)
@@ -59,7 +61,7 @@ async function testRenderer() {
     const initial = {
       searchEngine: 'https://search.fixture.test/?q=', locale: 'en-US', theme: 'dark',
       fullSnapshot: true, requireOperationApproval: true, isolatedSessions: true,
-      restoreSession: true, autoUpdate: false, updateChannel: 'beta',
+      restoreSession: true, backgroundMode: 'background', autoUpdate: false, updateChannel: 'beta',
       downloadDir: 'X:/fixture-downloads', allowedSites: ['https://allowed.fixture.test']
     }
     let settings = structuredClone(initial)
@@ -133,6 +135,7 @@ async function testRenderer() {
       })
     }
     const boot = hold('aa:settings-get')
+    stage = 'create renderer window'
     win = new BrowserWindow({
       width: 1200, height: 800, show: true,
       webPreferences: { preload, contextIsolation: true, sandbox: true, nodeIntegration: false, backgroundThrottling: false }
@@ -150,6 +153,12 @@ async function testRenderer() {
     }
     const flush = () => run(() => new Promise((resolve) => setTimeout(resolve, 40)))
     function record(name) { report.checks.push(name); console.log(`PASS: ${name}`) }
+    async function captureEvidence(name) {
+      await delay(400)
+      const image = await win.webContents.capturePage(undefined, { stayHidden: true })
+      assert.ok(!image.isEmpty(), `${name}: compositor returned an empty screenshot`)
+      fs.writeFileSync(path.join(directory, name), image.toPNG())
+    }
     async function click(selector) {
       const point = await run((value) => {
         const element = document.querySelector(value)
@@ -183,6 +192,7 @@ async function testRenderer() {
       approval: document.querySelector('#set-op-approval').checked,
       isolated: document.querySelector('#set-isolated-sessions').checked,
       restore: document.querySelector('#set-restore-session').checked,
+      backgroundMode: document.querySelector('#set-background-mode').value,
       allowedSites: document.querySelector('#set-allowed-sites').value,
       clientText: document.querySelector('#set-client-list').textContent,
       clientResult: document.querySelector('#set-client-result').textContent,
@@ -227,6 +237,7 @@ async function testRenderer() {
         }
       }, locale, theme)
     }
+    stage = 'load compiled renderer'
     await win.loadFile(page)
     await until(() => boot.entered, 'startup settings request')
     await run(() => {
@@ -251,7 +262,8 @@ async function testRenderer() {
     loaded.resolve(view())
     await until(() => agent.entered, 'held agent-info')
     await assertLocked('agent-info pending')
-    fs.writeFileSync(path.join(directory, 'settings-loading.png'), (await win.webContents.capturePage()).toPNG())
+    stage = 'capture settings loading screen'
+    await captureEvidence('settings-loading.png')
     agent.resolve(null)
     await waitReady()
     const populated = await snapshot()
@@ -259,8 +271,10 @@ async function testRenderer() {
     assert.equal(populated.approval, true)
     assert.equal(populated.isolated, true)
     assert.equal(populated.restore, true)
+    assert.equal(populated.backgroundMode, 'background')
     assert.equal(populated.allowedSites, initial.allowedSites.join('\n'))
-    fs.writeFileSync(path.join(directory, 'settings-ready.png'), (await win.webContents.capturePage()).toPNG())
+    stage = 'capture settings ready screen'
+    await captureEvidence('settings-ready.png')
     record('Immediate lock across settings-open/settings-get/agent-info; forced and native early saves blocked')
     record('Duplicate opening while loading starts only one IPC lifecycle')
 
@@ -602,7 +616,7 @@ async function testRenderer() {
     olderStartup.resolve(view({ locale: 'en-US', theme: 'dark' }))
     await flush()
     await assertAppearance('zh-CN', 'light')
-    fs.writeFileSync(path.join(directory, 'settings-late-save.png'), (await win.webContents.capturePage()).toPNG())
+    await captureEvidence('settings-late-save.png')
     record('Save committed before close adopts late acknowledgement while hidden; older startup cannot undo it')
 
     // A newer valid response establishes the baseline; older save acknowledgements cannot move it backwards.
@@ -659,6 +673,7 @@ async function testRenderer() {
     app.exit(0)
   } catch (error) {
     report.status = 'FAIL'
+    report.stage = stage
     report.error = error.stack ?? String(error)
     console.error(error)
     if (directory) fs.writeFileSync(path.join(directory, 'result.json'), JSON.stringify(report, null, 2))

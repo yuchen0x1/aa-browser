@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { writeJsonAtomic } from './atomic-json'
+import type { BackgroundMode } from '@shared/types'
 
 export interface AppSettings {
   /** UI language: auto follows system/browser locale; manual values pin the catalog. */
@@ -26,6 +27,8 @@ export interface AppSettings {
   updateChannel: 'stable' | 'beta'
   /** 重启后恢复上次打开的普通标签页（隔离标签和内部页不恢复） */
   restoreSession: boolean
+  /** Electron 窗口运行策略；只影响显示方式，不影响会话数据。 */
+  backgroundMode: BackgroundMode
 }
 
 const DEFAULTS: AppSettings = {
@@ -39,7 +42,8 @@ const DEFAULTS: AppSettings = {
   isolatedSessions: false,
   autoUpdate: true,
   updateChannel: 'stable',
-  restoreSession: true
+  restoreSession: true,
+  backgroundMode: 'visible'
 }
 
 const PRESETS: { label: string; url: string }[] = [
@@ -61,6 +65,9 @@ function validSearchEngine(value: unknown): value is string {
 function normalizeSettings(value: unknown): AppSettings {
   const raw = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
   const theme = raw.theme === 'light' || raw.theme === 'dark' || raw.theme === 'system' ? raw.theme : DEFAULTS.theme
+  const backgroundMode: BackgroundMode = raw.backgroundMode === 'background' || raw.backgroundMode === 'minimized' || raw.backgroundMode === 'hidden' || raw.backgroundMode === 'background-visual'
+    ? raw.backgroundMode
+    : 'visible'
   return {
     locale: raw.locale === 'zh-CN' || raw.locale === 'en-US' ? raw.locale : 'auto',
     theme,
@@ -72,6 +79,7 @@ function normalizeSettings(value: unknown): AppSettings {
     autoUpdate: typeof raw.autoUpdate === 'boolean' ? raw.autoUpdate : DEFAULTS.autoUpdate,
     updateChannel: raw.updateChannel === 'beta' ? 'beta' : 'stable',
     restoreSession: typeof raw.restoreSession === 'boolean' ? raw.restoreSession : DEFAULTS.restoreSession,
+    backgroundMode,
     allowedSites: Array.isArray(raw.allowedSites) ? raw.allowedSites.filter((site): site is string => typeof site === 'string').map((site) => site.trim()).filter(Boolean) : []
   }
 }
@@ -105,6 +113,7 @@ export class SettingsStore {
     if (typeof patch.autoUpdate === 'boolean') next.autoUpdate = patch.autoUpdate
     if (patch.updateChannel === 'stable' || patch.updateChannel === 'beta') next.updateChannel = patch.updateChannel
     if (typeof patch.restoreSession === 'boolean') next.restoreSession = patch.restoreSession
+    if (patch.backgroundMode === 'visible' || patch.backgroundMode === 'background' || patch.backgroundMode === 'minimized' || patch.backgroundMode === 'hidden' || patch.backgroundMode === 'background-visual') next.backgroundMode = patch.backgroundMode
     if (Array.isArray(patch.allowedSites)) {
       next.allowedSites = patch.allowedSites
         .filter((site): site is string => typeof site === 'string')

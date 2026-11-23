@@ -137,7 +137,7 @@ A written config is **not** a working connection. Verify with `node install.mjs 
 
 ## MCP tools
 
-**44 tools** in five groups: navigation & snapshot (5), interaction (9), read & state (20), network & Mock (6), diagnostics & tabs (4). Client tool names may carry a `mcp__aa-browser__` prefix.
+**47 tools** in five groups: navigation & snapshot (5), interaction (9), read & state (20), network & Mock (6), diagnostics & tabs (7). Client tool names may carry a `mcp__aa-browser__` prefix.
 
 | Group | Tools |
 | --- | --- |
@@ -145,7 +145,7 @@ A written config is **not** a working connection. Verify with `node install.mjs 
 | Interaction | `browser_click`, `browser_type`, `browser_fill_form`, `browser_select_option`, `browser_drag`, `browser_hover`, `browser_scroll`, `browser_press_key`, `browser_upload_file` |
 | Read & state | `browser_extract`, `browser_evaluate`, `browser_dialogs`, `browser_wait`, `browser_screenshot`, `browser_find`, `browser_get_selector`, `browser_cookies`, `browser_storage`, `browser_downloads`, `browser_pdf`, `browser_console` |
 | Network & Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
-| Diagnostics & tabs | `browser_performance`, `browser_resize`, `browser_tabs` |
+| Diagnostics & tabs | `browser_performance`, `browser_resize`, `browser_tabs`, `browser_window`, `browser_tasks`, `browser_extensions`, `browser_evidence` |
 
 Shared behaviour: most tools return a snapshot with their result (`snapshot: false` skips it), every tool except `browser_resize` and `browser_downloads` accepts a `tabId`, a single call times out after 180 seconds, approval waits up to 120 seconds, and network details are redacted by default.
 

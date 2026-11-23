@@ -1,4 +1,4 @@
-import { app, BaseWindow, WebContentsView, ipcMain, Menu, MenuItem, shell, clipboard, powerMonitor, nativeTheme, dialog } from 'electron'
+import { app, BaseWindow, WebContentsView, ipcMain, Menu, MenuItem, shell, clipboard, powerMonitor, nativeTheme, dialog, Notification } from 'electron'
 import type { MenuItemConstructorOptions } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
@@ -21,12 +21,14 @@ import { ApprovalManager } from './approvals'
 import { applyPermissionPolicy, clearIsolatedPartition, sweepStalePartitions } from './sessions'
 import { session } from 'electron'
 import type { PagePointerForward, UiState } from '@shared/types'
+import type { BackgroundMode } from '@shared/types'
 import { contextMenuLabels } from '@shared/menu-labels'
 import { UpdateManager } from './updater'
 import { clearUpdateRestartMarker, writeUpdateRestartMarker } from './update-restart'
 import { PageFinder } from './page-finder'
 import { printPage } from './printing'
 import { getMainLocale } from './locale'
+import { BrowserMonitor } from './monitor'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const VERSION = app.getVersion()
@@ -71,6 +73,7 @@ let overlayHeight = 0
 let finder: PageFinder | null = null
 const approvals = new ApprovalManager()
 let updater: UpdateManager | null = null
+let monitor: BrowserMonitor | null = null
 /** 由 whenReady 注入：立即写入跨会话标签记录（final=true 时允许清空过期记录） */
 let flushSessionRecord: ((final?: boolean) => void) | null = null
 /** 由 whenReady 注入：标签变化后延迟写入跨会话记录 */
@@ -109,7 +112,9 @@ function rendererAssets(): { preload: string; index: string } {
 }
 
 function layout(): void {
-  if (!win || !chromeView) return
+  // 监控/视觉截图可能比窗口晚完成一拍；窗口销毁后的迟到回调不能再去读
+  // 已销毁的 BaseWindow，否则会抛出未处理的 Promise 异常。
+  if (!win || win.isDestroyed() || !chromeView || chromeView.webContents.isDestroyed()) return
   const currentSize = win.getContentBounds()
   if (!win.isMinimized() && currentSize.width > 0 && currentSize.height > CHROME_HEIGHT) lastContentSize = currentSize
   const { width, height } = lastContentSize
@@ -163,6 +168,8 @@ async function syncBackgroundViewports(): Promise<void> {
     const wc = tab.view.webContents
     if (wc.isDestroyed() || backgroundViewportTabs.has(wc) || !wc.debugger.isAttached()) continue
     try {
+      // 若监控或视觉工具刚扩容过视口，先清掉再设回记忆尺寸，避免叠加出错误布局。
+      await wc.debugger.sendCommand('Emulation.clearDeviceMetricsOverride')
       await wc.debugger.sendCommand('Emulation.setDeviceMetricsOverride', {
         width, height, deviceScaleFactor: 1, mobile: false, screenWidth: width, screenHeight: height
       })
@@ -191,11 +198,11 @@ function updateBackgroundViewports(): void {
 }
 
 function pushState(): void {
-  if (!chromeView) return
+  if (!chromeView || chromeView.webContents.isDestroyed()) return
   layout()
   updateBackgroundViewports()
   const state: UiState = {
-    tabs: tabManager?.infos() ?? [],
+    tabs: tabManager?.infosForUi() ?? [],
     activeId: tabManager?.activeId ?? null,
     agentCount,
     agentVerifiedCount,
@@ -208,9 +215,11 @@ function pushState(): void {
     update: updater?.getState(),
     find: finder?.getState(),
     canReopenClosed: tabManager?.canReopenClosed ?? false,
-  // windowHeight 反映真实窗口（最小化时为 0）；后台布局使用记忆中的最后有效尺寸。
-  windowHeight: win?.getContentBounds().height
-}
+    // windowHeight 反映真实窗口（最小化时为 0）；后台布局使用记忆中的最后有效尺寸。
+    windowHeight: win?.getContentBounds().height,
+    backgroundMode: currentWindowMode(),
+    monitor: monitor?.getState()
+  }
   chromeView.webContents.send('aa:state', state)
 }
 
@@ -438,6 +447,60 @@ function revealWindow(): void {
   if (!current.isFocused()) current.flashFrame(true)
 }
 
+function currentWindowMode(): BackgroundMode {
+  return getSettingsStore().get().backgroundMode
+}
+
+/** 把用户选择映射到 Electron 的真实窗口 API；不向页面注入可见性伪造。 */
+function applyWindowMode(mode: BackgroundMode): BackgroundMode {
+  const current = win
+  if (!current || current.isDestroyed()) return mode
+  const showInactive = (): void => {
+    const candidate = current as BaseWindow & { showInactive?: () => void }
+    if (typeof candidate.showInactive === 'function') candidate.showInactive()
+    else current.show()
+  }
+  try {
+    if (mode === 'visible') {
+      current.setFocusable(true)
+      if (current.isMinimized()) current.restore()
+      if (!current.isVisible()) current.show()
+      current.focus()
+    } else if (mode === 'background' || mode === 'background-visual') {
+      if (current.isMinimized()) {
+        // Windows restore() activates the minimized window. Temporarily disable
+        // focusability so it can be restored without taking the foreground.
+        current.setFocusable(false)
+        try {
+          current.restore()
+          current.showInactive()
+        } finally {
+          setImmediate(() => {
+            if (!current.isDestroyed()) current.setFocusable(true)
+          })
+        }
+        return mode
+      }
+      showInactive()
+    } else if (mode === 'minimized') {
+      if (!current.isVisible()) showInactive()
+      current.minimize()
+    } else if (mode === 'hidden') {
+      current.hide()
+    }
+  } catch {
+    /* 窗口正在关闭；保留设置供下次启动使用。 */
+  }
+  return mode
+}
+
+function setWindowMode(mode: BackgroundMode): BackgroundMode {
+  const next = getSettingsStore().set({ backgroundMode: mode }).backgroundMode
+  applyWindowMode(next)
+  pushState()
+  return next
+}
+
 function createWindow(): void {
   const window = new BaseWindow({
     width: 1280,
@@ -463,8 +526,10 @@ function createWindow(): void {
   // chrome UI 加载完成后再显示窗口，避免白闪（见下方 chromeView 创建处）
   window.on('resize', pushState)
   // Windows 最小化不一定伴随 resize；显式接住，让后台视口覆盖及时生效。
-  window.on('minimize', pushState)
-  window.on('restore', pushState)
+  window.on('minimize', () => { monitor?.setWindowVisible(false); pushState() })
+  window.on('restore', () => { monitor?.setWindowVisible(window.isVisible()); pushState() })
+  window.on('show', () => { monitor?.setWindowVisible(true); pushState() })
+  window.on('hide', () => { monitor?.setWindowVisible(false); pushState() })
   window.on('focus', () => {
     window.flashFrame(false)
     void updater?.checkIfDue()
@@ -473,6 +538,8 @@ function createWindow(): void {
     // 两种退出路径都会关闭窗口；在清理 WebContentsView 之前保留最终标签快照。
     try { flushSessionRecord?.(true) } catch { /* 会话记录是尽力而为，不阻塞退出 */ }
     scheduleSessionSave = () => {}
+    monitor?.stop()
+    monitor = null
     win = null
     const cv = chromeView
     chromeView = null
@@ -494,13 +561,15 @@ function createWindow(): void {
   win.contentView.addChildView(chromeView)
   const cv = chromeView
   cv.setBackgroundColor('#00000000')
-  // chrome UI 加载完成后再显示窗口，避免白闪
-  if (!startInBackground) {
+  // chrome UI 加载完成后再显示窗口，避免白闪。
+  // 只在启动策略明确为 visible 时执行；hidden/minimized/background 都不能被首屏兜底
+  // 重新 show()，否则用户选择的静默启动会被 setTimeout 覆盖。
+  if (!startInBackground && getSettingsStore().get().backgroundMode === 'visible') {
     const showInitially = (): void => {
       clearTimeout(fallback)
       cv.webContents.removeListener('did-finish-load', showInitially)
       // 启动兜底只能执行一次；不要在用户已最小化后重新显示窗口。
-      if (!window.isDestroyed() && !window.isVisible() && !window.isMinimized()) window.show()
+      if (!window.isDestroyed() && !window.isVisible() && !window.isMinimized() && getSettingsStore().get().backgroundMode === 'visible') window.show()
     }
     const fallback = setTimeout(showInitially, 2500)
     cv.webContents.once('did-finish-load', showInitially)
@@ -537,7 +606,7 @@ function registerIpc(): void {
 
   ipcMain.handle('aa:get-state', (event) => {
     return guard(event, null, () => ({
-      tabs: tabManager?.infos() ?? [],
+      tabs: tabManager?.infosForUi() ?? [],
       activeId: tabManager?.activeId ?? null,
       agentCount,
       agentVerifiedCount,
@@ -550,7 +619,9 @@ function registerIpc(): void {
       update: updater?.getState(),
       find: finder?.getState(),
       canReopenClosed: tabManager?.canReopenClosed ?? false,
-      windowHeight: win?.getContentBounds().height
+      windowHeight: win?.getContentBounds().height,
+      backgroundMode: currentWindowMode(),
+      monitor: monitor?.getState()
     } satisfies UiState))
   })
   ipcMain.handle('aa:tab-new', (event, url?: string) => {
@@ -700,6 +771,40 @@ function registerIpc(): void {
       togglePageDevTools(chromeView?.webContents ?? event.sender)
     })
   })
+  ipcMain.handle('aa:window-mode', (event, mode?: unknown) => {
+    return guard(event, currentWindowMode(), () => {
+      if (mode === undefined) return currentWindowMode()
+      if (mode !== 'visible' && mode !== 'background' && mode !== 'minimized' && mode !== 'hidden' && mode !== 'background-visual') return currentWindowMode()
+      return setWindowMode(mode)
+    })
+  })
+  ipcMain.handle('aa:monitor-start', (event, tabId?: unknown) => {
+    return guard(event, null, () => monitor?.start(typeof tabId === 'string' ? tabId : undefined) ?? null)
+  })
+  ipcMain.handle('aa:monitor-stop', (event) => guard(event, null, () => monitor?.stop() ?? null))
+  ipcMain.handle('aa:monitor-history-frame', (event, capturedAt: unknown) => {
+    return guard(event, null, () => monitor?.historyFrame(Number(capturedAt)) ?? null)
+  })
+  ipcMain.handle('aa:monitor-view', (event, visible: unknown) => {
+    if (!isTrustedSender(event) || typeof visible !== 'boolean' || !monitor) return false
+    monitor.setPreviewRequested(visible)
+    return true
+  })
+  ipcMain.handle('aa:monitor-takeover', (event) => {
+    if (!isTrustedSender(event) || !monitor) return null
+    const next = monitor.takeover()
+    setImmediate(() => {
+      approvals.interrupt()
+      agentServer?.pause()
+    })
+    return next
+  })
+  ipcMain.handle('aa:monitor-release', (event) => {
+    if (!isTrustedSender(event) || !monitor) return null
+    approvals.resume()
+    agentServer?.resume()
+    return monitor.releaseToAi()
+  })
   ipcMain.handle('aa:approval-decide', (event, id: string, allowed: boolean) => {
     if (!isTrustedSender(event)) return false
     return approvals.decide(String(id), allowed === true)
@@ -720,6 +825,22 @@ function registerIpc(): void {
   ipcMain.handle('aa:agent-cancel-call', (event, callId: number, client?: number) => {
     if (!isTrustedSender(event)) return false
     return agentServer?.cancelCall(callId, client) ?? false
+  })
+  ipcMain.handle('aa:tasks-control', (event, action: unknown, callId?: unknown, client?: unknown) => {
+    return guard(event, false, () => {
+      if (action === 'cancel') return agentServer?.cancelCall(Number(callId), client === undefined ? undefined : Number(client)) ?? false
+      if (action === 'pause') {
+        approvals.pauseIndefinitely()
+        agentServer?.pause()
+        return true
+      }
+      if (action === 'resume') {
+        approvals.resume()
+        agentServer?.resume()
+        return true
+      }
+      return false
+    })
   })
   approvals.onChange = () => {
     if (approvals.isInterrupted()) {
@@ -784,6 +905,10 @@ function registerIpc(): void {
         return null
       }
       updater?.refreshSettings()
+      if ((patch as Record<string, unknown> | null)?.['backgroundMode'] === 'visible' || (patch as Record<string, unknown> | null)?.['backgroundMode'] === 'background' || (patch as Record<string, unknown> | null)?.['backgroundMode'] === 'minimized' || (patch as Record<string, unknown> | null)?.['backgroundMode'] === 'hidden' || (patch as Record<string, unknown> | null)?.['backgroundMode'] === 'background-visual') {
+        applyWindowMode(result.backgroundMode)
+        if (result.backgroundMode === 'background-visual' && !monitor?.getState().enabled) monitor?.start(tabManager?.active()?.id)
+      }
       // 关闭恢复时立刻删除旧记录；重新开启时立即记录当前标签，避免下次启动恢复过期页面。
       if (!result.restoreSession) getSessionStore().clear()
       else if ((patch as Record<string, unknown> | null)?.['restoreSession'] === true) flushSessionRecord?.()
@@ -907,16 +1032,19 @@ function registerIpc(): void {
 
 function onTabChange(): void {
   if (!win || !tabManager) return
-  finder?.syncActive()
-  // 先摘除旧页面，再把新页面放到外壳下面；每次切换只挂载一次。
-  const active = tabManager.active()?.view
-  const parent = win.contentView
-  for (const tab of tabManager.tabs) {
-    if (tab.view !== active && parent.children.includes(tab.view)) parent.removeChildView(tab.view)
-  }
-  if (active && !parent.children.includes(active)) parent.addChildView(active, 0)
-  pushState()
-  scheduleSessionSave()
+  tabManager.runAsUi(() => {
+    finder?.syncActive()
+    // 先摘除旧页面，再把新页面放到外壳下面；每次切换只挂载一次。
+    const active = tabManager?.activeForUi()?.view
+    const parent = win?.contentView
+    if (!parent) return
+    for (const tab of tabManager?.tabs ?? []) {
+      if (tab.view !== active && parent.children.includes(tab.view)) parent.removeChildView(tab.view)
+    }
+    if (active && !parent.children.includes(active)) parent.addChildView(active, 0)
+    pushState()
+    scheduleSessionSave()
+  })
 }
 
 app.whenReady().then(async () => {
@@ -967,6 +1095,7 @@ app.whenReady().then(async () => {
   tabManager.onChange = onTabChange
   tabManager.isWindowForeground = () => !!win && win.isVisible() && !win.isMinimized() && win.isFocused()
   tabManager.isWindowMinimized = () => !!win && win.isMinimized()
+  tabManager.shouldShowAgentTab = () => getSettingsStore().get().backgroundMode === 'visible'
   tabManager.onContextMenu = (wc) => {
     handleBeforeInput(wc)
     installPageContextMenu(wc)
@@ -981,6 +1110,13 @@ app.whenReady().then(async () => {
   }
   tabManager.onIsolatedClosed = (partition) => void clearIsolatedPartition(partition)
   tabManager.onViewDetach = (view) => detachTabView(view)
+  monitor = new BrowserMonitor({
+    getTab: (tabId) => tabId ? tabManager?.get(tabId) ?? null : tabManager?.active() ?? null,
+    emitState: () => pushState(),
+    emitFrame: (frame) => chromeView?.webContents.send('aa:monitor-frame', frame)
+  })
+  monitor.setWindowVisible(!!win && win.isVisible() && !win.isMinimized())
+  tabManager.onAgentPointer = (tab, pointer) => monitor?.recordPointer(tab.id, pointer)
   getDownloadTracker().setDirectoryProvider(() => getSettingsStore().get().downloadDir)
   // 重试是新的网络请求，必须重新过站点白名单，不能沿用创建下载时的授权
   getDownloadTracker().setUrlGuard((url) => tabManager?.isUrlAllowed(url) ?? false)
@@ -1081,6 +1217,65 @@ app.whenReady().then(async () => {
         const current = win
         if (!current || current.isDestroyed()) return { focused: false, visible: false, minimized: false }
         return { focused: current.isFocused(), visible: current.isVisible(), minimized: current.isMinimized() }
+      },
+      mode: () => currentWindowMode(),
+      setMode: (mode) => setWindowMode(mode),
+      monitorStart: (tabId) => {
+        if (!monitor) throw new Error('实时预览服务未就绪')
+        return monitor.start(tabId)
+      },
+      monitorStop: () => {
+        if (!monitor) throw new Error('实时预览服务未就绪')
+        return monitor.stop()
+      },
+      monitorState: () => monitor?.getState() ?? { enabled: false, control: 'ai', status: 'idle', frameSeq: 0, history: [] },
+      takeover: () => {
+        if (!monitor) throw new Error('人工接管服务未就绪')
+        const next = monitor.takeover()
+        // 让 takeover 自身先返回成功；下一轮事件循环再中断其它调用。
+        setImmediate(() => {
+          approvals.interrupt()
+          agentServer?.pause()
+        })
+        return next
+      },
+      releaseToAi: () => {
+        if (!monitor) throw new Error('人工接管服务未就绪')
+        approvals.resume()
+        agentServer?.resume()
+        return monitor.releaseToAi()
+      },
+      assertAiControl: () => {
+        if (monitor?.getState().control === 'human') throw new Error('当前处于人工接管，AI 操作已锁定；请先调用 browser_window action=release。')
+      },
+      taskState: (clientId) => {
+        const activity = agentServer?.activity() ?? { active: false, paused: false, calls: [] }
+        if (clientId === undefined) return activity
+        const calls = (activity.calls ?? []).filter((call) => call.client === clientId)
+        return {
+          ...activity,
+          active: calls.length > 0,
+          paused: activity.paused || !!agentServer?.isClientPaused(clientId),
+          tool: calls[0]?.tool,
+          startedAt: calls[0]?.startedAt,
+          calls,
+          tasks: activity.tasks?.filter((task) => task.client === clientId)
+        }
+      },
+      cancelTask: (id, client) => agentServer?.cancelCall(id, client) ?? false,
+      pauseTasks: (clientId, exceptCallId) => {
+        if (clientId !== undefined) {
+          setImmediate(() => agentServer?.pauseClient(clientId, exceptCallId))
+          return
+        }
+        setImmediate(() => {
+          approvals.pauseIndefinitely()
+          agentServer?.pause()
+        })
+      },
+      resumeTasks: (clientId) => {
+        if (clientId !== undefined) agentServer?.resumeClient(clientId)
+        else { approvals.resume(); agentServer?.resume() }
       }
     },
     getDownloadTracker(),
@@ -1097,7 +1292,6 @@ app.whenReady().then(async () => {
     tools,
     (n, verifiedCount) => {
       agentCount = n
-      tabManager?.setAgentConnected(n > 0)
       agentVerifiedCount = verifiedCount
       bridgeState = n > 0 ? 'connected' : 'waiting'
       pushState()
@@ -1105,20 +1299,58 @@ app.whenReady().then(async () => {
     VERSION,
     approvals,
     (activity) => {
+      const wasActive = agentActivity.active
       agentActivity = activity
+      monitor?.recordTask(activity.active ? activity.tool : activity.paused ? 'AI 已暂停' : undefined)
+      if (wasActive && !activity.active && !activity.paused && win && !win.isFocused() && Notification.isSupported()) {
+        const latest = activity.tasks?.find((task) => task.status === 'completed' || task.status === 'failed')
+        if (latest) {
+          try {
+            const failed = latest.status === 'failed'
+            new Notification({
+              title: failed ? 'Aa Browser 后台任务失败' : 'Aa Browser 后台任务完成',
+              body: failed ? `${latest.tool}: ${latest.error || '操作失败'}` : `${latest.tool} 已完成。`
+            }).show()
+          } catch { /* Desktop notification support varies by platform. */ }
+        }
+      }
       pushState()
+    },
+    (clientId, operation) => {
+      const manager = tabManager
+      return manager ? manager.runAsAgent(clientId, operation) : operation()
+    },
+    (clientId) => {
+      // A bridge reconnect with the same session id is common (app/window restart
+      // does not restart an MCP host). Keep ownership for a grace period, then
+      // release it so an abandoned client does not permanently hide its tabs.
+      setTimeout(() => {
+        if (agentServer?.isClientConnected(clientId)) return
+        tabManager?.releaseAgentClient(clientId)
+        pushState()
+      }, 60_000).unref()
     }
   )
   void agentServer.start().then(() => {
     // 新实例已经写好自己的连接信息：更新重启窗口结束，桥可以恢复正常流程。
     clearUpdateRestartMarker(discoveryFile())
     if (agentCount === 0) bridgeState = 'waiting'
+    agentActivity = agentServer?.activity() ?? agentActivity
     pushState()
     console.log('[aa-browser] agent server ready')
   }).catch(() => {
     bridgeState = 'disconnected'
     pushState()
   })
+  // 启动环境变量只覆盖本次冷启动；持久化模式仍用于普通启动。
+  if (startInBackground) applyWindowMode('hidden')
+  else {
+    const mode = currentWindowMode()
+    applyWindowMode(mode)
+    if (mode === 'background-visual' && monitor && !monitor.getState().enabled) {
+      try { monitor.start(tabManager?.active()?.id) } catch { /* 没有可恢复标签时等待用户选择 */ }
+    }
+  }
 })
 
 app.on('before-quit', () => {

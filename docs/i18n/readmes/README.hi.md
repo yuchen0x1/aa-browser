@@ -137,7 +137,7 @@ npm start          # launch the built app
 
 ## MCP टूल्स
 
-पाँच समूहों में **44 टूल**: नेविगेशन और स्नैपशॉट (5), इंटरैक्शन (9), रीड और स्टेट (20), नेटवर्क और Mock (6), डायग्नोस्टिक्स और टैब (4)। क्लाइंट में टूल नामों पर `mcp__aa-browser__` प्रीफ़िक्स हो सकता है।
+पाँच समूहों में **47 टूल**: नेविगेशन और स्नैपशॉट (5), इंटरैक्शन (9), रीड और स्टेट (20), नेटवर्क और Mock (6), डायग्नोस्टिक्स और टैब (7)। क्लाइंट में टूल नामों पर `mcp__aa-browser__` प्रीफ़िक्स हो सकता है।
 
 | समूह | टूल |
 | --- | --- |
@@ -145,7 +145,7 @@ npm start          # launch the built app
 | इंटरैक्शन | `browser_click`, `browser_type`, `browser_fill_form`, `browser_select_option`, `browser_drag`, `browser_hover`, `browser_scroll`, `browser_press_key`, `browser_upload_file` |
 | रीड और स्टेट | `browser_extract`, `browser_evaluate`, `browser_dialogs`, `browser_wait`, `browser_screenshot`, `browser_find`, `browser_get_selector`, `browser_cookies`, `browser_storage`, `browser_downloads`, `browser_pdf`, `browser_console` |
 | नेटवर्क और Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
-| डायग्नोस्टिक्स और टैब | `browser_performance`, `browser_resize`, `browser_tabs` |
+| डायग्नोस्टिक्स और टैब | `browser_performance`, `browser_resize`, `browser_tabs`, `browser_window`, `browser_tasks`, `browser_extensions`, `browser_evidence` |
 
 साझा व्यवहार: ज़्यादातर टूल अपने नतीजे के साथ एक स्नैपशॉट लौटाते हैं (`snapshot: false` उसे छोड़ देता है), `browser_resize` और `browser_downloads` के अलावा हर टूल `tabId` स्वीकार करता है, एक कॉल 180 सेकंड बाद टाइम-आउट हो जाती है, मंज़ूरी 120 सेकंड तक प्रतीक्षा करती है, और नेटवर्क विवरण डिफ़ॉल्ट रूप से रीडैक्ट रहते हैं।
 

@@ -32,11 +32,11 @@
 
 <!-- github-release:start -->
 
-**[v0.13.0](./release-notes-v0.13.0.md)** · 2026-11-23 · 最新正式版
+**[v0.14.0](./release-notes-v0.14.0.md)** · 2026-11-23 · 最新正式版
 
-本版新增 `browser_cloudflare` 验证辅助：可识别跨域 Cloudflare 挑战 iframe、等待验证完成，并在显式确认后对可见复选框发送一次真实鼠标点击；不读取令牌、不改 Cookie，也不自动完成滑块或图片挑战。
+本版把最小化后台控制扩展为统一的后台浏览层：五种真实窗口模式、只捕获指定标签的实时预览、人工接管锁和多客户端任务中心。最小化时可继续导航、点击、输入、滚动、原生拖放和截图；拖拽使用 Chromium 返回的真实 DataTransfer 数据，不伪造网页状态或绕过站点安全检查。
 
-**上一版：[v0.12.1](./release-notes-v0.12.1.md)** · 2026-11-23
+**上一版：[v0.13.0](./release-notes-v0.13.0.md)** · 2026-11-23
 
 [全部发行记录](https://github.com/yuchen0x1/aa-browser/releases)
 
@@ -48,7 +48,7 @@
 
 它适合把**真实登录态**交给 Agent 的场景：后台运营、数据采集、回归验证、抓包排障，以及把重复的网页操作交给模型。浏览器本体照常使用，Agent 只是多出来的一个「遥控器」。
 
-一句话概括：**44 个 MCP 工具、增量快照、真实输入、本地 token 鉴权，而浏览器本体也照常上网。**
+一句话概括：**47 个 MCP 工具、增量快照、真实输入、本地 token 鉴权，而浏览器本体也照常上网。**
 
 ## 目录
 
@@ -348,7 +348,7 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 
 ## MCP 工具
 
-共 **44 个**工具，按能力分为五类：导航与快照 5 个、交互 9 个、读取与状态 20 个、网络与 Mock 6 个、诊断与标签 4 个。工具名在客户端可能带 `mcp__aa-browser__` 前缀（如 `mcp__aa-browser__browser_tabs`），以客户端实际展示为准。
+共 **47 个**工具，按能力分为五类：导航与快照 5 个、交互 9 个、读取与状态 20 个、网络与 Mock 6 个、诊断与标签 7 个。工具名在客户端可能带 `mcp__aa-browser__` 前缀（如 `mcp__aa-browser__browser_tabs`），以客户端实际展示为准。
 
 共享行为：
 
@@ -425,9 +425,13 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 | `browser_performance` | 页面性能摘要：TTFB / DOMContentLoaded / load、首绘、资源体积与慢资源、JS 堆、DOM 规模（只读诊断） |
 | `browser_resize` | 调整视口尺寸 200–5000px（响应式测试） |
 | `browser_tabs` | 列表 / 新建 / 切换 / 关闭标签页；列表附带浏览器实例、PID、版本、启动时间、标签创建时间与恢复标记；`isolated: true` 新建隔离标签；`select` 可加 `bringToFront: true` 同时恢复窗口并聚焦页面 |
+| `browser_window` | 统一窗口策略：`visible`、`background`（显示但不抢焦点）、`minimized`、`hidden`、`background-visual`；可启动只捕获指定标签的独立实时预览，并用 `takeover` / `release` 锁定或交还 AI 操作权 |
+| `browser_tasks` | 后台任务中心：列出多客户端并发调用、按客户端与调用 id 取消、暂停 / 恢复自动化；人工接管时 AI 输入会被锁定 |
 | `browser_extensions` | **加载已解压扩展**：`action=load` 传入含 `manifest.json` 的目录绝对路径（等价 Chrome「加载已解压的扩展程序」），装载到共享会话并跨重启保留；`action=list` / `action=remove` 查看（id/名称/版本/路径）与卸载。扩展对之后打开或刷新的页面生效，隔离标签不装载 |
 
 Cloudflare 验证辅助的完整流程与边界见 [`docs/CLOUDFLARE.md`](./docs/CLOUDFLARE.md)。
+
+后台运行、独立预览、人工接管和 15 项能力审计见 [`docs/BACKGROUND_CONTROL.md`](./docs/BACKGROUND_CONTROL.md)。
 
 视觉评审建议流程：先用 `browser_viewport_matrix` 跑一遍响应式矩阵（发现横向溢出），再用 `browser_contrast_audit` 找不可读文本，最后对关键页面用 `browser_visual_diff action=save` 存基线、改动后 `action=compare` 做回归对比。基线目录可用 `AA_BROWSER_BASELINE_DIR` 覆盖。
 
@@ -438,6 +442,8 @@ Cloudflare 验证辅助的完整流程与边界见 [`docs/CLOUDFLARE.md`](./docs
 ## 界面与快捷键
 
 工具栏左侧依次是后退 / 前进 / 刷新和 AI 连接状态；右侧是恢复关闭的标签页、页面查找、Agent 活动日志、下载、设置和「中断 Agent」。AI 调用浏览器工具时窗口四周会显示闪烁光圈，右下角 HUD 会显示当前工具与中断/恢复按钮；并发调用会逐条列出（含进度），每条可单独停止；地址栏支持输入网址、搜索词与历史补全（↑ / ↓ 选择，Enter 打开，Esc 取消）。Agent 每次点击时页面会闪出激光波纹，方便人观察它在点哪里。
+
+点击工具栏的「◉」可打开后台实时预览。预览只显示选中的标签页，支持人工接管/交还 AI；接管期间自动化调用会暂停，避免和人工输入竞态。窗口模式也可在设置中选择，或由 Agent 调用 `browser_window` 切换。
 
 | 快捷键 | 作用 |
 | --- | --- |

@@ -1,4 +1,4 @@
-import type { ToolContent } from '@shared/types'
+import type { ToolContent, BackgroundMode, MonitorState, AgentActivityState } from '@shared/types'
 import { TOOL_DEFS, TOOL_ANNOTATIONS } from '@shared/tool-defs.mjs'
 export { TOOL_ANNOTATIONS }
 import { checkedStateScript, fingerprintScript, jsLiteral, refLiteral, tagNameScript } from '@snapshot/scripts'
@@ -180,6 +180,18 @@ export interface WindowControl {
   /** 把浏览器窗口带到前台（最小化时先恢复）。 */
   focus?: () => void
   state?: () => { focused: boolean; visible: boolean; minimized: boolean }
+  mode?: () => BackgroundMode
+  setMode?: (mode: BackgroundMode) => BackgroundMode
+  monitorStart?: (tabId?: string) => MonitorState
+  monitorStop?: () => MonitorState
+  monitorState?: () => MonitorState
+  takeover?: () => MonitorState
+  releaseToAi?: () => MonitorState
+  assertAiControl?: () => void
+  taskState?: (clientId?: number) => AgentActivityState
+  cancelTask?: (id: number, client?: number) => boolean
+  pauseTasks?: (clientId?: number, exceptCallId?: number) => void
+  resumeTasks?: (clientId?: number) => void
 }
 
 export function buildTools(
@@ -226,6 +238,7 @@ export function buildTools(
     const sig = signal instanceof AbortSignal ? signal : undefined
     return withTabLock(tab, sig, async () => {
       assertToolRunning(sig)
+      windowCtl.assertAiControl?.()
       return run()
     })
   }
@@ -1242,7 +1255,8 @@ export function buildTools(
         }
         const lines = tabs.infos().map((t, i) => {
           const created = typeof t.createdAt === 'number' ? ` · 创建 ${new Date(t.createdAt).toISOString().slice(11, 19)}Z` : ''
-          return `${i + 1}. [${t.id}]${t.active ? ' ★活动' : ''}${t.isolated ? ' 🔒隔离' : ''}${t.restored ? ' ♻恢复' : ''} ${t.title}${created}\n   ${t.url}`
+          const owner = t.agentClientId === undefined ? '' : ` · Agent #${t.agentClientId}`
+          return `${i + 1}. [${t.id}]${t.active ? ' ★活动' : ''}${t.isolated ? ' 🔒隔离' : ''}${t.restored ? ' ♻恢复' : ''}${owner} ${t.title}${created}\n   ${t.url}`
         })
         const body = lines.length ? `共 ${lines.length} 个标签页：\n${lines.join('\n')}` : '（无标签页）'
         return { content: [text(header.length ? `${header.join('\n')}\n${body}` : body)] }
@@ -1259,8 +1273,8 @@ export function buildTools(
         const id = String(args['tabId'] ?? '')
         const t = tabs.get(id)
         if (!t) throw new ActionError(`标签不存在: ${id}（用 action=list 查看）`)
-        tabs.selectTab(id)
         const bringToFront = args['bringToFront'] === true
+        tabs.selectTab(id, bringToFront)
         if (bringToFront) {
           try {
             windowCtl.focus?.()
@@ -1299,6 +1313,90 @@ export function buildTools(
         return { content: [text(`已关闭: [${id}] ${t.title}`)] }
       }
       throw new ActionError(`未知 action: ${action}。可用 action：list、new、select、close。`)
+    }
+  })
+
+  pushTool({
+    name: 'browser_window',
+    handler: async (args) => {
+      const action = String(args['action'] ?? 'mode')
+      if (action === 'mode') {
+        if (args['mode'] !== undefined) {
+          const mode = String(args['mode']) as BackgroundMode
+          if (!['visible', 'background', 'minimized', 'hidden', 'background-visual'].includes(mode)) {
+            throw new ActionError(`未知窗口模式: ${mode}`)
+          }
+          const applied = windowCtl.setMode?.(mode) ?? mode
+          if (args['monitor'] === true || mode === 'background-visual') windowCtl.monitorStart?.(args['tabId'] as string | undefined)
+          if (args['monitor'] === false) windowCtl.monitorStop?.()
+          return { content: [text(`窗口模式: ${applied}\n监控: ${windowCtl.monitorState?.().enabled ? '已开启' : '未开启'}`)] }
+        }
+        const win = windowCtl.state?.()
+        const monitor = windowCtl.monitorState?.()
+        return { content: [text(`窗口模式: ${windowCtl.mode?.() ?? (win?.minimized ? 'minimized' : win?.visible ? 'visible' : 'hidden')}\n窗口: ${win?.minimized ? '最小化' : win?.visible ? '可见' : '隐藏'} · ${win?.focused ? '前台' : '后台'}\n监控: ${monitor?.enabled ? '已开启' : '未开启'}${monitor?.control === 'human' ? ' · 人工接管' : ''}`)] }
+      }
+      if (action === 'monitor') {
+        if (args['monitor'] === false) {
+          windowCtl.monitorStop?.()
+          return { content: [text(`实时预览已停止。`)] }
+        }
+        const monitor = windowCtl.monitorStart?.(args['tabId'] as string | undefined)
+        if (!monitor) throw new ActionError('实时预览服务未就绪')
+        return { content: [text(`实时预览已开启，标签 [${monitor.tabId}]，画面由独立预览通道推送。`)] }
+      }
+      if (action === 'takeover') {
+        const monitor = windowCtl.takeover?.()
+        if (!monitor) throw new ActionError('人工接管服务未就绪')
+        return { content: [text('已暂停 AI 输入并锁定操作权，请直接操作浏览器；完成后调用 browser_window action=release。')] }
+      }
+      if (action === 'release') {
+        const monitor = windowCtl.releaseToAi?.()
+        if (!monitor) throw new ActionError('人工接管服务未就绪')
+        return { content: [text('已将操作权交还 AI；后续工具调用可以继续。')] }
+      }
+      throw new ActionError(`未知 action: ${action}。可用 action：mode、monitor、takeover、release。`)
+    }
+  })
+
+  pushTool({
+    name: 'browser_tasks',
+    handler: async (args) => {
+      const action = String(args['action'] ?? 'list')
+      const clientId = Number.isSafeInteger(args['__aaClientId']) ? Number(args['__aaClientId']) : tabs.currentAgentClientId()
+      if (action === 'list') {
+        const activity = windowCtl.taskState?.(clientId) ?? { active: false, paused: false, calls: [] }
+        const limit = Math.max(1, Math.min(50, Math.floor(Number(args['limit']) || 20)))
+        const tasks = activity.tasks?.slice(0, limit) ?? []
+        const lines = tasks.length
+          ? tasks.map((task) => {
+              const progress = typeof task.progress === 'number'
+                ? ` · 进度 ${task.progress}${typeof task.total === 'number' ? `/${task.total}` : ''}`
+                : ''
+              const detail = task.error ? ` · 失败原因: ${task.error}` : task.message ? ` · ${task.message}` : ''
+              return `#${task.id} · 客户端 ${task.client} · ${task.tool} · ${task.status}${progress}${detail}`
+            }).join('\n')
+          : (activity.calls ?? []).map((call) => `#${call.id} · 客户端 ${call.client} · ${call.tool} · running`).join('\n') || '（暂无任务记录）'
+        return { content: [text(`任务状态: ${activity.paused ? '已暂停' : activity.active ? '运行中' : '空闲'}\n${lines}`)] }
+      }
+      if (action === 'cancel') {
+        const id = Number(args['id'])
+        const requestedClient = args['client'] === undefined ? undefined : Number(args['client'])
+        if (clientId !== undefined && requestedClient !== undefined && requestedClient !== clientId) {
+          throw new ActionError('只能取消当前 MCP 客户端自己的任务。')
+        }
+        const client = clientId ?? requestedClient
+        if (!windowCtl.cancelTask?.(id, client)) throw new ActionError('未找到唯一匹配的任务，请先调用 browser_tasks action=list。')
+        return { content: [text(`已请求取消任务 #${id}${client === undefined ? '' : `（客户端 ${client}）`}`)] }
+      }
+      if (action === 'pause') {
+        windowCtl.pauseTasks?.(clientId, Number.isSafeInteger(args['__aaCallId']) ? Number(args['__aaCallId']) : undefined)
+        return { content: [text('当前 MCP 客户端的后台任务已暂停；其它客户端不受影响。')] }
+      }
+      if (action === 'resume') {
+        windowCtl.resumeTasks?.(clientId)
+        return { content: [text('当前 MCP 客户端的后台任务已恢复。')] }
+      }
+      throw new ActionError(`未知 action: ${action}。可用 action：list、cancel、pause、resume。`)
     }
   })
 
@@ -1770,6 +1868,9 @@ export function buildTools(
 
   // Interrupt is a central admission gate: no MCP operation starts while paused.
   // Individual handlers retain their own checks around multi-step actions.
+  const canControlPaused = (toolName: string, args: Record<string, unknown>): boolean =>
+    (toolName === 'browser_window' && args['action'] === 'release') ||
+    (toolName === 'browser_tasks' && ['list', 'cancel', 'resume'].includes(String(args['action'] ?? 'list')))
   return tools.map((tool) => {
     const annotations = TOOL_ANNOTATIONS[tool.name]
     if (!annotations) throw new Error(`工具缺少 MCP annotations：${tool.name}`)
@@ -1777,13 +1878,13 @@ export function buildTools(
       ...tool,
       annotations,
       handler: async (args: Record<string, unknown>) => {
-        approvals?.assertRunning()
+        if (!canControlPaused(tool.name, args)) approvals?.assertRunning()
         const startTime = Date.now()
         const signal = callSignal(args)
         try {
           if (signal) throwIfAborted(signal)
           const result = await tool.handler(args)
-          assertToolRunning(signal)
+          if (!canControlPaused(tool.name, args)) assertToolRunning(signal)
           let summary = ''
           const first = result.content?.[0]
           if (first?.type === 'text' && first.text) {

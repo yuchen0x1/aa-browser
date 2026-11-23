@@ -1,4 +1,5 @@
 import { WebContentsView, WebContents, session } from 'electron'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import type { Session } from 'electron'
 import type { TabInfo } from '@shared/types'
 import { NetworkCapture } from './network'
@@ -26,10 +27,14 @@ export interface Tab {
   isWindowMinimized?: () => boolean
   /** 调用期间保持计时器与合成帧，不改变闲置网页的节能策略。 */
   keepRendering: () => () => void
+  /** 由监控中心接收 Agent 的输入位置，供实时预览显示，不参与定位。 */
+  recordPointer?: (pointer: { kind: 'move' | 'click' | 'input'; x?: number; y?: number }) => void
   /** 是否使用独立会话分区（隔离标签） */
   isolated: boolean
   /** 是否由跨会话恢复重建（沿用上次的标签 id） */
   restored: boolean
+  /** MCP 客户端连接所有者；进程重启后不恢复该标记。 */
+  agentClientId?: number
 }
 
 /**
@@ -152,16 +157,13 @@ export class TabManager {
   /** 仅当前进程内保存普通标签 URL；隔离标签和退出清理不进入恢复记录。 */
   private recentlyClosed: string[] = []
   activeId: string | null = null
-  private agentConnected = false
   private renderUsers = new WeakMap<WebContents, number>()
-
-  setAgentConnected(connected: boolean): void {
-    this.agentConnected = connected
-    this.forEachWebView((wc) => this.syncRendering(wc))
-  }
+  private agentClientContext = new AsyncLocalStorage<number>()
+  private agentActiveTabs = new Map<number, string>()
+  private primaryAgentClientId: number | undefined
 
   private syncRendering(wc: WebContents): void {
-    if (!wc.isDestroyed()) wc.setBackgroundThrottling(!this.agentConnected && !this.renderUsers.get(wc))
+    if (!wc.isDestroyed()) wc.setBackgroundThrottling(!this.renderUsers.get(wc))
   }
 
   onChange: () => void = () => {}
@@ -185,10 +187,14 @@ export class TabManager {
   getAllowedSites: () => string[] = () => []
   /** 由主进程注入：是否默认使用隔离会话（设置项） */
   getDefaultIsolated: () => boolean = () => false
+  /** visible 模式保留传统标签切换；后台模式不更改用户当前视图。 */
+  shouldShowAgentTab: () => boolean = () => true
   /** 由主进程注入：内部页加载完成后同步当前主题 */
   applyInternalTheme: ((wc: WebContents) => void) | null = null
   /** 由主进程注入：隔离标签关闭时回调（用于清理分区数据） */
   onIsolatedClosed: ((partition: string) => void) | null = null
+  /** 由监控中心接收后台输入位置。 */
+  onAgentPointer: ((tab: Tab, pointer: { kind: 'move' | 'click' | 'input'; x?: number; y?: number }) => void) | null = null
 
   constructor(
     private newtabUrl: string,
@@ -203,12 +209,75 @@ export class TabManager {
     if (!this.isUrlAllowed(url)) throw new Error(`站点不在白名单中：${url}`)
   }
 
+  runAsAgent<T>(clientId: number, operation: () => Promise<T>): Promise<T> {
+    if (this.primaryAgentClientId === undefined) this.primaryAgentClientId = clientId
+    return this.agentClientContext.run(clientId, operation)
+  }
+
+  currentAgentClientId(): number | undefined {
+    return this.agentClientContext.getStore()
+  }
+
+  runAsUi<T>(operation: () => T): T {
+    return this.agentClientContext.exit(operation)
+  }
+
+  private claimIfUnowned(tab: Tab): void {
+    const clientId = this.agentClientContext.getStore()
+    if (clientId !== undefined && tab.agentClientId === undefined) tab.agentClientId = clientId
+  }
+
+  private syncVisiblePrimaryTab(tab: Tab): void {
+    const clientId = this.primaryAgentClientId
+    if (clientId === undefined || !this.shouldShowAgentTab() ||
+      (tab.agentClientId !== undefined && tab.agentClientId !== clientId)) return
+    this.agentActiveTabs.set(clientId, tab.id)
+  }
+
+  private visibleToCurrentAgent(tab: Tab): boolean {
+    const clientId = this.agentClientContext.getStore()
+    return clientId === undefined || tab.agentClientId === clientId ||
+      (clientId === this.primaryAgentClientId && tab.agentClientId === undefined)
+  }
+
   active(): Tab | null {
-    return this.tabs.find((t) => t.id === this.activeId) ?? null
+    const clientId = this.agentClientContext.getStore()
+    if (clientId === undefined) return this.tabs.find((t) => t.id === this.activeId) ?? null
+    const scopedId = this.agentActiveTabs.get(clientId)
+    const scoped = scopedId ? this.tabs.find((tab) => tab.id === scopedId &&
+      (tab.agentClientId === clientId || (clientId === this.primaryAgentClientId && tab.agentClientId === undefined))) : undefined
+    if (scoped) {
+      this.claimIfUnowned(scoped)
+      return scoped
+    }
+    const owned = this.tabs.find((tab) => tab.agentClientId === clientId)
+    if (owned) {
+      this.agentActiveTabs.set(clientId, owned.id)
+      return owned
+    }
+    if (clientId !== this.primaryAgentClientId) return null
+    const current = this.tabs.find((tab) => tab.id === this.activeId && tab.agentClientId === undefined)
+    if (!current) return null
+    this.claimIfUnowned(current)
+    this.agentActiveTabs.set(clientId, current.id)
+    return current
+  }
+
+  activeForUi(): Tab | null {
+    return this.agentClientContext.exit(() => this.active())
   }
 
   get(id: string): Tab | null {
-    return this.tabs.find((t) => t.id === id) ?? null
+    const tab = this.tabs.find((entry) => entry.id === id) ?? null
+    if (!tab) return null
+    const clientId = this.agentClientContext.getStore()
+    if (clientId !== undefined && tab.agentClientId !== clientId) {
+      if (tab.agentClientId !== undefined || clientId !== this.primaryAgentClientId) return null
+      this.agentActiveTabs.set(clientId, tab.id)
+    }
+    if (!this.visibleToCurrentAgent(tab)) return null
+    this.claimIfUnowned(tab)
+    return tab
   }
 
   /**
@@ -231,7 +300,7 @@ export class TabManager {
         partition,
         contextIsolation: true,
         nodeIntegration: false,
-        backgroundThrottling: !this.agentConnected,
+        backgroundThrottling: true,
         spellcheck: false
         // 页面视图永不挂 preload：这个 WebContents 会继续导航到任意站点，
         // 任何注入的桥都会随导航泄漏给网页脚本。接入/设置等特权 UI 只在外壳 chrome 视图。
@@ -259,6 +328,7 @@ export class TabManager {
       view,
       isolated: useIsolated,
       restored: reusable,
+      agentClientId: this.agentClientContext.getStore(),
       title: '新建标签页',
       url: target,
       loading: false,
@@ -269,11 +339,22 @@ export class TabManager {
       initialNavigation: deferInitialNavigation ? ready : ready.then(() => this.loadPage(wc, target)),
       canUseWindowInput: () => this.activeId === id && this.isWindowForeground(),
       isWindowMinimized: () => this.isWindowMinimized(),
-      keepRendering
+      keepRendering,
+      recordPointer: (pointer) => this.onAgentPointer?.(tab, pointer)
     }
     this.attachEvents(tab)
     this.tabs.push(tab)
-    if (activate) this.activeId = tab.id
+    if (activate) {
+      const clientId = this.agentClientContext.getStore()
+      if (clientId === undefined) {
+        this.activeId = tab.id
+        this.syncVisiblePrimaryTab(tab)
+      }
+      else {
+        this.agentActiveTabs.set(clientId, tab.id)
+        if (this.shouldShowAgentTab()) this.activeId = tab.id
+      }
+    }
     this.onSession?.(ses)
     void tab.initialNavigation.catch((error: unknown) => {
       if (!wc.isDestroyed() && this.tabs.includes(tab)) {
@@ -392,12 +473,19 @@ export class TabManager {
     const idx = this.tabs.findIndex((t) => t.id === id)
     if (idx === -1) return
     const [tab] = this.tabs.splice(idx, 1)
+    if (!this.visibleToCurrentAgent(tab)) {
+      this.tabs.splice(idx, 0, tab)
+      return
+    }
     if (remember && !tab.isolated && tab.url !== this.newtabUrl && /^(https?|file):/i.test(tab.url)) {
       this.recentlyClosed.push(tab.url)
       if (this.recentlyClosed.length > 20) this.recentlyClosed.shift()
     }
     // 标签已关闭，无须保留对话框守卫；先释放 CDP 再关闭页面，避免退出时悬挂命令。
     tab.net.releaseDebugger()
+    // 关闭页面前释放该视图的渲染计数，避免 WeakMap 条目随 WebContents 生命周期悬挂，
+    // 也让后台节流策略不再把一个已销毁页面当作活跃租约。
+    this.renderUsers.delete(tab.view.webContents)
     // 先摘下视图再销毁：否则关闭的视图会一直挂在窗口上（资源泄漏 + 文件句柄不释放）
     try {
       this.onViewDetach?.(tab.view)
@@ -411,6 +499,16 @@ export class TabManager {
     }
     if (this.activeId === id) {
       this.activeId = this.tabs.length ? this.tabs[Math.min(idx, this.tabs.length - 1)].id : null
+    }
+    for (const [clientId, activeId] of this.agentActiveTabs) {
+      if (activeId !== id) continue
+      const visibleReplacement = clientId === this.primaryAgentClientId && this.shouldShowAgentTab()
+        ? this.tabs.find((entry) => entry.id === this.activeId &&
+          (entry.agentClientId === undefined || entry.agentClientId === clientId))
+        : undefined
+      const replacement = visibleReplacement ?? this.tabs.find((entry) => entry.agentClientId === clientId)
+      if (replacement) this.agentActiveTabs.set(clientId, replacement.id)
+      else this.agentActiveTabs.delete(clientId)
     }
     // 用户关闭最后一个标签时保留一个可输入的新标签页，而不是留下空窗口；
     // closeAll() 传 remember=false，退出时不会反向创建标签。
@@ -428,11 +526,20 @@ export class TabManager {
     return this.tabs.some((t) => t.partition === partition)
   }
 
-  selectTab(id: string): void {
-    if (this.get(id)) {
-      this.activeId = id
-      this.onChange()
+  selectTab(id: string, bringToFront = false): void {
+    const tab = this.get(id)
+    if (!tab) return
+    const clientId = this.agentClientContext.getStore()
+    if (clientId !== undefined) {
+      this.agentActiveTabs.set(clientId, id)
+      if (!bringToFront && !this.shouldShowAgentTab()) {
+        this.onChange()
+        return
+      }
     }
+    this.activeId = id
+    if (clientId === undefined) this.syncVisiblePrimaryTab(tab)
+    this.onChange()
   }
 
   closeAll(): void {
@@ -441,6 +548,13 @@ export class TabManager {
 
   private attachEvents(tab: Tab): void {
     const wc = tab.view.webContents
+
+    wc.on('input-event', (_event, input) => {
+      if (input.type === 'mouseMove' || input.type === 'mouseDown') {
+        const pointer = input as Electron.MouseInputEvent
+        tab.recordPointer?.({ kind: input.type === 'mouseMove' ? 'move' : 'click', x: pointer.x, y: pointer.y })
+      }
+    })
 
     wc.on('did-fail-load', (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
       if (isMainFrame && errorCode !== -3) console.warn(`[aa-browser] 标签 ${tab.id} 主文档加载失败 (${errorCode}): ${errorDescription}`)
@@ -481,6 +595,10 @@ export class TabManager {
     })
     wc.on('render-process-gone', () => {
       tab.title = '页面已崩溃'
+      // 崩溃的渲染进程不再持有任何租约；立即清空计数，避免 keepRendering 永久阻止
+      // 后续标签恢复 backgroundThrottling，并让监控/视觉工具下次重新持有。
+      this.renderUsers.delete(wc)
+      this.syncRendering(wc)
       this.onChange()
     })
     wc.on('console-message', (event) => {
@@ -553,19 +671,42 @@ export class TabManager {
   }
 
   infos(): TabInfo[] {
-    return this.tabs.map((t) => ({
+    const clientId = this.agentClientContext.getStore()
+    if (clientId !== undefined && !this.tabs.some((tab) => tab.agentClientId === clientId)) this.active()
+    const scopedActiveId = clientId === undefined ? this.activeId : this.agentActiveTabs.get(clientId) ?? null
+    return this.tabs.filter((tab) => this.visibleToCurrentAgent(tab)).map((t) => ({
       id: t.id,
       createdAt: t.createdAt,
       title: t.title,
       url: t.url,
       favicon: t.favicon,
       loading: t.loading,
-      active: t.id === this.activeId,
+      active: t.id === scopedActiveId,
       isolated: t.isolated,
       restored: t.restored,
+      agentClientId: t.agentClientId,
       canBack: this.canBack(t),
       canForward: this.canForward(t)
     }))
+  }
+
+  infosForUi(): TabInfo[] {
+    return this.agentClientContext.exit(() => this.infos())
+  }
+
+  /**
+   * 释放已离线 MCP 客户端留下的标签归属。
+   *
+   * 桥重连会沿用同一 client id，因此释放动作由主进程延迟到重连宽限期之后；
+   * 这里只清标记，不关闭标签，也不动 Cookie/Storage。
+   */
+  releaseAgentClient(clientId: number): void {
+    this.agentActiveTabs.delete(clientId)
+    if (this.primaryAgentClientId === clientId) this.primaryAgentClientId = undefined
+    for (const tab of this.tabs) {
+      if (tab.agentClientId === clientId) tab.agentClientId = undefined
+    }
+    this.onChange()
   }
 
   /**

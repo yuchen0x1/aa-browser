@@ -6,6 +6,7 @@
 
 | 版本 | 完整 Release 正文 |
 | --- | --- |
+| v0.14.0 | [bodies/v0.14.0.md](./bodies/v0.14.0.md) |
 | v0.13.0 | [bodies/v0.13.0.md](./bodies/v0.13.0.md) |
 | v0.12.1 | [bodies/v0.12.1.md](./bodies/v0.12.1.md) |
 | v0.12.0 | [bodies/v0.12.0.md](./bodies/v0.12.0.md) |
@@ -34,6 +35,13 @@
 | v0.0.3 | [bodies/v0.0.3.md](./bodies/v0.0.3.md) |
 | v0.0.2 | [bodies/v0.0.2.md](./bodies/v0.0.2.md) |
 | v0.0.1 | [bodies/v0.0.1.md](./bodies/v0.0.1.md) |
+
+## v0.14.0 — 2026-11-23
+
+- 统一 `visible`、`background`、`minimized`、`hidden`、`background-visual` 五种真实窗口模式；切换不重建标签，也不破坏 Cookie、Storage 或登录态。
+- 新增只捕获指定标签的独立实时预览、人工接管/交还、多客户端任务中心，以及按标签隔离的取消、暂停与恢复。
+- 后台拖拽接入 Chromium 原生 `dragIntercepted`/`Input.dispatchDragEvent`；最小化下可信点击、输入、滚动、拖放与截图通过真实 Electron/MCP 回归。
+- Windows 30 分钟 soak 与 DPI 100%–200% 矩阵通过；多物理显示器、真实 DRM、跨域登录/2FA、生产签名和崩溃注入恢复仍未验证。
 
 ## v0.13.0 — 2026-11-23
 

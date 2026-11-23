@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { DownloadInfo, HistoryEntry, AppSettings, SettingsView, AgentInfo, UpdateState, PagePointerForward, ExtensionInfo } from '@shared/types'
+import type { DownloadInfo, HistoryEntry, AppSettings, SettingsView, AgentInfo, UpdateState, PagePointerForward, ExtensionInfo, BackgroundMode, MonitorState } from '@shared/types'
 
 /** 浏览器外壳 UI 与主进程的桥（chromeView 专用，页面视图不带 preload） */
 contextBridge.exposeInMainWorld('aa', {
@@ -18,6 +18,14 @@ contextBridge.exposeInMainWorld('aa', {
   reload: (): Promise<void> => ipcRenderer.invoke('aa:reload'),
   submit: (value: string): Promise<void> => ipcRenderer.invoke('aa:omnibox-submit', value),
   devtools: (): Promise<void> => ipcRenderer.invoke('aa:devtools'),
+  windowMode: (mode?: BackgroundMode): Promise<BackgroundMode> => ipcRenderer.invoke('aa:window-mode', mode),
+  monitorStart: (tabId?: string): Promise<MonitorState | null> => ipcRenderer.invoke('aa:monitor-start', tabId),
+  monitorStop: (): Promise<MonitorState | null> => ipcRenderer.invoke('aa:monitor-stop'),
+  monitorHistoryFrame: (capturedAt: number): Promise<unknown> => ipcRenderer.invoke('aa:monitor-history-frame', capturedAt),
+  monitorView: (visible: boolean): Promise<boolean> => ipcRenderer.invoke('aa:monitor-view', visible),
+  monitorTakeover: (): Promise<MonitorState | null> => ipcRenderer.invoke('aa:monitor-takeover'),
+  monitorRelease: (): Promise<MonitorState | null> => ipcRenderer.invoke('aa:monitor-release'),
+  taskAction: (action: 'pause' | 'resume' | 'cancel', id?: number, client?: number): Promise<boolean> => ipcRenderer.invoke('aa:tasks-control', action, id, client),
   decideApproval: (id: string, allowed: boolean): Promise<boolean> => ipcRenderer.invoke('aa:approval-decide', id, allowed),
   interruptAgent: (): Promise<boolean> => ipcRenderer.invoke('aa:agent-interrupt'),
   resumeAgent: (): Promise<boolean> => ipcRenderer.invoke('aa:agent-resume'),
@@ -48,6 +56,9 @@ contextBridge.exposeInMainWorld('aa', {
   updateWake: (): Promise<UpdateState> => ipcRenderer.invoke('aa:update-wake'),
   onState: (cb: (state: unknown) => void): void => {
     ipcRenderer.on('aa:state', (_e, state) => cb(state))
+  },
+  onMonitorFrame: (cb: (frame: unknown) => void): void => {
+    ipcRenderer.on('aa:monitor-frame', (_e, frame) => cb(frame))
   },
   onFocusOmnibox: (cb: () => void): void => {
     ipcRenderer.on('aa:focus-omnibox', () => cb())

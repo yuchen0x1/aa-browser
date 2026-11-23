@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { WebSocketServer, WebSocket } from 'ws'
-import type { ConnectionInfo, WsRequest, WsProgressEvent, AgentActivityState, AgentCallInfo } from '@shared/types'
+import type { ConnectionInfo, WsRequest, WsProgressEvent, AgentActivityState, AgentCallInfo, AgentTaskRecord } from '@shared/types'
 import type { McpToolDef } from './tools'
 import type { ApprovalManager } from './approvals'
 import { runWithProgress } from './progress'
@@ -14,11 +14,27 @@ const CONNECT_DIR = path.join(os.homedir(), '.aabrowser')
 const DEFAULT_CONNECT_FILE = path.join(CONNECT_DIR, 'connection.json')
 /** 单连接待发送队列上限；超过说明桥已跟不上，继续排队只会占内存。 */
 const MAX_BUFFERED_BYTES = 64 * 1024 * 1024
+const MAX_TASK_HISTORY = 100
+const MAX_ACTIVITY_TASKS = 24
+const CLIENT_SESSION_TTL_MS = 24 * 60 * 60 * 1000
 
-type ActiveTool = AgentCallInfo
+type ActiveTool = AgentTaskRecord
+
+function redactTaskText(value: unknown): string {
+  return String(value ?? '')
+    .replace(/\b(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[redacted]@')
+    .replace(/([?&][^=\s]*(?:token|secret|password|passwd|api[_-]?key|authorization|cookie)[^=\s]*=)[^&\s]*/gi, '$1[redacted]')
+    .replace(/\b(Bearer|Basic)\s+[^\s,;]+/gi, '$1 [redacted]')
+    .replace(/\b(password|passwd|token|secret|api[_-]?key|authorization|cookie)\b\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]')
+    .slice(0, 240)
+}
 
 function cloneActivity(state: AgentActivityState): AgentActivityState {
-  return { ...state, calls: state.calls?.map((call) => ({ ...call })) }
+  return {
+    ...state,
+    calls: state.calls?.map((call) => ({ ...call })),
+    tasks: state.tasks?.map((task) => ({ ...task }))
+  }
 }
 
 function connectionFile(): string {
@@ -37,9 +53,14 @@ export class AgentServer {
   private startedAt = 0
   private ownConnectionFile = ''
   private activityState: AgentActivityState = { active: false, paused: false }
+  private taskHistory: AgentTaskRecord[] = []
+  private taskHistoryFile = ''
+  private taskPersistTimer: ReturnType<typeof setTimeout> | null = null
   private activeTools = new Map<WebSocket, Map<number, ActiveTool>>()
   private active = new Map<WebSocket, Map<number, AbortController>>()
   private clientIds = new Map<WebSocket, number>()
+  private pausedClients = new Set<number>()
+  private clientSessions = new Map<string, { id: number; lastSeen: number }>()
   private clientSeq = 0
   private lastActivityPushAt = 0
 
@@ -48,7 +69,9 @@ export class AgentServer {
     private onStatusChange: (count: number, verifiedCount: number) => void,
     private version: string,
     private approvals?: ApprovalManager,
-    private onActivityChange: (state: AgentActivityState) => void = () => {}
+    private onActivityChange: (state: AgentActivityState) => void = () => {},
+    private runWithClientScope: <T>(clientId: number, operation: () => Promise<T>) => Promise<T> = (_clientId, operation) => operation(),
+    private onClientDisconnected: (clientId: number) => void = () => {}
   ) {
     this.wss = new WebSocketServer({ server: this.server })
     this.wss.on('connection', (ws, req) => this.onConnection(ws, req))
@@ -60,6 +83,8 @@ export class AgentServer {
   }
 
   async start(): Promise<void> {
+    this.taskHistoryFile = path.join(path.dirname(connectionFile()), 'task-history.json')
+    this.loadTaskHistory()
     this.token = crypto.randomBytes(24).toString('hex')
     await new Promise<void>((resolve, reject) => {
       this.server.once('error', reject)
@@ -105,7 +130,62 @@ export class AgentServer {
 
   /** 当前活动快照，返回副本避免调用方修改内部状态。 */
   activity(): AgentActivityState {
-    return cloneActivity(this.activityState)
+    return cloneActivity({ ...this.activityState, tasks: this.taskHistory.slice(-MAX_ACTIVITY_TASKS).reverse() })
+  }
+
+  private loadTaskHistory(): void {
+    try {
+      const value = JSON.parse(fs.readFileSync(this.taskHistoryFile, 'utf8')) as { tasks?: unknown }
+      if (!Array.isArray(value?.tasks)) return
+      this.taskHistory = value.tasks.filter((raw): raw is AgentTaskRecord => {
+        if (!raw || typeof raw !== 'object') return false
+        const task = raw as Partial<AgentTaskRecord>
+        return Number.isSafeInteger(task.id) && Number.isSafeInteger(task.client) && task.client! > 0 &&
+          typeof task.tool === 'string' && typeof task.startedAt === 'number' &&
+          ['running', 'cancelling', 'completed', 'failed', 'cancelled', 'interrupted'].includes(String(task.status))
+      }).slice(-MAX_TASK_HISTORY).map((raw) => ({ ...raw }))
+      let recovered = false
+      for (const task of this.taskHistory) {
+        if (task.status !== 'running' && task.status !== 'cancelling') continue
+        task.status = 'interrupted'
+        task.finishedAt = Date.now()
+        task.error = '上次进程未完成；任务未自动重放。'
+        recovered = true
+      }
+      if (recovered) this.persistTaskHistory(true)
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+      try { fs.copyFileSync(this.taskHistoryFile, `${this.taskHistoryFile}.corrupt-${Date.now()}.bak`, fs.constants.COPYFILE_EXCL) } catch { /* preserve failure as a startup diagnostic */ }
+      console.warn(`[aa-browser] 任务历史无法读取，原文件已保留: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  private persistTaskHistory(immediate = false): void {
+    if (!this.taskHistoryFile) return
+    if (!immediate) {
+      if (this.taskPersistTimer) return
+      this.taskPersistTimer = setTimeout(() => {
+        this.taskPersistTimer = null
+        this.persistTaskHistory(true)
+      }, 1000)
+      this.taskPersistTimer.unref?.()
+      return
+    }
+    if (this.taskPersistTimer) clearTimeout(this.taskPersistTimer)
+    this.taskPersistTimer = null
+    try {
+      writeJsonAtomic(this.taskHistoryFile, { version: 1, tasks: this.taskHistory.slice(-MAX_TASK_HISTORY) })
+    } catch (error) {
+      console.warn(`[aa-browser] 任务历史保存失败: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  private finishTask(task: AgentTaskRecord, status: AgentTaskRecord['status'], error?: unknown): void {
+    if (task.status !== 'running' && task.status !== 'cancelling') return
+    task.status = status
+    task.finishedAt = Date.now()
+    if (error !== undefined) task.error = redactTaskText(error)
+    this.persistTaskHistory(true)
   }
 
   /** 中断当前调用并进入暂停状态；重复调用不会重复广播或产生额外副作用。 */
@@ -119,22 +199,58 @@ export class AgentServer {
       active: false,
       paused: true,
       calls: [],
+      tasks: this.taskHistory.slice(-MAX_ACTIVITY_TASKS).reverse(),
       ...(resumeAt !== undefined ? { resumeAt } : {})
     }
+    for (const task of this.taskHistory) {
+      if (task.status !== 'running' && task.status !== 'cancelling') continue
+      task.status = 'interrupted'
+      task.finishedAt = Date.now()
+      task.error = '任务已暂停；不会自动重放。'
+    }
+    this.persistTaskHistory(true)
     const changed = this.activityState.active !== next.active ||
       this.activityState.paused !== next.paused ||
       this.activityState.resumeAt !== next.resumeAt ||
       this.activityState.tool !== next.tool ||
       this.activityState.startedAt !== next.startedAt
     this.activityState = next
-    if (changed) this.onActivityChange(cloneActivity(this.activityState))
+    if (changed) this.onActivityChange(this.activity())
   }
 
   /** 清除暂停标记；新的调用会在 handleMessage 中重新成为 active。 */
   resume(): void {
     if (!this.activityState.paused && this.activityState.resumeAt === undefined) return
-    this.activityState = { active: false, paused: false }
-    this.onActivityChange(cloneActivity(this.activityState))
+    this.activityState = { active: false, paused: false, tasks: this.taskHistory.slice(-MAX_ACTIVITY_TASKS).reverse() }
+    this.onActivityChange(this.activity())
+  }
+
+  isClientPaused(clientId: number): boolean {
+    return this.pausedClients.has(clientId)
+  }
+
+  pauseClient(clientId: number, exceptCallId?: number): void {
+    if (!Number.isSafeInteger(clientId) || clientId < 1) return
+    this.pausedClients.add(clientId)
+    for (const [ws, calls] of this.active) {
+      if (this.clientIds.get(ws) !== clientId) continue
+      for (const [id, controller] of calls) {
+        if (id === exceptCallId) continue
+        const task = this.activeTools.get(ws)?.get(id)
+        if (task && (task.status === 'running' || task.status === 'cancelling')) {
+          task.status = 'interrupted'
+          task.finishedAt = Date.now()
+          task.error = '此 MCP 客户端已暂停；任务未自动重放。'
+        }
+        controller.abort()
+      }
+    }
+    this.persistTaskHistory(true)
+    this.refreshActivity()
+  }
+
+  resumeClient(clientId: number): void {
+    if (this.pausedClients.delete(clientId)) this.refreshActivity()
   }
 
   private refreshActivity(force = true): void {
@@ -158,24 +274,25 @@ export class AgentServer {
     this.activityState = next
     if (throttled) return
     this.lastActivityPushAt = Date.now()
-    this.onActivityChange(cloneActivity(this.activityState))
+    this.onActivityChange(this.activity())
   }
 
   /** 把工具上报的进度写回活动状态（限流推送）并发给对应客户端的桥。 */
   private sendProgress(ws: WebSocket, id: number, progress: number, total?: number, message?: string): void {
     const call = this.activeTools.get(ws)?.get(id)
-    if (!call || this.activityState.paused) return
+    if (!call || call.status !== 'running' || this.activityState.paused || this.pausedClients.has(call.client)) return
     if (Number.isFinite(progress)) call.progress = progress
     if (total !== undefined && Number.isFinite(total)) call.total = total
-    if (message !== undefined) call.message = String(message).slice(0, 200)
+    if (message !== undefined) call.message = redactTaskText(message).slice(0, 200)
     const event: WsProgressEvent = {
       id,
       event: 'progress',
       progress: Number.isFinite(progress) ? progress : 0,
       ...(total !== undefined ? { total } : {}),
-      ...(message !== undefined ? { message } : {})
+      ...(message !== undefined ? { message: redactTaskText(message).slice(0, 200) } : {})
     }
     this.reply(ws, event)
+    this.persistTaskHistory()
     // 进度可能非常密集（等待轮询每 100ms 一次），限流到 ~6fps，完成/取消时再强制推送。
     this.refreshActivity(Date.now() - this.lastActivityPushAt >= 150)
   }
@@ -184,17 +301,24 @@ export class AgentServer {
   cancelCall(id: number, client?: number): boolean {
     if (typeof id !== 'number' || !Number.isFinite(id)) return false
     if (client !== undefined && (!Number.isSafeInteger(client) || client < 1)) return false
-    let target: AbortController | undefined
+    let target: { ws: WebSocket; controller: AbortController } | undefined
     for (const [ws, calls] of this.active) {
       if (client !== undefined && this.clientIds.get(ws) !== client) continue
       const controller = calls.get(id)
       if (!controller) continue
       // 请求 id 是客户端本地序号；不同连接可能都从 1 开始，不得中断首个匹配项。
       if (target) return false
-      target = controller
+      target = { ws, controller }
     }
     if (!target) return false
-    target.abort()
+    const task = this.activeTools.get(target.ws)?.get(id)
+    if (task?.status === 'running') {
+      task.status = 'cancelling'
+      task.message = '正在取消…'
+      this.persistTaskHistory(true)
+      this.refreshActivity()
+    }
+    target.controller.abort()
     return true
   }
 
@@ -211,7 +335,27 @@ export class AgentServer {
       return
     }
     this.clients.add(ws)
-    this.clientIds.set(ws, ++this.clientSeq)
+    const now = Date.now()
+    for (const [key, session] of this.clientSessions) {
+      if (now - session.lastSeen <= CLIENT_SESSION_TTL_MS) continue
+      this.clientSessions.delete(key)
+      this.pausedClients.delete(session.id)
+    }
+    const sessionKey = url.searchParams.get('client') ?? ''
+    let clientId: number
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionKey)) {
+      const session = this.clientSessions.get(sessionKey)
+      if (session) {
+        clientId = session.id
+        session.lastSeen = now
+      } else {
+        clientId = ++this.clientSeq
+        this.clientSessions.set(sessionKey, { id: clientId, lastSeen: now })
+      }
+    } else {
+      clientId = ++this.clientSeq
+    }
+    this.clientIds.set(ws, clientId)
     this.onStatusChange(this.clients.size, this.verifiedClients.size)
 
     ws.on('message', (raw) => {
@@ -222,11 +366,15 @@ export class AgentServer {
     const dropClient = (): void => {
       const calls = this.active.get(ws)
       for (const controller of calls?.values() ?? []) controller.abort()
+      for (const task of this.activeTools.get(ws)?.values() ?? []) {
+        this.finishTask(task, 'interrupted', 'MCP 客户端连接已断开；任务未自动重放。')
+      }
       this.active.delete(ws)
       this.activeTools.delete(ws)
       this.clients.delete(ws)
       this.clientIds.delete(ws)
       this.verifiedClients.delete(ws)
+      if (![...this.clientIds.values()].includes(clientId)) this.onClientDisconnected(clientId)
       this.refreshActivity()
       this.onStatusChange(this.clients.size, this.verifiedClients.size)
     }
@@ -251,8 +399,11 @@ export class AgentServer {
     // 活动 id 的响应权归原调用；忽略同连接的重复请求，既不覆盖 controller，
     // 也不回同 id 的错误（会让桥把原调用误判为失败）。取消帧仍在上面正常处理。
     if (this.active.get(ws)?.has(req.id)) return
-    if (this.approvals?.isInterrupted()) {
-      this.reply(ws, { id: req.id, ok: false, error: 'Agent 已被用户中断；请在浏览器工具栏点击“恢复”后重试。' })
+    const clientId = this.clientIds.get(ws) ?? 0
+    const canControlPausedTasks = (req.tool === 'browser_window' && req.args?.['action'] === 'release') ||
+      (req.tool === 'browser_tasks' && ['list', 'cancel', 'resume'].includes(String(req.args?.['action'] ?? 'list')))
+    if ((this.approvals?.isInterrupted() || this.pausedClients.has(clientId)) && !canControlPausedTasks) {
+      this.reply(ws, { id: req.id, ok: false, error: this.pausedClients.has(clientId) ? '此 MCP 客户端已暂停；请调用 browser_tasks action=resume 后重试。' : 'Agent 已被用户中断（人工接管或任务暂停）；请调用 browser_window action=release，或在浏览器工具栏点击“恢复”后重试。' })
       return
     }
     if (typeof req.tool !== 'string' || !req.tool.trim()) {
@@ -273,8 +424,8 @@ export class AgentServer {
     const controller = new AbortController()
     // 中断可能与上面的 admission check 并发发生；在登记调用前再检查一次，
     // 防止暂停后仍把新工具标成 active。
-    if (this.activityState.paused || this.approvals?.isInterrupted()) {
-      this.reply(ws, { id: req.id, ok: false, error: 'Agent 已被用户中断；请在浏览器工具栏点击“恢复”后重试。' })
+    if ((this.activityState.paused || this.approvals?.isInterrupted() || this.pausedClients.has(clientId)) && !canControlPausedTasks) {
+      this.reply(ws, { id: req.id, ok: false, error: this.pausedClients.has(clientId) ? '此 MCP 客户端已暂停；请调用 browser_tasks action=resume 后重试。' : 'Agent 已被用户中断（人工接管或任务暂停）；请调用 browser_window action=release，或在浏览器工具栏点击“恢复”后重试。' })
       return
     }
     let calls = this.active.get(ws)
@@ -282,12 +433,17 @@ export class AgentServer {
     calls.set(req.id, controller)
     let activityCalls = this.activeTools.get(ws)
     if (!activityCalls) { activityCalls = new Map(); this.activeTools.set(ws, activityCalls) }
-    activityCalls.set(req.id, {
+    const task: AgentTaskRecord = {
       id: req.id,
       tool: req.tool,
       startedAt: Date.now(),
-      client: this.clientIds.get(ws) ?? 0
-    })
+      client: clientId,
+      status: 'running'
+    }
+    activityCalls.set(req.id, task)
+    this.taskHistory.push(task)
+    if (this.taskHistory.length > MAX_TASK_HISTORY) this.taskHistory.splice(0, this.taskHistory.length - MAX_TASK_HISTORY)
+    this.persistTaskHistory(true)
     this.refreshActivity()
     console.log(`[aa-browser] tool request: ${req.tool} (${req.id})`)
     try {
@@ -295,12 +451,13 @@ export class AgentServer {
         {
           report: (progress, total, message) => this.sendProgress(ws, req.id, progress, total, message)
         },
-        () => tool.handler({ ...(req.args ?? {}), __aaSignal: controller.signal })
+        () => this.runWithClientScope(task.client, () => tool.handler({ ...(req.args ?? {}), __aaSignal: controller.signal, __aaClientId: task.client, __aaCallId: req.id }))
       )
-      if (controller.signal.aborted || this.approvals?.isInterrupted()) {
+      if ((controller.signal.aborted || this.approvals?.isInterrupted()) && !canControlPausedTasks) {
         throw new Error('工具调用已被用户中断或取消。')
       }
       const toolSucceeded = typeof result === 'object' && result !== null && (result as { isError?: boolean }).isError !== true
+      this.finishTask(task, toolSucceeded ? 'completed' : 'failed', toolSucceeded ? undefined : (result as { content?: Array<{ text?: unknown }> })?.content?.[0]?.text ?? '工具返回失败。')
       // 任意一次成功调用都证明客户端确实能驱动浏览器。更新重启后桥会先重放
       // 只读调用；只认 browser_tabs(list) 会让界面在任务已恢复时仍显示“等待首次调用”。
       if (toolSucceeded && !this.verifiedClients.has(ws)) {
@@ -311,6 +468,7 @@ export class AgentServer {
       this.reply(ws, { id: req.id, ok: true, result })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
+      this.finishTask(task, controller.signal.aborted ? (this.activityState.paused || this.pausedClients.has(task.client) ? 'interrupted' : 'cancelled') : 'failed', msg)
       this.reply(ws, { id: req.id, ok: false, error: msg })
     } finally {
       calls.delete(req.id)
@@ -339,8 +497,22 @@ export class AgentServer {
     }
   }
 
+  isClientConnected(clientId: number): boolean {
+    return [...this.clientIds.values()].includes(clientId)
+  }
+
   /** 清理发现文件（应用退出时调用） */
   stop(): void {
+    for (const calls of this.active.values()) {
+      for (const controller of calls.values()) controller.abort()
+    }
+    for (const calls of this.activeTools.values()) {
+      for (const task of calls.values()) this.finishTask(task, 'interrupted', '浏览器已退出；任务未自动重放。')
+    }
+    this.persistTaskHistory(true)
+    if (this.taskPersistTimer) clearTimeout(this.taskPersistTimer)
+    this.taskPersistTimer = null
+    for (const ws of this.clients) ws.close(1001, 'browser shutting down')
     try {
       const file = this.ownConnectionFile || connectionFile()
       const current = JSON.parse(fs.readFileSync(file, 'utf-8')) as Partial<ConnectionInfo>

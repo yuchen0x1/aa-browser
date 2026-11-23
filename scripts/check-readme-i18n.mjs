@@ -28,7 +28,7 @@ const REQUIRED_TOKENS = [
   '--print-config',
   'browser_tabs',
   '127.0.0.1',
-  '44',
+  '47',
   'MIT',
   'PROMPT.md',
   'docs/CONNECT.md',

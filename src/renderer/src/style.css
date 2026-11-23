@@ -245,6 +245,7 @@ textarea:focus-visible,
   border-color: var(--border-panel);
   box-shadow: var(--shadow-tab);
 }
+.tab-owner { flex: 0 0 auto; color: var(--text-muted); font-size: 9px; line-height: 1; }
 
 .tab.active::after {
   content: '';
@@ -1016,6 +1017,66 @@ textarea:focus-visible,
   padding: 36px 0;
   font-style: italic;
 }
+
+/* ── 后台实时预览与人工接管 ── */
+.monitor-panel {
+  position: absolute;
+  z-index: 65;
+  right: 14px;
+  top: var(--page-top, 84px);
+  width: min(720px, calc(100vw - 28px));
+  max-height: min(620px, max(0px, calc(var(--window-height, 100vh) - var(--page-top, 84px) - 8px)));
+  background: var(--surface-panel);
+  backdrop-filter: blur(24px);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-panel), 0 0 24px var(--accent-soft);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: slideDown 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.monitor-toolbar { display: flex; align-items: center; gap: 8px; padding: 9px 14px; border-bottom: 1px solid var(--border-item); }
+.monitor-toolbar #monitor-status { flex: 1; color: var(--text-muted); font-size: var(--font-size-control); }
+.monitor-frame { display: block; width: 100%; max-height: 420px; object-fit: contain; background: #090b10; }
+.monitor-meta { padding: 8px 14px; color: var(--text-body); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.monitor-history { display: flex; gap: 6px; padding: 0 14px 10px; overflow-x: auto; }
+.monitor-history-item { flex: 0 0 auto; padding: 4px 7px; border: 1px solid var(--border-item); border-radius: 4px; background: var(--surface-panel); color: var(--text-code-accent); font-size: 10px; cursor: pointer; }
+.monitor-history-item:hover { background: var(--surface-hover); }
+#btn-monitor.is-active { color: var(--accent-ink); box-shadow: 0 0 8px var(--accent-glow-soft); }
+
+.task-center-panel {
+  position: absolute;
+  z-index: 65;
+  right: 14px;
+  top: var(--page-top, 84px);
+  width: min(480px, calc(100vw - 28px));
+  max-height: min(620px, max(0px, calc(var(--window-height, 100vh) - var(--page-top, 84px) - 8px)));
+  background: var(--surface-panel);
+  backdrop-filter: blur(24px);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-panel), 0 0 24px var(--accent-soft);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.task-center-toolbar { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--border-item); }
+.task-center-toolbar #task-center-status { flex: 1; min-width: 0; color: var(--text-muted); font-size: var(--font-size-control); }
+.task-list { min-height: 0; overflow-y: auto; }
+.task-running-list { max-height: 220px; }
+.task-history-list { flex: 1; }
+.task-history-heading { padding: 8px 12px 5px; color: var(--text-muted); font-size: 10px; border-top: 1px solid var(--border-item); }
+.task-row { padding: 9px 12px; border-bottom: 1px solid var(--border-item); }
+.task-row-head { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.task-row-tool { flex: 1; min-width: 0; color: var(--text-title); font-size: var(--font-size-control); overflow-wrap: anywhere; }
+.task-row-meta { color: var(--text-muted); font-size: 10px; white-space: nowrap; }
+.task-row-message { margin-top: 4px; color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
+.task-row-error { color: var(--danger-ink); }
+.task-row-progress { display: block; width: 100%; height: 5px; margin-top: 7px; accent-color: var(--accent-ink); }
+.task-row-cancel { flex: 0 0 auto; padding: 3px 7px; border: 1px solid var(--danger-border); border-radius: 4px; background: transparent; color: var(--danger-ink); font-size: 10px; cursor: pointer; }
+.task-row-cancel:hover { background: var(--danger-soft); }
+.task-empty { padding: 14px 12px; color: var(--text-muted); font-size: 11px; }
 
 /* ── 下载面板 (Download Panel) ─────────────────────── */
 #btn-downloads.has-active {

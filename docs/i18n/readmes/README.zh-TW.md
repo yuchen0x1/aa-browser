@@ -137,7 +137,7 @@ npm start          # launch the built app
 
 ## MCP 工具
 
-共 **44 個工具**，分為五組：導航與快照（5）、互動（9）、讀取與狀態（20）、網路與 Mock（6）、診斷與分頁（4）。用戶端的工具名稱可能帶有 `mcp__aa-browser__` 前綴。
+共 **47 個工具**，分為五組：導航與快照（5）、互動（9）、讀取與狀態（20）、網路與 Mock（6）、診斷與分頁（7）。用戶端的工具名稱可能帶有 `mcp__aa-browser__` 前綴。
 
 | 分組 | 工具 |
 | --- | --- |
@@ -145,7 +145,7 @@ npm start          # launch the built app
 | 互動 | `browser_click`, `browser_type`, `browser_fill_form`, `browser_select_option`, `browser_drag`, `browser_hover`, `browser_scroll`, `browser_press_key`, `browser_upload_file` |
 | 讀取與狀態 | `browser_extract`, `browser_evaluate`, `browser_dialogs`, `browser_wait`, `browser_screenshot`, `browser_find`, `browser_get_selector`, `browser_cookies`, `browser_storage`, `browser_downloads`, `browser_pdf`, `browser_console` |
 | 網路與 Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
-| 診斷與分頁 | `browser_performance`, `browser_resize`, `browser_tabs` |
+| 診斷與分頁 | `browser_performance`, `browser_resize`, `browser_tabs`, `browser_window`, `browser_tasks`, `browser_extensions`, `browser_evidence` |
 
 共用行為：多數工具會隨結果回傳一份快照（`snapshot: false` 可跳過），除 `browser_resize` 與 `browser_downloads` 外所有工具都接受 `tabId`，單次呼叫 180 秒後逾時，審批最多等待 120 秒，網路詳情預設脫敏。
 

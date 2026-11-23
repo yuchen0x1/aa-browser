@@ -13,6 +13,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
+import { randomUUID } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import WebSocket from 'ws'
@@ -50,6 +51,7 @@ function readVersion() {
 }
 
 const VERSION = readVersion()
+const CLIENT_SESSION_ID = randomUUID()
 const CONNECT_FILE = process.env['AA_BROWSER_CONNECTION_FILE'] || path.join(os.homedir(), '.aabrowser', 'connection.json')
 /**
  * 必须大于主进程的审批等待窗口（ApprovalManager 默认 120s），
@@ -378,7 +380,10 @@ function connectWs() {
       reject(new Error('Aa Browser 进程已退出但发现文件残留：请重新启动 Aa Browser。'))
       return
     }
-    const socket = new WebSocket(`ws://127.0.0.1:${info.port}/?token=${info.token}`)
+    const endpoint = new URL(`ws://127.0.0.1:${info.port}/`)
+    endpoint.searchParams.set('token', info.token)
+    endpoint.searchParams.set('client', CLIENT_SESSION_ID)
+    const socket = new WebSocket(endpoint)
     let settled = false
     const timer = setTimeout(() => {
       try { socket.terminate() } catch {}

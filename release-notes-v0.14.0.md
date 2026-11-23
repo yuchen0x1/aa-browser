@@ -1,0 +1,45 @@
+## 📢 版本概述
+
+Aa Browser v0.14.0 将已有的最小化后台控制扩展为统一的后台浏览器运行层：Agent 可以在可见、后台、最小化、隐藏或后台预览模式下继续使用真实 CDP 输入、页面快照和截图；用户可以通过独立预览和人工接管安全地观察、暂停并交还控制权。
+
+## ✨ 新增功能
+
+- **五种真实窗口模式**：`browser_window` 支持 `visible`、`background`、`minimized`、`hidden` 和 `background-visual`，设置面板也可选择；模式切换不重建浏览器会话。
+- **实时后台预览**：预览只捕获指定 `tabId`，约 2fps、最大 960px 宽，外壳面板显示 URL、标题、任务、输入/点击位置与最近截图历史。
+- **人工接管**：`browser_window action=takeover` 暂停 AI 并锁定输入，`action=release` 显式交还；审批仍由既有人工审批策略控制。
+- **多客户端任务中心**：`browser_tasks` 列出客户端编号、调用 id、工具和状态，可精确取消、暂停和恢复。
+
+## 🔧 改进与优化
+
+- 后台预览也持有渲染租约，避免页面在长期运行中被 Chromium 节流；截图与虚拟视口收尾继续在 `finally` 中恢复。
+- 后台点击、拖拽、输入会向预览报告位置；拖拽已接入 Chromium 原生 `dragIntercepted` 数据与 `Input.dispatchDragEvent`，结构化 ref 仍是默认定位方式，视觉坐标仅作为观察补充。
+- AgentServer 在人工接管期间只放行释放与任务管理控制调用，避免暂停状态被新的自动化调用绕过。
+
+## 🔒 安全与兼容性
+
+- 预览只读取选中的 WebContents，不读取其它标签的 DOM、Cookie、Storage 或凭据；预览历史受证据 TTL/配额管理。
+- 不伪造 `document.visibilityState` 绕过站点安全检查；需要持续可见的站点请明确选择 `visible` 或 `background`。
+- 保留既有用户 profile、Cookie、Storage、登录态和 MCP 客户端配置；新增设置字段向后兼容旧配置。
+
+## 🧪 验证结果
+
+- `npm run typecheck`、`npm run build`、完整 `npm run check` 通过；桌面回归 58/58 通过。
+- `npm run test:background` 通过，11 项检查全部成功（真实 Electron + stdio MCP，非内部变量断言）：最小化下 hover、输入、滚动、原生 `dragstart`/`drop`、Enter 提交、元素与整页截图；窗口被其它应用完全遮挡时导航和截图不抢焦点；隐藏模式实时预览 PNG 非空；人工接管与释放；多 MCP 客户端标签隔离；任务取消并释放队列。
+- Windows 30 分钟 soak 通过（实测 1801.8 秒）：页面定时器推进 `timerDelta` 1802、预览帧增长 3531、截图非空、截图历史与磁盘文件各保持 20 张、私有内存采样末次 427836 KB 低于首次 598080 KB；每次心跳都用 Win32 `GetForegroundWindow` 采样，前台窗口始终不是浏览器窗口，窗口全程保持最小化。
+- DPI 100% / 125% / 150% / 200% 显示矩阵通过；当前环境只有一个物理显示器，多物理显示器遍历未覆盖。
+- 未验证：真实 DRM 与受保护视频、真实第三方登录/2FA、生产代码签名、跨版本升级/回滚实机验证、渲染进程崩溃注入恢复、物理多显示器。
+
+## 📦 下载与安装
+
+正式安装包、AppImage、更新元数据、SBOM 和 SHA-256 清单以 GitHub Release `v0.14.0` 的公开资产为准。
+
+## 🔄 升级与数据迁移
+
+可直接覆盖升级，无需迁移；旧版设置会自动补充 `backgroundMode: "visible"`。如需恢复默认前台模式，在设置中选择「可见（前台）」或调用 `browser_window action=mode mode=visible`。
+
+---
+
+**项目地址：** https://github.com/yuchen0x1/aa-browser<br>
+**问题反馈：** https://github.com/yuchen0x1/aa-browser/issues<br>
+**版本下载：** https://github.com/yuchen0x1/aa-browser/releases/tag/v0.14.0
+

@@ -137,7 +137,7 @@ Uma configuração gravada **não** é uma conexão funcionando. Verifique com `
 
 ## Ferramentas MCP
 
-**44 ferramentas** em cinco grupos: navegação e snapshot (5), interação (9), leitura e estado (20), rede e Mock (6), diagnóstico e abas (4). Os nomes de ferramenta no cliente podem trazer o prefixo `mcp__aa-browser__`.
+**47 ferramentas** em cinco grupos: navegação e snapshot (5), interação (9), leitura e estado (20), rede e Mock (6), diagnóstico e abas (7). Os nomes de ferramenta no cliente podem trazer o prefixo `mcp__aa-browser__`.
 
 | Grupo | Ferramentas |
 | --- | --- |
@@ -145,7 +145,7 @@ Uma configuração gravada **não** é uma conexão funcionando. Verifique com `
 | Interação | `browser_click`, `browser_type`, `browser_fill_form`, `browser_select_option`, `browser_drag`, `browser_hover`, `browser_scroll`, `browser_press_key`, `browser_upload_file` |
 | Leitura e estado | `browser_extract`, `browser_evaluate`, `browser_dialogs`, `browser_wait`, `browser_screenshot`, `browser_find`, `browser_get_selector`, `browser_cookies`, `browser_storage`, `browser_downloads`, `browser_pdf`, `browser_console` |
 | Rede e Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
-| Diagnóstico e abas | `browser_performance`, `browser_resize`, `browser_tabs` |
+| Diagnóstico e abas | `browser_performance`, `browser_resize`, `browser_tabs`, `browser_window`, `browser_tasks`, `browser_extensions`, `browser_evidence` |
 
 Comportamento comum: a maioria das ferramentas retorna um snapshot junto com o resultado (`snapshot: false` o dispensa), todas as ferramentas exceto `browser_resize` e `browser_downloads` aceitam um `tabId`, uma chamada individual expira após 180 segundos, a aprovação espera até 120 segundos e os detalhes de rede são mascarados por padrão.
 

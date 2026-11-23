@@ -314,8 +314,14 @@ if (!process.versions.electron) {
       })
     }
     const settle = (promise) => promise.then((value) => ({ ok: true, value }), (error) => ({ ok: false, error }))
-    // HUD 并发在不同标签上验证；同标签等待按队列串行，不应要求排队调用提前报告执行进度。
-    const concurrentA = settle(call2('browser_wait', { tabId: initial.tabs[0].id, text: '并发A_永不出现', timeoutMs: 9000 }, 'desktop-progress'))
+    // 每个 MCP 客户端只能看到自己的标签；先为客户端 2 建立独立标签，避免越权调用快速结束。
+    const client2Tab = await call2('browser_tabs', { action: 'new', url: base })
+    const client2TabText = (client2Tab.content ?? []).filter((item) => item?.type === 'text').map((item) => item.text).join('\n')
+    const client2TabId = client2TabText.match(/\[(t[a-z0-9]+)\]/)?.[1]
+    assert.ok(client2TabId, client2TabText)
+    callId2 = callId
+    // HUD 并发在不同客户端的独立标签上验证；同标签等待按队列串行。
+    const concurrentA = settle(call2('browser_wait', { tabId: client2TabId, text: '并发A_永不出现', timeoutMs: 9000 }, 'desktop-progress'))
     const concurrentB = settle(tool('browser_wait', { tabId: initial.tabs[1].id, text: '并发B_永不出现', timeoutMs: 9000 }))
     await until(async () => ((await state()).agentActivity?.calls?.length ?? 0) >= 2, 'concurrent calls visible in activity', 5000)
     const visibleCalls = (await state()).agentActivity.calls
@@ -401,8 +407,8 @@ if (!process.versions.electron) {
     }
     assert.ok(initial.update)
     assert.equal(initial.canReopenClosed, false)
-    assert.equal(await ui('document.querySelector("#agent-stop").disabled'), true)
-     pass('initial UI state includes updater, finder and restore availability')
+    assert.equal(await ui('document.querySelector("#agent-stop").disabled'), false, 'connected agents can be paused before their next tool call')
+    pass('initial UI state includes updater, finder and restore availability')
     await click('#btn-settings')
     await until(() => ui('document.querySelector("#set-engine").options.length > 0'), 'settings ready')
      assert.equal(await ui('document.activeElement?.id'), 'btn-close-settings')
@@ -502,7 +508,7 @@ if (!process.versions.electron) {
     await assertSelectedView(restoredA, pageA, pageA)
     pass('clicking a tab attaches only its native page below the shell and focuses it')
 
-    // MCP selection changes the page underneath the shell, without taking shell focus.
+    // visible 模式保留旧行为：客户端在自己的标签间切换页面，但不抢外壳焦点。
     chrome.focus()
     await until(() => webContents.getFocusedWebContents() === chrome, 'shell focus before MCP tab selection')
     await tool('browser_tabs', { action: 'select', tabId: restoredB.id })
@@ -906,7 +912,7 @@ if (!process.versions.electron) {
     pass('tab switch closes search and isolates asynchronous results')
 
     // 站点权限请求：不再静默拒绝，而是进入人工审批；允许后同会话内查询为 granted
-    await tool('browser_navigate', { url: base + '/perm-fixture', snapshot: false })
+    await tool('browser_tabs', { action: 'new', url: base + '/perm-fixture' })
     await until(async () => (await state()).tabs.some((t) => t.active && t.url.startsWith(base) && !t.loading), 'permission fixture page')
     const permPage = await until(
       () => webContents.getAllWebContents().find((wc) => wc !== chrome && wc.getURL().startsWith(base)) ?? null,

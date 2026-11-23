@@ -103,6 +103,18 @@ export class ApprovalManager {
     this.onChange()
   }
 
+  /** 任务中心的手动暂停：与“中断 30 秒”不同，必须等待用户显式恢复。 */
+  pauseIndefinitely(): void {
+    if (this.resumeTimer) {
+      clearTimeout(this.resumeTimer)
+      this.resumeTimer = null
+    }
+    this.interrupted = true
+    this.resumeAtValue = undefined
+    for (const id of [...this.pending.keys()]) this.finish(id, false)
+    this.onChange()
+  }
+
   resume(): void {
     const changed = this.interrupted || this.resumeAtValue !== undefined || this.resumeTimer !== null
     if (this.resumeTimer) {

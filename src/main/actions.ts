@@ -294,6 +294,55 @@ async function gestureSender(tab: Tab): Promise<(event: MouseEvent, held?: boole
 
 const gestureSenders = new WeakMap<Electron.WebContents, (event: MouseEvent, held?: boolean) => Promise<unknown>>()
 
+type DragData = {
+  items: { mimeType: string; data: string; title?: string; baseURL?: string }[]
+  dragOperationsMask: number
+  files?: string[]
+}
+
+function waitForDragIntercept(dbg: Electron.Debugger, signal?: AbortSignal): Promise<DragData> {
+  return new Promise((resolve, reject) => {
+    let timer: ReturnType<typeof setTimeout>
+    const cleanup = (): void => {
+      clearTimeout(timer)
+      dbg.removeListener('message', onMessage)
+      dbg.removeListener('detach', onDetach)
+      signal?.removeEventListener('abort', onAbort)
+    }
+    const fail = (error: Error): void => {
+      cleanup()
+      reject(error)
+    }
+    const onMessage = (_event: Electron.Event, method: string, params: Record<string, unknown>): void => {
+      if (method !== 'Input.dragIntercepted') return
+      const data = params['data'] as DragData | undefined
+      if (!data || !Array.isArray(data.items) || typeof data.dragOperationsMask !== 'number') {
+        fail(new ActionError('Chromium 返回了无效的拖拽数据'))
+        return
+      }
+      cleanup()
+      resolve(data)
+    }
+    const onDetach = (): void => fail(new ActionError('页面调试通道在拖拽期间已关闭'))
+    const onAbort = (): void => fail(new ActionError('工具调用已被用户中断。'))
+    dbg.on('message', onMessage)
+    dbg.once('detach', onDetach)
+    signal?.addEventListener('abort', onAbort, { once: true })
+    timer = setTimeout(() => fail(new ActionError('页面没有启动 HTML 拖拽；请确认起始元素支持拖拽')), 5000)
+    if (signal?.aborted) onAbort()
+  })
+}
+
+async function dispatchDragEvent(
+  dbg: Electron.Debugger,
+  type: 'dragEnter' | 'dragOver' | 'drop' | 'dragCancel',
+  x: number,
+  y: number,
+  data: DragData
+): Promise<void> {
+  await dbg.sendCommand('Input.dispatchDragEvent', { type, x, y, data })
+}
+
 /** 未预先建立连接时的单事件兜底路径（悬停等无取消语义的调用）。 */
 function pageMouse(tab: Tab): (event: MouseEvent, held?: boolean) => unknown {
   const wc = tab.view.webContents
@@ -475,6 +524,7 @@ export async function doClick(
 
   const x = Math.max(0, loc.x ?? 0)
   const y = Math.max(0, loc.y ?? 0)
+  tab.recordPointer?.({ kind: 'click', x, y })
   const button = opts?.button ?? 'left'
   const clickCount = Math.max(1, Math.min(3, opts?.clickCount ?? 1))
   const actName = clickCount === 2 ? '双击' : button === 'right' ? '右键' : '点击'
@@ -553,6 +603,7 @@ export async function doDrag(
 
   const x1 = Math.max(0, loc1.x ?? 0)
   const y1 = Math.max(0, loc1.y ?? 0)
+  tab.recordPointer?.({ kind: 'move', x: x1, y: y1 })
   let x2 = x1
   let y2 = y1
 
@@ -573,43 +624,76 @@ export async function doDrag(
   } else {
     throw new ActionError('拖拽操作必须指定 toRef 目标元素或 dx/dy 偏移像素')
   }
+  tab.recordPointer?.({ kind: 'click', x: x2, y: y2 })
 
   throwIfAborted(opts.signal)
   // 播放起始与终点光标
   void wc.executeJavaScript(laserCursorScript(x1, y1, 'drag'), false).catch(() => {})
   void wc.executeJavaScript(laserCursorScript(x2, y2, 'drag'), false).catch(() => {})
 
-  // 模拟真实轨迹平滑拖动（5 步插值）。拖拽的释放属于语义完成动作：
-  // 取消时必须补发 mouseUp，否则页面停在“按住不放”状态（与点击相反）。
+  // Chromium 拦截真实 dragstart 后返回页面生成的 DataTransfer 数据，再派发可信 CDP 拖放事件。
   let mouseDown = false
+  let interceptEnabled = false
+  let dragData: DragData | null = null
+  let dbg: Electron.Debugger | null = null
+  let intercepted!: Promise<DragData>
   const send = await gestureSender(tab)
   try {
     throwIfAborted(opts.signal)
+    const activeDebugger = await withPageDebugger(wc, async (pageDebugger) => {
+      await pageDebugger.sendCommand('Input.setInterceptDrags', { enabled: true })
+      interceptEnabled = true
+      intercepted = waitForDragIntercept(pageDebugger, opts.signal)
+      return pageDebugger
+    })
+    dbg = activeDebugger
     await send({ type: 'mouseMove', x: x1, y: y1 })
     throwIfAborted(opts.signal)
     mouseDown = true
     await send({ type: 'mouseDown', x: x1, y: y1, button: 'left', clickCount: 1 })
-    await delay(50)
+    const deltaX = x2 - x1
+    const deltaY = y2 - y1
+    const distance = Math.hypot(deltaX, deltaY)
+    const thresholdX = Math.round(x1 + (distance ? (deltaX / distance) * 12 : 12))
+    const thresholdY = Math.round(y1 + (distance ? (deltaY / distance) * 12 : 0))
+      await send({ type: 'mouseMove', x: thresholdX, y: thresholdY, button: 'left' }, true)
+    dragData = await intercepted
     throwIfAborted(opts.signal)
+    await dispatchDragEvent(activeDebugger, 'dragEnter', thresholdX, thresholdY, dragData)
+    await dispatchDragEvent(activeDebugger, 'dragOver', thresholdX, thresholdY, dragData)
 
     const steps = 7
     for (let i = 1; i <= steps; i++) {
       throwIfAborted(opts.signal)
-      const curX = Math.round(x1 + ((x2 - x1) * i) / steps)
-      const curY = Math.round(y1 + ((y2 - y1) * i) / steps)
-      await send({ type: 'mouseMove', x: curX, y: curY }, true)
+      const curX = Math.round(thresholdX + ((x2 - thresholdX) * i) / steps)
+      const curY = Math.round(thresholdY + ((y2 - thresholdY) * i) / steps)
+      await dispatchDragEvent(activeDebugger, 'dragOver', curX, curY, dragData)
       await delay(20)
     }
 
     throwIfAborted(opts.signal)
+    await dispatchDragEvent(activeDebugger, 'drop', x2, y2, dragData)
     await send({ type: 'mouseUp', x: x2, y: y2, button: 'left', clickCount: 1 })
     mouseDown = false
   } finally {
     gestureSenders.delete(wc)
-    // 中断/异常路径也必须释放鼠标，否则页面可能停在“按住不放”状态
+    if (dbg && dragData && mouseDown) {
+      try {
+        await dispatchDragEvent(dbg, 'dragCancel', x2, y2, dragData)
+      } catch {
+        /* 页面已关闭 */
+      }
+    }
     if (mouseDown) {
       try {
         await send({ type: 'mouseUp', x: x2, y: y2, button: 'left', clickCount: 1 })
+      } catch {
+        /* 页面已关闭 */
+      }
+    }
+    if (dbg && interceptEnabled) {
+      try {
+        await dbg.sendCommand('Input.setInterceptDrags', { enabled: false })
       } catch {
         /* 页面已关闭 */
       }
@@ -651,6 +735,7 @@ export async function doType(
     )
   }
   const tag = focus.tag ?? 'unknown'
+  tab.recordPointer?.({ kind: 'input' })
   if (['checkbox', 'radio', 'button', 'submit', 'file'].includes(focus.type ?? '')) {
     throw new ActionError(
       `元素 ${ref} 是 ${focus.type} 类型，不支持输入文本；请改用 browser_click 或 browser_select_option`
@@ -1139,6 +1224,7 @@ export async function doPressKey(tab: Tab, key: string, modifiers: string[] = []
     throw new ActionError(`不支持的按键: ${key}（支持 Enter/Escape/Tab/Arrow*/F1-F12/单字符及 Ctrl/Alt/Shift/Meta 组合）`)
   }
   await sendPageKey(tab, k, parsed.modifiers)
+  tab.recordPointer?.({ kind: 'input' })
   await delay(120)
   return { pressed: k, modifiers: parsed.modifiers }
 }
@@ -1347,6 +1433,7 @@ export async function doHover(tab: Tab, ref: string): Promise<{ hovered: string 
   const x = Math.max(0, loc.x ?? 0)
   const y = Math.max(0, loc.y ?? 0)
   void wc.executeJavaScript(laserCursorScript(x, y, 'hover'), false).catch(() => {})
+  tab.recordPointer?.({ kind: 'move', x, y })
   await pageMouse(tab)({ type: 'mouseMove', x, y })
   await delay(150)
   return { hovered: `${loc.tag} @(${x},${y})` }

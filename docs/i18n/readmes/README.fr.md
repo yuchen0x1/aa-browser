@@ -137,7 +137,7 @@ Une configuration écrite **n'est pas** une connexion qui fonctionne. Vérifiez 
 
 ## Outils MCP
 
-**44 outils** en cinq groupes : navigation et snapshot (5), interaction (9), lecture et état (20), réseau et Mock (6), diagnostic et onglets (4). Les noms d'outils côté client peuvent porter le préfixe `mcp__aa-browser__`.
+**47 outils** en cinq groupes : navigation et snapshot (5), interaction (9), lecture et état (20), réseau et Mock (6), diagnostic et onglets (7). Les noms d'outils côté client peuvent porter le préfixe `mcp__aa-browser__`.
 
 | Groupe | Outils |
 | --- | --- |
@@ -145,7 +145,7 @@ Une configuration écrite **n'est pas** une connexion qui fonctionne. Vérifiez 
 | Interaction | `browser_click`, `browser_type`, `browser_fill_form`, `browser_select_option`, `browser_drag`, `browser_hover`, `browser_scroll`, `browser_press_key`, `browser_upload_file` |
 | Lecture et état | `browser_extract`, `browser_evaluate`, `browser_dialogs`, `browser_wait`, `browser_screenshot`, `browser_find`, `browser_get_selector`, `browser_cookies`, `browser_storage`, `browser_downloads`, `browser_pdf`, `browser_console` |
 | Réseau et Mock | `browser_network_requests`, `browser_network_detail`, `browser_har`, `browser_mock_requests`, `browser_list_mocks`, `browser_clear_mocks` |
-| Diagnostic et onglets | `browser_performance`, `browser_resize`, `browser_tabs` |
+| Diagnostic et onglets | `browser_performance`, `browser_resize`, `browser_tabs`, `browser_window`, `browser_tasks`, `browser_extensions`, `browser_evidence` |
 
 Comportement commun : la plupart des outils renvoient un snapshot avec leur résultat (`snapshot: false` l'omet), tous les outils sauf `browser_resize` et `browser_downloads` acceptent un `tabId`, un appel unique expire après 180 secondes, l'approbation attend jusqu'à 120 secondes, et les détails réseau sont expurgés par défaut.
 
