@@ -253,7 +253,17 @@ async function runElectron() {
     const primaryTabs = await call('browser_tabs', { action: 'list' })
     const primaryTabId = primaryTabs.text.match(/\[(t[a-z0-9]+)\]/)?.[1]
     assert.ok(primaryTabId, primaryTabs.text)
-    const focusBeforeSecondClient = win.isFocused()
+    // Xvfb 的窗口管理器会在 show()/focus() 之后延迟一拍才稳定 isFocused()；
+    // 先等焦点连续几次采样一致，避免把异步到位的焦点误判成“第二客户端抢焦点”。
+    let focusSamples = 0
+    let focusSample = win.isFocused()
+    for (let attempt = 0; attempt < 20 && focusSamples < 3; attempt++) {
+      await delay(100)
+      const next = win.isFocused()
+      focusSamples = next === focusSample ? focusSamples + 1 : 0
+      focusSample = next
+    }
+    const focusBeforeSecondClient = focusSample
     const secondAgent = await connectDirectAgent()
     const secondTabsBefore = await callDirectAgent(secondAgent, 'browser_tabs', { action: 'list' })
     assert.doesNotMatch(directText(secondTabsBefore.result), new RegExp(`\\[${primaryTabId}\\]`))
