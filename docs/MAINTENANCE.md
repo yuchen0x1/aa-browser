@@ -1,6 +1,6 @@
 # Aa Browser 维护状态
 
-基线审核于 2026-11-19（v0.2.0）。GitHub 的 [CI](https://github.com/yuchen0x1/aa-browser/actions/workflows/ci.yml)、[发行检查](https://github.com/yuchen0x1/aa-browser/actions/workflows/sync-release-readme.yml)、[CodeQL](https://github.com/yuchen0x1/aa-browser/actions/workflows/codeql.yml)、[最新发行](https://github.com/yuchen0x1/aa-browser/releases/latest) 提供实时状态。产品目标版本由 `package.json` 和 tag 共同确定。
+基线审核于 2026-11-19（v0.2.0）。GitHub 的 [CI](https://github.com/yuchen0x1/aa-browser/actions/workflows/ci.yml)、[发行校验](https://github.com/yuchen0x1/aa-browser/actions/workflows/release-verify.yml)、[依赖审计](https://github.com/yuchen0x1/aa-browser/actions/workflows/audit.yml)、[CodeQL](https://github.com/yuchen0x1/aa-browser/actions/workflows/codeql.yml)、[最新发行](https://github.com/yuchen0x1/aa-browser/releases/latest) 提供实时状态。产品目标版本由 `package.json` 和 tag 共同确定。
 
 ## 原项目
 
@@ -24,7 +24,7 @@ MCP 客户端    →  cli/mcp      →  src/main/agent-server →  tools / actio
 | Windows v0.0.8 本地回归 | 12 项命令通过。包括 check、build、test:tools、test:stores、test:security、test:updater、test:release、validate:workbuddy、validate:codex、smoke、test:desktop、test:update-ui |
 | Windows v0.2.0 本地回归 | check（34 工具 + 提示词一致）、test:tools、test:stores 11/11、test:security、test:updater 13/13、test:release 5/5、test:installer 4/4、test:connect（打包产物 connect-only + browser_tabs 验证）、build、smoke（含性能摘要与会话记录断言）、test:desktop 26/26、test:update-ui 6/6、`npm run dist` 产出 NSIS + blockmap + latest.yml、`release-assets prepare windows-x64` 校验通过、SBOM 生成与发布脚本回归 |
 | Windows v0.3.0 本地回归 | check（类型、34 工具契约、提示词、DSH 包、页面脚本转义）、test:tools、test:stores 11/11、test:security、test:updater 13/13、test:release 5/5、test:installer 4/4、test:bridge、build（含 MCP 桥与 DSH 桥同步）、smoke 18 组、test:desktop 26/26、test:update-ui 6/6；图标产物用 electron-builder 自带 icons 工具转 .ico 校验 16/24/32/48/64/128/256 七帧四角 alpha 全为 0 |
-| v0.3.0 正式发布 | 标签 `v0.3.0`（提交 `5b5730c`）的 CI #113 双平台测试（windows-x64 / linux-x64，含打包产物安装与 MCP 校验）与「Publish tested release」全部成功；发布不可变 Release（Immutable），7 个资产（两平台安装包、blockmap、两平台更新描述、SBOM、SHA256SUMS）齐全；`SHA256SUMS.txt` 与 Release 资产 digest 逐项一致，`latest.yml` 版本为 0.3.0；发布后 `sync-release-readme` 校验工作流成功 |
+| v0.3.0 正式发布 | 标签 `v0.3.0`（提交 `5b5730c`）的 CI #113 双平台测试（windows-x64 / linux-x64，含打包产物安装与 MCP 校验）与「Publish tested release」全部成功；发布不可变 Release（Immutable），7 个资产（两平台安装包、blockmap、两平台更新描述、SBOM、SHA256SUMS）齐全；`SHA256SUMS.txt` 与 Release 资产 digest 逐项一致，`latest.yml` 版本为 0.3.0；发布后 `release-verify` 校验工作流成功 |
 | Windows 安装包实测 | `aa-browser-setup-0.2.0.exe` 静默安装到临时目录成功；对安装后的 `Aa Browser.exe` 运行完整 smoke（34 工具、性能摘要、会话记录、抓包、上传下载）通过；卸载程序返回 0 且主程序文件已移除 |
 | v0.2.0 正式发布 | PR #10 双平台 CI/CodeQL/依赖审查通过后合并为 `ebec652`；标签 `v0.2.0` 的 CI #63 成功并发布不可变 Release（Immutable/Verified）；7 个资产（两平台安装包、更新描述、SBOM、SHA256SUMS）齐全；实际下载核验 SHA-256、版本与 SBOM 一致 |
 | 通用接入提示词 | `installer/install-prompt.md` 与 `connect-prompt.md` 单一来源生成 `PROMPT.md` 和新标签页，`check:prompt` 校验一致；冒烟测试断言启动页渲染通用接入提示词与复制按钮 |

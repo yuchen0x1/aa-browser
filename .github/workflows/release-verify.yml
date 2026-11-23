@@ -1,0 +1,57 @@
+name: Release verification
+
+on:
+  release:
+    types: [published]
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+  schedule:
+    # 每周一核对线上 Release 的资产、摘要与正文归档。
+    - cron: '26 3 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aa-browser-release-verify
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify published release
+    if: github.repository == 'yuchen0x1/aa-browser'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # 标签可能先于 Release 到达；草稿阶段没有可核对的公开资产，直接跳过。
+      - name: Wait for a published release
+        id: published
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/${{ github.repository }}/releases/latest" --jq '.draft' 2>/dev/null | grep -q false; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No published release yet; skipping."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Verify links, digests and update metadata
+        if: steps.published.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/verify-public-release.mjs "${{ github.repository }}"
+      - name: Check archived release bodies match GitHub
+        if: steps.published.outputs.ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: npm run check:release-bodies:remote

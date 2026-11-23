@@ -5,26 +5,21 @@ on:
     branches: [main]
     tags: ['v*']
   pull_request:
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
   group: aa-browser-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
-  test:
-    name: Test (${{ matrix.platform }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { platform: windows-x64, runner: windows-latest }
-          - { platform: linux-x64, runner: ubuntu-24.04 }
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 25
+  static:
+    name: Static checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -40,9 +35,65 @@ jobs:
       - run: npm run validate:codex
       - run: npm run validate:opencode
       - run: npm run validate:workbuddy
+
+  unit:
+    name: Unit suites
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
       - run: npm run build
+      # 每个套件都跑完再统一失败：一个套件出错不再掩盖后面的 15 个套件。
+      - name: Node-only regression suites
+        shell: bash
+        run: |
+          set -uo pipefail
+          failed=()
+          for suite in \
+            test:stores test:main-diagnostics test:client-config test:printing \
+            test:security test:updater test:update-restart test:release \
+            test:installer test:bridge test:bridge-connection-race \
+            test:bridge-lifecycle test:bridge-restart-replay \
+            test:agent-cancellation test:session-permissions test:approval-parity
+          do
+            echo "::group::$suite"
+            if npm run "$suite"; then echo "::endgroup::"; else echo "::error::$suite failed"; failed+=("$suite"); echo "::endgroup::"; fi
+          done
+          if [ "${#failed[@]}" -gt 0 ]; then
+            echo "Failed suites: ${failed[*]}"
+            exit 1
+          fi
       - name: Generate software bill of materials
         run: npm run sbom
+
+  desktop:
+    name: Desktop (${{ matrix.platform }})
+    needs: [static]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { platform: windows-x64, runner: windows-latest }
+          - { platform: linux-x64, runner: ubuntu-24.04 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
       - name: Headless desktop display (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -52,17 +103,25 @@ jobs:
           if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           fi
-      - name: Electron regression
+      # 单个套件失败不再把后面的套件全部标成 skipped，一次运行即可看到完整失败面；
+      # 失败原因写进 ::error:: 分组，最后统一以非零退出码收尾。
+      - name: Electron suites
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
           display=()
           if [ "$RUNNER_OS" = Linux ]; then display=(xvfb-run -a); fi
-          "${display[@]}" npm run smoke
-          "${display[@]}" npm run test:desktop
+          failed=()
+          run_suite() {
+            local name=$1; shift
+            echo "::group::$name"
+            if "$@"; then echo "::endgroup::"; else echo "::error::$name failed"; failed+=("$name"); echo "::endgroup::"; fi
+          }
+          run_suite smoke "${display[@]}" npm run smoke
+          run_suite test:desktop "${display[@]}" npm run test:desktop
+          # 真实最小化/恢复需要窗口管理器，仅有 X server 不够。
           if [ "$RUNNER_OS" = Linux ]; then
-            # Real minimize/restore needs a window manager, not only an X server.
-            xvfb-run -a bash -c '
+            run_suite test:background xvfb-run -a bash -c '
               openbox >/dev/null 2>&1 &
               wm=$!
               trap "kill $wm 2>/dev/null || true" EXIT
@@ -74,43 +133,24 @@ jobs:
               npm run test:background
             '
           else
-            npm run test:background
+            run_suite test:background npm run test:background
           fi
-          "${display[@]}" npm run test:update-ui
-          "${display[@]}" npm run test:ui-ux
-          "${display[@]}" npm run test:settings-safety
-          "${display[@]}" npm run test:cancel-side-effects
-          "${display[@]}" npm run test:newtab-i18n
-          "${display[@]}" npm run test:app-i18n
+          run_suite test:update-ui "${display[@]}" npm run test:update-ui
+          run_suite test:ui-ux "${display[@]}" npm run test:ui-ux
+          run_suite test:settings-safety "${display[@]}" npm run test:settings-safety
+          run_suite test:cancel-side-effects "${display[@]}" npm run test:cancel-side-effects
+          run_suite test:newtab-i18n "${display[@]}" npm run test:newtab-i18n
+          run_suite test:app-i18n "${display[@]}" npm run test:app-i18n
+          # 保持 960脳640 DIP 窗口在强制 2x 缩放下仍在显示区内。
           if [ "$RUNNER_OS" = Linux ]; then
-            # Keep the 960×640 DIP window within the display at forced 2x scale.
-            xvfb-run -a -s '-screen 0 2560x1600x24' npm run test:display-matrix
+            run_suite test:display-matrix xvfb-run -a -s '-screen 0 2560x1600x24' npm run test:display-matrix
           else
-            npm run test:display-matrix
+            run_suite test:display-matrix npm run test:display-matrix
           fi
-      - run: npm run test:stores
-      - run: npm run test:main-diagnostics
-      - run: npm run test:client-config
-      - run: npm run test:printing
-      - run: npm run test:security
-      - run: npm run test:updater
-      - run: npm run test:update-restart
-      - run: npm run test:release
-      - run: npm run test:installer
-      - run: npm run test:bridge
-      - run: npm run test:bridge-connection-race
-      - run: npm run test:bridge-lifecycle
-      - run: npm run test:bridge-restart-replay
-      - run: npm run test:agent-cancellation
-      - run: npm run test:session-permissions
-      - run: npm run test:approval-parity
-      - name: Bridge cold auto-launch regression
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = Linux ]; then
-            xvfb-run -a npm run test:bridge-autolaunch
-          else
-            npm run test:bridge-autolaunch
+          run_suite test:bridge-autolaunch "${display[@]}" npm run test:bridge-autolaunch
+          if [ "${#failed[@]}" -gt 0 ]; then
+            echo "Failed suites: ${failed[*]}"
+            exit 1
           fi
       - name: Package and validate platform assets
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
@@ -166,7 +206,7 @@ jobs:
   release:
     name: Publish tested release
     if: github.repository == 'yuchen0x1/aa-browser' && startsWith(github.ref, 'refs/tags/v')
-    needs: test
+    needs: [static, unit, desktop]
     runs-on: ubuntu-24.04
     environment: release
     timeout-minutes: 20

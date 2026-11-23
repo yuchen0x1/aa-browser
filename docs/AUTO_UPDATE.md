@@ -35,7 +35,7 @@ gh release verify-asset v0.1.0 ./aa-browser-0.1.0-linux-x86_64.AppImage --repo y
 2. 本地跑 `npm run check`、相关回归和 `npm run build`，然后推送 `main`。`main` 推送只跑静态检查与测试；打包、安装和 AppImage 验收只在标签或手动触发时执行，避免每次推送都重复几分钟的构建。
 3. 确认仓库的不可变 Release 已启用后，从通过本地门禁的 `main` 提交创建并推送 `vX.Y.Z` 标签。标签 CI 会重新构建并打包两平台产物，验证安装包/更新描述的版本、文件名、大小和 SHA-512，构建 SHA-256 清单。仅当两平台均通过时才在 `release` 环境上传草稿资产。标签 CI 是发行的权威门禁，可与 `main` CI 并行。
 4. 草稿资产经 GitHub API 摘要检查后公开。正式版本的标签及资产由 GitHub 锁定。草稿中已有资产若摘要不同，应从原通过的 run 恢复已验证产物或排查草稿，原公开版本始终保留。SBOM 在发布 job 内由同一提交的 lockfile 生成，并进入 `SHA256SUMS.txt` 与资源集校验。
-5. Release maintenance 检查公开链接、版本元数据、摘要和发行证明。
+5. Release verification 检查公开链接、版本元数据、摘要和发行证明。
 6. 发布后归档正文和索引的提交只改文档，提交信息带 `[skip ci]`，避免为已由标签 CI 验证过的同一代码 SHA 再跑一遍完整测试与打包。
 
 建议在发版前保存老版本安装包，并在独立测试 profile 上完成一次升级和恢复。CI 的更新 UI 用模拟 provider 验证交互。打包冒烟会启动实际安装目录或 AppImage 并调用 MCP。完整的已验证证据见 [维护状态](MAINTENANCE.md)。

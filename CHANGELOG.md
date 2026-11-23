@@ -11,6 +11,13 @@
 - **输入遥测与审计**：后台点击、拖拽、输入位置进入预览元数据；拖拽改用 Chromium `dragIntercepted` 返回的原生 DataTransfer 数据，不再发送合成文本。新增 `docs/BACKGROUND_CONTROL.md`，记录 15 项后台能力审计、特殊网站策略和竞品取舍。
 - **回归覆盖**：真实 Electron + stdio MCP 后台套件 11 项通过，覆盖最小化 hover / 输入 / 滚动 / 原生拖放 / Enter 提交 / 截图、隐藏预览、窗口模式切换、审批唤醒、人工接管与释放、多客户端隔离、任务取消与队列释放、Windows 遮挡窗口；桌面回归 58/58、Windows 30 分钟 soak（`timerDelta` 1802、预览 3531 帧、历史与磁盘各 20 张、私有内存末次低于首次、Win32 前台窗口始终不是浏览器）和 DPI 100%–200% 矩阵均通过。物理多显示器、真实 DRM、第三方登录/2FA、生产签名、升级/回滚与崩溃注入恢复仍未验证。
 
+### 工作流与 CI 修复
+
+- **CI 拆分为 static / unit / desktop / release 四个 job**：静态检查与 Node-only 套件不再等待双平台 Electron，任一平台失败不再把其余 16 个套件直接标成 skipped；单个套件失败会写进 `::error::` 分组，一次运行即可看到完整失败面。
+- **隐藏窗口预览回归改为按平台断言**：ubuntu-24.04 + Xvfb 的桌面没有可供 `capturePage`/CDP 使用的合成表面，实测三种截图路径全部超时。Windows 仍断言真实非空预览帧；其它平台断言窗口确实隐藏、监控以可诊断的错误收尾而非静默挂死，出帧能力由 `background` 模式继续覆盖。
+- **PR 触发收窄到 `main` 并取消过期运行**：`pull_request` 不再对任意目标分支触发，同一 PR 的新推送会取消旧运行，`main` 推送与标签构建仍保持排队。
+- **删除 `sync-release-readme.yml`**：其 `workflow_run` 触发在 CI 失败时必然 skip、每周固定跑一次空转，替换为 `release-verify.yml`（在 Release 发布、标签推送和每周定时上校验资产、摘要、元数据与正文归档）以及独立的 `audit.yml`（每周依赖审计）。
+
 ## v0.13.0 — 2026-11-23
 
 - **Cloudflare 验证辅助**：新增 `browser_cloudflare`，可检查 `challenges.cloudflare.com` 跨域挑战 iframe、列出可见复选框，并等待验证稳定完成。

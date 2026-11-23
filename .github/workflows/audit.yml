@@ -1,0 +1,28 @@
+name: Dependency audit
+
+on:
+  schedule:
+    # 每周一核对生产与开发依赖的已知漏洞。
+    - cron: '26 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: npm audit
+    if: github.repository == 'yuchen0x1/aa-browser'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Production dependencies
+        run: npm audit --omit=dev --audit-level=high --registry=https://registry.npmjs.org
+      - name: Full dependency tree
+        run: npm audit --audit-level=high --registry=https://registry.npmjs.org
