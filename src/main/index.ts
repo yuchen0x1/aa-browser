@@ -152,10 +152,13 @@ let backgroundMetricsRerun = false
 
 async function syncBackgroundViewports(): Promise<void> {
   if (!tabManager || !win || win.isDestroyed()) return
-  const minimized = win.isMinimized()
+  // 最小化和完全隐藏都会让 Chromium 失去真实的展示表面：前者把渲染视口压成
+  // 0×0，后者在部分平台（实测 Linux/X11）同样不再有可截图的合成表面。
+  // 两种情况都必须用记忆尺寸的虚拟视口维持页面布局与后台截图能力。
+  const background = win.isMinimized() || !win.isVisible()
   const width = lastContentSize.width
   const height = Math.max(300, lastContentSize.height - CHROME_HEIGHT)
-  if (!minimized) {
+  if (!background) {
     for (const wc of [...backgroundViewportTabs]) {
       backgroundViewportTabs.delete(wc)
       if (wc.isDestroyed() || !wc.debugger.isAttached()) continue
