@@ -1,6 +1,6 @@
 ## 📢 版本概述
 
-Aa Browser v0.15.0 focuses on bounded renderer recovery and an auditable task lifecycle for orchestration. Crashed or unresponsive tabs now expose recovery state and perform a limited reload recovery without silently retrying forever.
+Aa Browser v0.15.0 focuses on bounded renderer recovery and an auditable task lifecycle for orchestration. Crashed or unresponsive tabs now expose recovery state and perform a limited reload recovery without silently retrying forever. This release publishes Windows x64 assets only; Linux is temporarily held back after a Linux desktop regression failed in release CI.
 
 ## ✅ 主要变更
 
@@ -12,9 +12,17 @@ Aa Browser v0.15.0 focuses on bounded renderer recovery and an auditable task li
 
 ## ⚠️ 验证边界
 
-完整构建、真实 Electron 崩溃恢复、Windows 安装包签名和跨平台 Release 资产由 GitHub Actions 在发布流程中验证；本地不得以未运行的测试冒充通过。
+Windows 桌面回归与安装包冒烟已在标签 CI 中通过；真实 Electron 崩溃恢复和 Windows 代码签名仍未验证。Windows 安装包未签名，安装时可能出现 SmartScreen 提示。Linux 打包与桌面验证已从 v0.15.0 移除，待回归修复后在后续版本恢复。
 
 ## 🔗 项目链接
 
 - 项目主页：https://github.com/yuchen0x1/aa-browser
 - Release：https://github.com/yuchen0x1/aa-browser/releases/tag/v0.15.0
+
+## 📦 发布资产
+
+- `aa-browser-setup-0.15.0.exe`（Windows x64，未签名）
+- `aa-browser-setup-0.15.0.exe.blockmap`
+- `latest.yml`
+- `sbom.cdx.json`
+- `SHA256SUMS.txt`

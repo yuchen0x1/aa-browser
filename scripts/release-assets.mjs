@@ -7,15 +7,18 @@ import { pathToFileURL } from 'node:url'
 
 /** 与安装包一起发布的软件物料清单（CycloneDX）。 */
 export const SBOM_FILE = 'sbom.cdx.json'
+/** v0.15.0 因 Linux 回归未通过而暂缓 Linux 包；历史标签资产集保持不变。 */
+const WINDOWS_ONLY_TAGS = new Set(['v0.15.0'])
 
 export function releaseAssets(tag) {
   assert.match(tag, /^v\d+\.\d+\.\d+$/)
   const version = tag.slice(1)
   const installer = `aa-browser-setup-${version}.exe`
-  return {
+  const assets = {
     'windows-x64': [installer, `${installer}.blockmap`, 'latest.yml'],
     'linux-x64': [`aa-browser-${version}-linux-x86_64.AppImage`, 'latest-linux.yml']
   }
+  return WINDOWS_ONLY_TAGS.has(tag) ? { 'windows-x64': assets['windows-x64'] } : assets
 }
 
 /** v0.2.0 起正式发行包含 SBOM；更早的标签保持原资产集合，供历史校验。 */

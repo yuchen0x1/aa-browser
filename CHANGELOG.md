@@ -7,6 +7,7 @@
 - **Renderer recovery**: crashed or unresponsive tabs now expose a recovery state, perform bounded reload recovery, and report failure instead of silently remaining unusable.
 - **Task state machine**: added a strict, auditable task lifecycle with recovery reasons, retry limits, and confirmation gates for high-risk retries.
 - **Compatibility**: recovery metadata is optional in `TabInfo`, so existing MCP clients continue to work.
+- **Windows-only release**: v0.15.0 publishes Windows x64 assets only. Linux packaging is temporarily held back after a Linux desktop regression failed in release CI.
 
 ## v0.14.0 — 2026-11-23
 

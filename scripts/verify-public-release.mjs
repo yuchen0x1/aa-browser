@@ -8,11 +8,11 @@ assert.match(repository ?? '', /^[\w.-]+\/[\w.-]+$/)
 const release = JSON.parse(execFileSync('gh', ['api', `repos/${repository}/releases/latest`], { encoding: 'utf8' }))
 const tag = release.tag_name
 const platforms = releaseAssets(tag)
-const expected = [...platforms['windows-x64'], ...(supportsSbom(tag) ? [SBOM_FILE] : []), 'SHA256SUMS.txt']
+const expected = [...(platforms['windows-x64'] ?? []), ...(supportsSbom(tag) ? [SBOM_FILE] : []), 'SHA256SUMS.txt']
 if (tag !== 'v0.0.8') {
   assert.equal(release.immutable, true, 'New releases must be immutable')
   execFileSync('gh', ['release', 'verify', tag, '--repo', repository], { stdio: 'inherit' })
-  expected.push(...platforms['linux-x64'])
+  if (platforms['linux-x64']) expected.push(...platforms['linux-x64'])
 }
 const metadata = new Map()
 for (const name of expected) {
