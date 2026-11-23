@@ -27,7 +27,12 @@ export interface MonitorDeps {
 
 const FRAME_INTERVAL_MS = 500
 const MAX_HISTORY = 20
-const CAPTURE_TIMEOUT_MS = 12_000
+/**
+ * 监控截图的总上限。必须大于 captureVisual 内部各路径预算之和
+ * （capturePage 3.5s + CDP 两级各 6s ≈ 15.5s），否则外层超时总会先触发，
+ * 内部兜底永远轮不到执行。
+ */
+const CAPTURE_TIMEOUT_MS = 20_000
 
 function monitorDir(): string {
   return process.env['AA_BROWSER_MONITOR_DIR'] || path.join(os.homedir(), '.aabrowser', 'monitor')

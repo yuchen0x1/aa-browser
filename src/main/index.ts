@@ -33,6 +33,16 @@ import { BrowserMonitor } from './monitor'
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const VERSION = app.getVersion()
 
+// Aa Browser 的核心承诺是「窗口最小化/被遮挡/隐藏时 Agent 仍能读页面、截图、操作」。
+// Chromium 默认会对不可见窗口做后台节流：降低定时器频率、停止合成帧，
+// 极端情况下渲染器直接不再产生可截图的表面（实测 Linux/X11 隐藏窗口下
+// capturePage 与 CDP 截图会一直挂到超时）。这些开关关闭后台节流与遮挡计算，
+// 让渲染器在后台持续出帧。
+// 注意：页面拿到的 document.visibilityState 仍然是真实值，这里不伪造可见性。
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
+app.commandLine.appendSwitch('disable-renderer-backgrounding')
+app.commandLine.appendSwitch('disable-background-timer-throttling')
+
 /** AgentServer 使用的连接发现文件；更新重启标记与它放在同一目录。 */
 function discoveryFile(): string {
   return process.env['AA_BROWSER_CONNECTION_FILE'] || path.join(os.homedir(), '.aabrowser', 'connection.json')

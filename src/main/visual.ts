@@ -135,7 +135,7 @@ export async function captureVisual(wc: WebContents, opts?: { fullPage?: boolean
       const failures: string[] = []
       let image: Electron.NativeImage | null = null
       try {
-        image = await settleWithin(wc.capturePage(undefined, { stayHidden: true }), 4_000, '预览截图')
+        image = await settleWithin(wc.capturePage(undefined, { stayHidden: true }), 3_500, '预览截图')
       } catch (error) {
         failures.push(`capturePage: ${error instanceof Error ? error.message : String(error)}`)
         image = null
@@ -155,7 +155,7 @@ export async function captureVisual(wc: WebContents, opts?: { fullPage?: boolean
               fromSurface,
               captureBeyondViewport: !!opts?.fullPage
             }) as Promise<{ data?: string }>,
-            8_000,
+            6_000,
             'CDP 截图'
           ))
           if (shot?.data) {
