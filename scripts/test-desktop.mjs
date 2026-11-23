@@ -41,6 +41,29 @@ if (!process.versions.electron) {
 } else {
   // Do not await app.whenReady() at module top level: Electron waits for its
   // ESM entry to finish evaluating before it can emit ready.
+  // 未处理的 Promise 拒绝在 Electron 主进程里可能直接终结进程（Node 22 默认行为），
+  // 且同步写不出原因。这里先接管并同步记录，再在通过前断言「一条都没有」——
+  // 既能拿到真实堆栈，也不会把缺陷藏起来。
+  const unhandledErrors = []
+  const describeError = (reason) => (reason instanceof Error ? (reason.stack ?? reason.message) : String(reason))
+  process.on('unhandledRejection', (reason) => {
+    const text = describeError(reason)
+    unhandledErrors.push(`unhandledRejection: ${text}`)
+    try {
+      fs.writeSync(2, `[desktop-suite] unhandledRejection: ${text}\n`)
+    } catch {
+      /* 忽略 */
+    }
+  })
+  // 未捕获异常无法继续跑，直接同步落盘后失败退出，避免变成无原因的超时。
+  process.on('uncaughtException', (reason) => {
+    try {
+      fs.writeSync(2, `[desktop-suite] uncaughtException: ${describeError(reason)}\n`)
+    } catch {
+      /* 忽略 */
+    }
+    process.exit(1)
+  })
   void (async () => {
   const { app, webContents, BaseWindow, Menu, screen, clipboard } = await import('electron')
   const runDir = process.env.AA_DESKTOP_TEST_DIR
@@ -239,6 +262,7 @@ if (!process.versions.electron) {
       ws.close()
       await new Promise((resolve) => server.close(resolve))
       await new Promise((resolve) => { app.once('will-quit', resolve); app.quit() })
+      assert.deepEqual(unhandledErrors, [], `desktop suite produced unhandled errors:\n${unhandledErrors.join('\n')}`)
       fs.writeFileSync(path.join(runDir, 'result.json'), JSON.stringify({ status: 'PASS', scale: displayScale, devicePixelRatio: dpr, viewport, contentBounds, placements, displays: displays.map((display) => ({ bounds: display.bounds, workArea: display.workArea, scaleFactor: display.scaleFactor })), checks: results }, null, 2))
       console.log(`PASS: display matrix at ${Math.round(displayScale * 100)}%`)
       return
@@ -1091,16 +1115,33 @@ if (!process.versions.electron) {
     assert.equal(saved.tabs[saved.activeIndex].url, activeUrl)
     pass('closing the native window preserves tab order and active tab in the session record')
 
+    // 收尾前断言整个会话没有产生未处理拒绝：否则这些错误只会表现为
+    // 一个没有原因的退出码 1，或者被悄悄吞掉。
+    assert.deepEqual(unhandledErrors, [], `desktop suite produced unhandled errors:\n${unhandledErrors.join('\n')}`)
     fs.writeFileSync(path.join(runDir, 'result.json'), JSON.stringify({ status: 'PASS', checks: results, screenshot: process.env.AA_DESKTOP_SCREENSHOTS === '1' ? 'docs/screenshots/page-find-toolbar.png' : undefined }, null, 2))
     console.log(`PASS: all ${results.length} desktop checks; report ${path.join(runDir, 'result.json')}`)
     ws.close()
     server.close()
   } catch (error) {
-    console.error('FAIL:', error)
+    // 同步写 stderr：管道上的 console.error 是异步的，紧跟其后的 app.exit(1)
+    // 会直接把缓冲区丢掉，CI 里就只剩一个没有原因的「exit code 1」。
+    try {
+      fs.writeSync(2, `FAIL: ${error?.stack ?? error}\n`)
+    } catch {
+      /* 忽略 */
+    }
     fs.writeFileSync(path.join(runDir, 'result.json'), JSON.stringify({ status: 'FAIL', checks: results, error: error.stack }, null, 2))
     ws?.close()
     server.close()
     app.exit(1)
   }
-  })().catch((error) => { console.error(error); process.exit(1) })
+  })().catch((error) => {
+    // 同上：必须同步落盘，否则 process.exit 会吞掉诊断信息。
+    try {
+      fs.writeSync(2, `FAIL (outer): ${error?.stack ?? String(error)}\n`)
+    } catch {
+      /* 忽略 */
+    }
+    process.exit(1)
+  })
 }

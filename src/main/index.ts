@@ -199,6 +199,9 @@ function updateBackgroundViewports(): void {
 
 function pushState(): void {
   if (!chromeView || chromeView.webContents.isDestroyed()) return
+  // 窗口关闭期间 win 对象仍然存在但已销毁；此时读取 bounds 会抛
+  // "Object has been destroyed"，把整个关窗流程带崩。布局与窗口尺寸都需要活窗口。
+  const liveWindow = win && !win.isDestroyed() ? win : null
   layout()
   updateBackgroundViewports()
   const state: UiState = {
@@ -216,7 +219,7 @@ function pushState(): void {
     find: finder?.getState(),
     canReopenClosed: tabManager?.canReopenClosed ?? false,
     // windowHeight 反映真实窗口（最小化时为 0）；后台布局使用记忆中的最后有效尺寸。
-    windowHeight: win?.getContentBounds().height,
+    windowHeight: liveWindow ? liveWindow.getContentBounds().height : 0,
     backgroundMode: currentWindowMode(),
     monitor: monitor?.getState()
   }
@@ -1386,6 +1389,23 @@ if (!gotLock) {
 process.on('uncaughtException', (err) => {
   try {
     fs.appendFileSync(path.join(app.getPath('userData'), 'error.log'), `${new Date().toISOString()} ${err.stack ?? err}\n`)
+  } catch {
+    /* 忽略 */
+  }
+})
+
+// 未处理的 Promise 拒绝同样要留痕。Node 默认会把未处理拒绝当作致命错误抛出，
+// 桌面外壳里这会变成没有窗口、没有提示的静默退出；这里统一记录到 error.log，
+// 并同步写一份到 stderr，保证在 CI 这类管道输出场景下不丢日志。
+process.on('unhandledRejection', (reason) => {
+  const text = reason instanceof Error ? (reason.stack ?? reason.message) : String(reason)
+  try {
+    fs.appendFileSync(path.join(app.getPath('userData'), 'error.log'), `${new Date().toISOString()} unhandledRejection ${text}\n`)
+  } catch {
+    /* 忽略 */
+  }
+  try {
+    fs.writeSync(2, `[aa-browser] unhandledRejection ${text}\n`)
   } catch {
     /* 忽略 */
   }
