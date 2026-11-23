@@ -2,6 +2,14 @@
 
 历史发布正文见 [归档索引](../releases/release-notes.md)。本表只记录已核实的正式版本；候选不占用正式版本记录。
 
+## v0.13.0 正式发行（2026-11-23）
+
+- 标签 `v0.13.0` 指向已确认的 `main` 提交 `ea6905c64abc624347515681744c85e2a0ca9326`；标签 CI `45099078476` 的 Linux x64、Windows x64 重跑与「Publish tested release」作业全部成功。首次标签运行因两个旧生产工具夹具未 mock 新增 `./cloudflare` 依赖而失败，补齐夹具后同一标签重跑通过。
+- 正式 Release 已发布为 Latest、非草稿、非预发布且不可变；7 项公开资产（NSIS 安装包与 blockmap、AppImage、两平台更新元数据、SBOM、SHA256SUMS）均已上传，GitHub 资产摘要与 `SHA256SUMS.txt` 一致，`latest*.yml` 和 SBOM 版本为 0.13.0。
+- 主线 CI `45099071924`、CodeQL `45099072444` 与发布维护核验 `45100035811` 成功；`npm run check:release-bodies:remote` 通过，28 个版本的正文归档与线上 Release 一致。
+- 标签流水线完成跨平台构建、Linux AppImage/MCP 冒烟和 Windows NSIS 安装→MCP→卸载验证；本机与 CI 均未额外宣称 Authenticode、真实第三方 Cloudflare 挑战、旧版升级/回滚或 Linux 实机安装。
+- 本版本新增 `browser_cloudflare` 人在回路验证辅助；不读取或注入 challenge token，不修改 Cookie、请求头或网络响应，滑块/图片/Turnstile 仍由用户完成。
+
 ## v0.12.1 正式发行（2026-11-23）
 
 - 标签 `v0.12.1` 指向已确认的 `main` 合并提交 `c915abca482c1e562f75c45fb689105150669a60`；标签 CI `45094994167` 的 Windows x64、Linux x64 与「Publish tested release」作业全部成功。
@@ -36,6 +44,7 @@
 
 | 正式版本 | 状态与证据 |
 | --- | --- |
+| [v0.13.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.13.0) | 已发布（2026-11-23），Latest。标签 CI `45099078476` 双平台与发布作业成功；7 项资产、SHA-256 清单、SBOM、更新元数据与远程正文归档校验通过。首次运行的夹具失败已在同标签重跑前修复。 |
 | [v0.12.1](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.12.1) | 已发布（2026-11-23），Latest。标签 CI `45094994167` 双平台与发布作业成功；7 项资产、SHA-256 清单、SBOM、更新元数据与远程正文归档校验通过。 |
 | [v0.6.12](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.6.12) | 已发布（2026-11-21），Latest。标签 CI `44865353450` 双平台与发布作业成功；7 项不可变资产、GitHub Release 证明、SHA-256 清单、SBOM 与更新元数据校验通过。 |
 | [v0.6.11](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.6.11) | 已发布（2026-11-21）。标签 CI `44852624681` 双平台与发布作业成功；7 项资产与版本元数据一致；CodeQL 通过、依赖审计 0 漏洞；正文归档通过 `check:release-bodies:remote`。 |
