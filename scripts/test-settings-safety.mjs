@@ -104,6 +104,10 @@ async function testRenderer() {
       'aa:agent-info': () => null,
       'aa:clients-detect': () => structuredClone(detectedClients),
       'aa:clients-setup': () => [],
+      'aa:extension-pick': () => '',
+      'aa:extension-list': () => [],
+      'aa:extension-load': () => ({ ok: false, error: 'fixture does not load extensions' }),
+      'aa:extension-remove': () => ({ ok: false, error: 'fixture does not remove extensions' }),
       'aa:history-suggest': () => [
         { url: 'https://suggest.fixture.test/one', title: 'Fixture one', lastVisit: 1, count: 1 },
         { url: 'https://suggest.fixture.test/two', title: 'Fixture two', lastVisit: 2, count: 1 }

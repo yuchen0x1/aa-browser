@@ -102,7 +102,9 @@ export function isUrlAllowed(url: string, rules: string[], newtabUrl: string): b
   } catch {
     return false
   }
-  // Only regular web pages are eligible for navigation.  In particular, an
+  // Only exact first-party internal URLs are admitted above; every other
+  // chrome:/file:/data:/devtools: address stays blocked, even with no allowlist.
+  // Only regular web pages are eligible for navigation. In particular, an
   // empty allowlist must not turn file:, data:, devtools:, or other internal
   // schemes into an implicit allow rule.
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false

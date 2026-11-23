@@ -6,6 +6,8 @@ import os from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { TabManager } from './tabs'
 import type { Tab } from './tabs'
+import { SHARED_PARTITION } from './tabs'
+import { getExtensionManager } from './extensions'
 import { AgentServer } from './agent-server'
 import { buildTools } from './tools'
 import { normalizeUrl } from './tabs'
@@ -406,10 +408,10 @@ function titleBarColors(): { color: string; symbolColor: string } {
 
 /** 内部新标签页只接收已保存的外观设置；外部网页不会被注入或读取。 */
 function applyInternalAppearance(wc: Electron.WebContents): void {
-  if (wc.getURL() !== newtabUrl()) return
+  const url = wc.getURL()
+  if (url !== newtabUrl()) return
   const theme = resolvedTheme()
   const locale = getSettingsStore().get().locale
-  const url = newtabUrl()
   void wc.executeJavaScript(`if (location.href === ${JSON.stringify(url)}) { window.__aaApplyTheme?.(${JSON.stringify(theme)}); window.__aaApplyLocale?.(${JSON.stringify(locale)}) }`).catch(() => {})
 }
 
@@ -669,6 +671,13 @@ function registerIpc(): void {
     return guard(event, false, () => {
       if (!tabManager) return false
       const target = normalizeUrl(value, searchUrlBase(), newtabUrl())
+      // Electron 不带 Chrome 桌面版的 chrome://extensions 页面；映射到 Aa Browser 设置中的扩展区。
+      if (/^chrome:\/\/extensions\/?$/i.test(target)) {
+        settingsOpen = true
+        layout()
+        chromeView?.webContents.send('aa:open-extensions')
+        return true
+      }
       try {
         tabManager.assertUrlAllowed(target)
       } catch {
@@ -790,6 +799,41 @@ function registerIpc(): void {
     return guard(event, undefined, () => {
       settingsOpen = open === true
       layout()
+    })
+  })
+  /** 原生目录选择对话框：选择「已解压扩展」目录。取消返回空串。 */
+  ipcMain.handle('aa:extension-pick', async (event) => {
+    if (!isTrustedSender(event)) return ''
+    const result = await dialog.showOpenDialog({
+      title: getMainLocale() === 'en-US' ? 'Load unpacked extension' : '加载已解压的扩展程序',
+      properties: ['openDirectory'],
+      buttonLabel: getMainLocale() === 'en-US' ? 'Load' : '加载'
+    })
+    if (result.canceled || !result.filePaths.length) return ''
+    return result.filePaths[0]
+  })
+  ipcMain.handle('aa:extension-list', (event) => {
+    return guard(event, [], () => getExtensionManager().list())
+  })
+  ipcMain.handle('aa:extension-load', async (event, dir: string) => {
+    if (!isTrustedSender(event)) return { ok: false, error: 'untrusted' } as { ok: boolean; error?: string }
+    try {
+      const entry = await getExtensionManager().load(session.fromPartition(SHARED_PARTITION), String(dir ?? ''))
+      pushState()
+      return { ok: true, extension: entry }
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+  ipcMain.handle('aa:extension-remove', (event, key: string) => {
+    return guard(event, { ok: false, error: 'untrusted' }, () => {
+      try {
+        const removed = getExtensionManager().remove(session.fromPartition(SHARED_PARTITION), String(key ?? ''))
+        pushState()
+        return { ok: true, extension: removed }
+      } catch (error) {
+        return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      }
     })
   })
   ipcMain.handle('aa:agent-info', (event) => {
@@ -941,6 +985,20 @@ app.whenReady().then(async () => {
   // 重试是新的网络请求，必须重新过站点白名单，不能沿用创建下载时的授权
   getDownloadTracker().setUrlGuard((url) => tabManager?.isUrlAllowed(url) ?? false)
 
+  // 上次会话装载的已解压扩展：必须在第一个标签创建前恢复，
+  // 否则扩展的 content scripts 会错过首屏页面。
+  try {
+    const restoredExtensions = await getExtensionManager().restore(session.fromPartition(SHARED_PARTITION))
+    if (restoredExtensions.restored) {
+      console.log(`[aa-browser] 已恢复 ${restoredExtensions.restored} 个已解压扩展`)
+      if (restoredExtensions.skipped.length) {
+        console.warn(`[aa-browser] ${restoredExtensions.skipped.length} 个扩展路径已失效，从恢复列表移除`)
+      }
+    }
+  } catch (error) {
+    console.warn(`[aa-browser] 扩展恢复失败: ${error instanceof Error ? error.message : String(error)}`)
+  }
+
   // 跨会话标签恢复：先把上次的普通标签建回来，再开启自动保存。
   // 恢复过程中的 onChange 也会排队保存，但 during-restore 标志保证不会用半恢复状态覆盖记录。
   const sessionStore = getSessionStore()
@@ -1032,7 +1090,8 @@ app.whenReady().then(async () => {
       const settings = getSettingsStore().get()
       return { requireOperationApproval: settings.requireOperationApproval, fullSnapshot: settings.fullSnapshot, searchEngine: settings.searchEngine }
     },
-    () => agentServer?.runtimeInfo ?? { pid: process.pid, version: VERSION }
+    () => agentServer?.runtimeInfo ?? { pid: process.pid, version: VERSION },
+    () => session.fromPartition(SHARED_PARTITION)
   )
   agentServer = new AgentServer(
     tools,

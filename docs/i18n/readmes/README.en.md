@@ -137,7 +137,7 @@ A written config is **not** a working connection. Verify with `node install.mjs 
 
 ## MCP tools
 
-**43 tools** in five groups: navigation & snapshot (5), interaction (9), read & state (20), network & Mock (6), diagnostics & tabs (3). Client tool names may carry a `mcp__aa-browser__` prefix.
+**44 tools** in five groups: navigation & snapshot (5), interaction (9), read & state (20), network & Mock (6), diagnostics & tabs (4). Client tool names may carry a `mcp__aa-browser__` prefix.
 
 | Group | Tools |
 | --- | --- |

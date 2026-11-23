@@ -48,7 +48,7 @@ try {
     path.join(root, 'node_modules', 'typescript', 'bin', 'tsc'),
     '--ignoreConfig', '--noCheck', '--noResolve', '--rootDir', path.join(root, 'src'), '--outDir', out,
     '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--esModuleInterop',
-    ...['actions', 'tools', 'evidence', 'atomic-json'].map((name) => path.join(root, 'src', 'main', `${name}.ts`))
+    ...['actions', 'tools', 'evidence', 'atomic-json', 'extensions'].map((name) => path.join(root, 'src', 'main', `${name}.ts`))
   ], { cwd: root, encoding: 'utf8' })
   assert.equal(compiled.status, 0, `Compilation failed: ${compiled.error ?? ''}\n${compiled.stdout}\n${compiled.stderr}`)
 
@@ -65,10 +65,12 @@ try {
   const actions = load('actions', {
     electron: {}, '@snapshot/engine': { __aaSnapshot() {} }, '@snapshot/scripts': {}, './progress': {}, './evidence': evidence
   })
+  const { ExtensionManager } = load('extensions', { 'node:fs': fs, 'node:os': os, 'node:path': path, './atomic-json': atomic })
+  const extensions = { getExtensionManager: () => new ExtensionManager() }
   const { buildTools } = load('tools', {
     '@shared/tool-defs.mjs': { TOOL_DEFS, TOOL_ANNOTATIONS }, '@snapshot/scripts': {}, './actions': actions,
     './evidence': evidence, './tabs': {}, './network': {}, './dialogs': {}, './assertions': {}, './frames': {},
-    './visual': {}, './contrast': {}, './viewport': {}
+    './visual': {}, './contrast': {}, './viewport': {}, './extensions': extensions
   })
   let revision = 0
   const tab = {

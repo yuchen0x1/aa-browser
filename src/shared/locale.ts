@@ -27,8 +27,12 @@ export type LocaleKey =
   | 'siteAllowlistHint' | 'siteAllowlistPlaceholder' | 'updateHint' | 'clientSetupHint'
   | 'restoreSession' | 'restoreSessionHint' | 'settingsSubtitle' | 'settingsSections'
   | 'settingsNavGeneral' | 'settingsNavBrowsing' | 'settingsNavData' | 'settingsNavAi'
+  | 'settingsNavExtensions'
   | 'settingsDescGeneral' | 'settingsDescBrowsing' | 'settingsDescData' | 'settingsDescAi'
+  | 'settingsDescExtensions'
   | 'settingsDescUpdate' | 'updateChannel' | 'engineHint'
+  | 'extensionsLabel' | 'extensionsHint' | 'extensionsEmpty' | 'extensionsLoad' | 'extensionsRescan'
+  | 'extensionsPickFailed' | 'extensionsLoadFailed' | 'extensionsLoaded' | 'extensionsRemoved' | 'extensionsRemoveFailed'
   | 'theme' | 'themeLight' | 'themeDark' | 'themeSystem'
   | 'connectionDetails' | 'copyConnectionDiagnostics' | 'connectionDiagnosticsHint'
 
@@ -58,9 +62,18 @@ const catalogs: Record<Locale, Record<LocaleKey, string>> = {
     restoreSessionHint: '只恢复普通网页标签，不恢复隔离标签、内部页和 file/data 地址。关闭后下次启动打开新标签页。',
     settingsSubtitle: '调整浏览、快照与 AI 连接行为', settingsSections: '设置分区',
     settingsNavGeneral: '通用', settingsNavBrowsing: '浏览与快照', settingsNavData: '数据与下载', settingsNavAi: 'AI 集成',
+    settingsNavExtensions: '扩展',
     settingsDescGeneral: '界面语言与默认搜索引擎', settingsDescBrowsing: '快照输出、人工确认与标签页行为',
     settingsDescData: '下载落盘位置与可访问站点范围', settingsDescAi: '连接本机 AI 客户端与 Agent 本地服务',
+    settingsDescExtensions: '加载已解压的扩展程序（开发者模式扩展）',
     settingsDescUpdate: '更新通道、下载与安装', updateChannel: '更新通道',
+    extensionsLabel: '已解压扩展',
+    extensionsHint: '选择包含 manifest.json 的文件夹。扩展装载到共享会话并跨重启保留，对之后打开或刷新的页面生效；隔离标签不装载扩展。',
+    extensionsEmpty: '尚未加载任何扩展',
+    extensionsLoad: '加载已解压的扩展程序…', extensionsRescan: '刷新列表',
+    extensionsPickFailed: '无法打开目录选择对话框。',
+    extensionsLoadFailed: '扩展加载失败：',
+    extensionsLoaded: '已装载', extensionsRemoved: '已移除', extensionsRemoveFailed: '移除失败：',
     engineHint: '浏览器与 Agent 共用；也可直接填写自定义搜索基址。',
     theme: '主题', themeLight: '浅色（默认）', themeDark: '深色', themeSystem: '跟随系统',
     connectionDetails: '本机连接详情', copyConnectionDiagnostics: '复制连接诊断',
@@ -91,9 +104,18 @@ const catalogs: Record<Locale, Record<LocaleKey, string>> = {
     restoreSessionHint: 'Only regular web tabs are restored; isolated tabs, internal pages and file/data URLs are skipped. When off, the next launch starts with a new tab.',
     settingsSubtitle: 'Tune browsing, snapshots and AI connection behavior', settingsSections: 'Settings sections',
     settingsNavGeneral: 'General', settingsNavBrowsing: 'Browsing', settingsNavData: 'Data', settingsNavAi: 'AI integration',
+    settingsNavExtensions: 'Extensions',
     settingsDescGeneral: 'Interface language and the default search provider', settingsDescBrowsing: 'Snapshot output, confirmations and tab behavior',
     settingsDescData: 'Where downloads go and which sites are reachable', settingsDescAi: 'Connect local AI clients and the Agent service',
+    settingsDescExtensions: 'Load unpacked extensions (developer-mode extensions)',
     settingsDescUpdate: 'Update channel, download and install', updateChannel: 'Update channel',
+    extensionsLabel: 'Unpacked extensions',
+    extensionsHint: 'Pick a folder that contains manifest.json. Extensions load into the shared session, survive restarts and apply to pages opened or reloaded afterwards; isolated tabs do not get extensions.',
+    extensionsEmpty: 'No extensions loaded yet',
+    extensionsLoad: 'Load unpacked extension…', extensionsRescan: 'Refresh list',
+    extensionsPickFailed: 'Could not open the folder picker.',
+    extensionsLoadFailed: 'Failed to load the extension: ',
+    extensionsLoaded: 'Loaded', extensionsRemoved: 'Removed', extensionsRemoveFailed: 'Failed to remove: ',
     engineHint: 'Shared by you and the Agent. You can also type a custom search base directly.',
     theme: 'Theme', themeLight: 'Light (default)', themeDark: 'Dark', themeSystem: 'System',
     connectionDetails: 'Local connection details', copyConnectionDiagnostics: 'Copy connection diagnostics',

@@ -1629,6 +1629,35 @@ label.settings-label {
   color: var(--warning-ink);
 }
 
+.extension-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  padding: 8px 12px;
+  background: var(--surface-hover-soft);
+  border: 1px solid var(--border-panel);
+  border-radius: 9px;
+  font-size: var(--font-size-control);
+  color: var(--text-control);
+}
+.extension-main {
+  min-width: 0;
+}
+.extension-name {
+  font-weight: 600;
+}
+.extension-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.extension-remove {
+  flex-shrink: 0;
+}
+
 .settings-actions {
   display: flex;
   flex-wrap: wrap;

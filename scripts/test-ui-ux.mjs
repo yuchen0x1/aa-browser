@@ -219,7 +219,12 @@ if (!process.versions.electron) {
     const diagnosticsFocus = await ui('document.activeElement.id')
     check('copy diagnostics is next in the keyboard order', diagnosticsFocus === 'btn-copy-connection-diagnostics', { diagnosticsFocus })
     await key('Tab')
-    check('one Tab continues from connection diagnostics to update settings', await ui('document.activeElement.id === "set-auto-update"'))
+    // The extensions section sits between AI integration and software update; the load button must be reachable here.
+    check('one Tab continues from connection diagnostics into the extensions section', await ui('document.activeElement.id === "btn-extension-load"'))
+    await key('Tab')
+    check('the next Tab reaches the extensions rescan button', await ui('document.activeElement.id === "btn-extension-rescan"'))
+    await key('Tab')
+    check('Tab continues from extensions to update settings', await ui('document.activeElement.id === "set-auto-update"'))
     await ui(`document.querySelector('#btn-client-setup').disabled=${literal(setupDisabled)}`)
     for (const id of ['set-engine', 'set-engine-url', 'set-download-dir', 'set-allowed-sites']) {
       const label = await ui(`(() => {

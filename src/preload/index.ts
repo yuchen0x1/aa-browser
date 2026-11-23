@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { DownloadInfo, HistoryEntry, AppSettings, SettingsView, AgentInfo, UpdateState, PagePointerForward } from '@shared/types'
+import type { DownloadInfo, HistoryEntry, AppSettings, SettingsView, AgentInfo, UpdateState, PagePointerForward, ExtensionInfo } from '@shared/types'
 
 /** 浏览器外壳 UI 与主进程的桥（chromeView 专用，页面视图不带 preload） */
 contextBridge.exposeInMainWorld('aa', {
@@ -32,6 +32,10 @@ contextBridge.exposeInMainWorld('aa', {
   settingsGet: (): Promise<SettingsView | null> => ipcRenderer.invoke('aa:settings-get'),
   settingsSet: (patch: Partial<AppSettings>): Promise<AppSettings | null> => ipcRenderer.invoke('aa:settings-set', patch),
   settingsOpen: (open: boolean): Promise<void> => ipcRenderer.invoke('aa:settings-open', open),
+  extensionPick: (): Promise<string> => ipcRenderer.invoke('aa:extension-pick'),
+  extensionList: (): Promise<ExtensionInfo[]> => ipcRenderer.invoke('aa:extension-list'),
+  extensionLoad: (dir: string): Promise<{ ok: boolean; error?: string; extension?: ExtensionInfo }> => ipcRenderer.invoke('aa:extension-load', dir),
+  extensionRemove: (key: string): Promise<{ ok: boolean; error?: string; extension?: ExtensionInfo }> => ipcRenderer.invoke('aa:extension-remove', key),
   agentInfo: (): Promise<AgentInfo | null> => ipcRenderer.invoke('aa:agent-info'),
   copyConnectionDiagnostics: (): Promise<boolean> => ipcRenderer.invoke('aa:connection-diagnostics-copy'),
   clientsDetect: (): Promise<unknown> => ipcRenderer.invoke('aa:clients-detect'),
@@ -50,5 +54,8 @@ contextBridge.exposeInMainWorld('aa', {
   },
   onFocusFind: (cb: () => void): void => {
     ipcRenderer.on('aa:focus-find', () => cb())
+  },
+  onOpenExtensions: (cb: () => void): void => {
+    ipcRenderer.on('aa:open-extensions', () => cb())
   }
 })

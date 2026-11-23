@@ -25,6 +25,7 @@ import { runAssertions, formatAssertions, type AssertCheck } from './assertions'
 import { listFrames, frameText, frameElements, frameEvaluate, frameClick, frameType, frameSelect } from './frames'
 import { visualSave, visualCompare, visualList, visualDelete, formatDiff } from './visual'
 import { getEvidenceManager } from './evidence'
+import { getExtensionManager } from './extensions'
 import { auditContrast, formatContrast } from './contrast'
 import { captureViewportMatrix, VIEWPORT_PRESETS, formatViewportMatrix, type ViewportSpec } from './viewport'
 import {
@@ -189,7 +190,9 @@ export function buildTools(
   approvals?: ApprovalManager,
   onAction?: (item: import('@shared/types').ActionLogItem) => void,
   getSettings?: () => { requireOperationApproval: boolean; fullSnapshot?: boolean; searchEngine?: string },
-  browserInfo?: () => BrowserRuntimeInfo
+  browserInfo?: () => BrowserRuntimeInfo,
+  /** 共享会话提供者：browser_extensions 装载扩展用；注入以保持本模块不直接依赖 electron。 */
+  getSharedSession?: () => unknown
 ): McpToolDef[] {
   const tools: McpToolDefBase[] = []
   /** title / description / inputSchema 来自单一来源，主进程只保留 name 与 handler。 */
@@ -1124,6 +1127,47 @@ export function buildTools(
         await tab.net.ensureMockInterception()
         return { content: [text(`已清空 ${n} 条 mock 规则`)] }
       })
+    }
+  })
+
+  pushTool({
+    name: 'browser_extensions',
+    handler: async (args) => {
+      approvals?.assertRunning()
+      const manager = getExtensionManager()
+      const ses = getSharedSession?.() as import('./extensions').ExtensionsSession | undefined
+      if (!ses?.extensions) throw new ActionError('浏览器会话未就绪，无法管理扩展；请稍后重试。')
+      const action = String(args['action'] ?? 'list')
+      if (action === 'list') {
+        const list = manager.list()
+        if (!list.length) {
+          return { content: [text('（尚未加载任何已解压扩展。用 action=load 传入包含 manifest.json 的目录绝对路径。）')] }
+        }
+        const lines = list.map((e) => `[${e.id}] ${e.name} v${e.version} (MV${e.manifestVersion})\n    ${e.path}`)
+        return { content: [text(`共 ${list.length} 个已解压扩展：\n${lines.join('\n')}`)] }
+      }
+      if (action === 'load') {
+        const dir = String(args['path'] ?? '').trim()
+        if (!dir) throw new ActionError('action=load 需要提供扩展目录的绝对路径 path（目录内须有 manifest.json）')
+        assertToolRunning(callSignal(args))
+        const entry = await manager.load(ses, dir)
+        return {
+          content: [
+            text(
+              `已装载扩展: [${entry.id}] ${entry.name} v${entry.version} (MV${entry.manifestVersion})\n路径: ${entry.path}\n` +
+                '扩展对已打开的页面不会自动生效；请刷新目标标签页或重新导航后验证。'
+            )
+          ]
+        }
+      }
+      if (action === 'remove') {
+        const key = String(args['id'] ?? args['path'] ?? '').trim()
+        if (!key) throw new ActionError('action=remove 需要提供扩展 id（action=list 可查）或路径 path')
+        assertToolRunning(callSignal(args))
+        const removed = manager.remove(ses, key)
+        return { content: [text(`已卸载并移除: [${removed.id}] ${removed.name} v${removed.version}`)] }
+      }
+      throw new ActionError(`未知 action: ${action}。可用 action：list、load、remove。`)
     }
   })
 

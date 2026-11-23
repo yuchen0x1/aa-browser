@@ -137,7 +137,7 @@ Uma configuração gravada **não** é uma conexão funcionando. Verifique com `
 
 ## Ferramentas MCP
 
-**43 ferramentas** em cinco grupos: navegação e snapshot (5), interação (9), leitura e estado (20), rede e Mock (6), diagnóstico e abas (3). Os nomes de ferramenta no cliente podem trazer o prefixo `mcp__aa-browser__`.
+**44 ferramentas** em cinco grupos: navegação e snapshot (5), interação (9), leitura e estado (20), rede e Mock (6), diagnóstico e abas (4). Os nomes de ferramenta no cliente podem trazer o prefixo `mcp__aa-browser__`.
 
 | Grupo | Ferramentas |
 | --- | --- |

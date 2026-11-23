@@ -6,6 +6,7 @@
 
 | 版本 | 完整 Release 正文 |
 | --- | --- |
+| v0.12.0 | [bodies/v0.12.0.md](./bodies/v0.12.0.md) |
 | v0.11.0 | [bodies/v0.11.0.md](./bodies/v0.11.0.md) |
 | v0.10.0 | [bodies/v0.10.0.md](./bodies/v0.10.0.md) |
 | v0.9.1 | [bodies/v0.9.1.md](./bodies/v0.9.1.md) |
@@ -31,6 +32,13 @@
 | v0.0.3 | [bodies/v0.0.3.md](./bodies/v0.0.3.md) |
 | v0.0.2 | [bodies/v0.0.2.md](./bodies/v0.0.2.md) |
 | v0.0.1 | [bodies/v0.0.1.md](./bodies/v0.0.1.md) |
+
+## v0.12.0 — 2026-11-23
+
+- 设置面板新增「加载已解压的扩展程序」：选择包含 `manifest.json` 的本地目录即可装载 MV2 / MV3 扩展，并显示已加载扩展的名称、版本、清单版本与路径。
+- 新增 `browser_extensions` MCP 工具，支持 `list` / `load` / `remove`；加载到共享会话后，对之后打开或刷新的普通网页生效，隔离标签不装载扩展。
+- 扩展目录持久化到 `~/.aabrowser/extensions.json`，下次启动在首个标签创建前自动恢复；目录失效时安全跳过并清理记录，重复加载同一路径不会重复注册。
+- 地址栏输入 `chrome://extensions` 会打开设置中的扩展分区；既有 MCP 客户端入口、设置和会话数据保持兼容，无需迁移。
 
 ## v0.11.0 — 2026-11-22
 

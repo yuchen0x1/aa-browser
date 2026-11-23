@@ -1,4 +1,4 @@
-import type { TabInfo, UiState, DownloadInfo, HistoryEntry, AppSettings, SettingsView, AgentInfo, UpdateState, PagePointerForward } from '@shared/types'
+import type { TabInfo, UiState, DownloadInfo, HistoryEntry, AppSettings, SettingsView, AgentInfo, UpdateState, PagePointerForward, ExtensionInfo } from '@shared/types'
 import { resolveLocale, translate, type Locale, type LocaleKey } from '@shared/locale'
 
 /** 与主进程 clients.ts 的 ClientDetectResult / ClientSetupResult 对应 */
@@ -66,6 +66,10 @@ declare global {
       settingsGet: () => Promise<SettingsView | null>
       settingsSet: (patch: Partial<AppSettings>) => Promise<AppSettings | null>
       settingsOpen: (open: boolean) => Promise<void>
+      extensionPick: () => Promise<string>
+      extensionList: () => Promise<ExtensionInfo[]>
+      extensionLoad: (dir: string) => Promise<{ ok: boolean; error?: string; extension?: ExtensionInfo }>
+      extensionRemove: (key: string) => Promise<{ ok: boolean; error?: string; extension?: ExtensionInfo }>
       agentInfo: () => Promise<AgentInfo | null>
       copyConnectionDiagnostics: () => Promise<boolean>
       clientsDetect: () => Promise<ClientDetectResult[]>
@@ -79,7 +83,8 @@ declare global {
       onState: (cb: (state: UiState) => void) => void
       onFocusOmnibox: (cb: () => void) => void
       onFocusFind: (cb: () => void) => void
-    }
+      onOpenExtensions: (cb: () => void) => void
+        }
   }
 }
 
@@ -151,6 +156,10 @@ const setClientList = document.getElementById('set-client-list') as HTMLDivEleme
 const btnClientScan = document.getElementById('btn-client-scan') as HTMLButtonElement | null
 const btnClientSetup = document.getElementById('btn-client-setup') as HTMLButtonElement | null
 const setClientResult = document.getElementById('set-client-result') as HTMLDivElement | null
+const extensionList = document.getElementById('extension-list') as HTMLDivElement | null
+const btnExtensionLoad = document.getElementById('btn-extension-load') as HTMLButtonElement | null
+const btnExtensionRescan = document.getElementById('btn-extension-rescan') as HTMLButtonElement | null
+const setExtensionResult = document.getElementById('set-extension-result') as HTMLDivElement | null
 const setAutoUpdate = document.getElementById('set-auto-update') as HTMLInputElement | null
 const setUpdateChannel = document.getElementById('set-update-channel') as HTMLSelectElement | null
 const updateStatus = document.getElementById('update-status') as HTMLDivElement | null
@@ -290,15 +299,18 @@ function applyLocale(locale: Locale): void {
   setText('settings-nav-browsing', 'settingsNavBrowsing')
   setText('settings-nav-data', 'settingsNavData')
   setText('settings-nav-ai', 'settingsNavAi')
+  setText('settings-nav-extensions', 'settingsNavExtensions')
   setText('settings-nav-update', 'softwareUpdate')
   setText('settings-head-general', 'settingsNavGeneral')
   setText('settings-head-browsing', 'settingsNavBrowsing')
   setText('settings-head-data', 'settingsNavData')
   setText('settings-head-ai', 'settingsNavAi')
+  setText('settings-head-extensions', 'settingsNavExtensions')
   setText('settings-desc-general', 'settingsDescGeneral')
   setText('settings-desc-browsing', 'settingsDescBrowsing')
   setText('settings-desc-data', 'settingsDescData')
   setText('settings-desc-ai', 'settingsDescAi')
+  setText('settings-desc-extensions', 'settingsDescExtensions')
   setText('settings-desc-update', 'settingsDescUpdate')
   setText('settings-theme-label', 'theme')
   setText('settings-theme-light', 'themeLight')
@@ -330,6 +342,10 @@ function applyLocale(locale: Locale): void {
   setText('btn-client-setup', 'writeClients')
   setText('settings-client-hint', 'clientSetupHint')
   setText('settings-agent-label', 'agentService')
+  setText('settings-extensions-label', 'extensionsLabel')
+  setText('settings-extensions-hint', 'extensionsHint')
+  setText('btn-extension-load', 'extensionsLoad')
+  setText('btn-extension-rescan', 'extensionsRescan')
   setText('set-agent-details-label', 'connectionDetails')
   setText('btn-copy-connection-diagnostics', 'copyConnectionDiagnostics')
   setText('connection-diagnostics-hint', 'connectionDiagnosticsHint')
@@ -347,6 +363,7 @@ function applyLocale(locale: Locale): void {
   renderAgentInfo()
   // 语言预览只翻译已缓存的数据，不重新扫描客户端，也不写任何配置。
   if (lastClients && setClientList && setClientList.getAttribute('aria-busy') !== 'true') renderClients(lastClients, true)
+  if (lastExtensions) renderExtensionList()
   renderToolbar(); renderFind(); renderUpdate(state.update)
   renderDownloads()
   renderAgentActivity()
@@ -1619,6 +1636,137 @@ btnClientSetup?.addEventListener('click', async () => {
   }
 })
 
+/* ── 设置面板：已解压扩展 ─────────────── */
+let extensionsRequestId = 0
+let lastExtensions: ExtensionInfo[] | null = null
+
+function renderExtensionList(): void {
+  if (!extensionList) return
+  const list = lastExtensions
+  if (list === null) {
+    extensionList.textContent = t('loading')
+    extensionList.setAttribute('aria-busy', 'true')
+    return
+  }
+  extensionList.removeAttribute('aria-busy')
+  if (!list.length) {
+    extensionList.textContent = t('extensionsEmpty')
+    return
+  }
+  extensionList.textContent = ''
+  for (const ext of list) {
+    const row = document.createElement('div')
+    row.className = 'extension-row'
+    const main = document.createElement('div')
+    main.className = 'extension-main'
+    const name = document.createElement('span')
+    name.className = 'extension-name'
+    name.textContent = `${ext.name} v${ext.version}`
+    const meta = document.createElement('div')
+    meta.className = 'extension-meta'
+    meta.textContent = `[${ext.id}] MV${ext.manifestVersion}`
+    meta.title = ext.path
+    main.appendChild(name)
+    main.appendChild(meta)
+    const removeBtn = document.createElement('button')
+    removeBtn.type = 'button'
+    removeBtn.className = 'settings-btn extension-remove'
+    removeBtn.dataset['key'] = ext.id
+    removeBtn.setAttribute('aria-label', `${uiText('移除扩展', 'Remove extension')}: ${ext.name}`)
+    removeBtn.textContent = uiText('移除', 'Remove')
+    row.appendChild(main)
+    row.appendChild(removeBtn)
+    extensionList.appendChild(row)
+  }
+}
+
+async function refreshExtensions(): Promise<void> {
+  if (!extensionList || !settingsReady) return
+  const request = settingsRequest
+  const seq = ++extensionsRequestId
+  lastExtensions = null
+  renderExtensionList()
+  try {
+    const list = await window.aa.extensionList()
+    if (!currentSettingsRequest(request) || seq !== extensionsRequestId) return
+    lastExtensions = Array.isArray(list) ? list : []
+    renderExtensionList()
+  } catch (err) {
+    if (!currentSettingsRequest(request) || seq !== extensionsRequestId) return
+    extensionList.textContent = `${uiText('列表读取失败：', 'Failed to list extensions: ')}${err instanceof Error ? err.message : String(err)}`
+  }
+}
+
+btnExtensionLoad?.addEventListener('click', async () => {
+  if (!btnExtensionLoad || !settingsReady || !currentSettingsRequest(settingsRequest) || btnExtensionLoad.getAttribute('aria-busy') === 'true') return
+  const request = settingsRequest
+  if (setExtensionResult) setExtensionResult.textContent = ''
+  btnExtensionLoad.disabled = true
+  btnExtensionLoad.setAttribute('aria-busy', 'true')
+  try {
+    const dir = await window.aa.extensionPick()
+    if (!currentSettingsRequest(request)) return
+    if (!dir) return // 用户取消选择，不算失败
+    if (setExtensionResult) setExtensionResult.textContent = uiText('正在装载扩展…', 'Loading the extension…')
+    const result = await window.aa.extensionLoad(dir)
+    if (!currentSettingsRequest(request)) return
+    if (result.ok && result.extension) {
+      if (setExtensionResult) {
+        setExtensionResult.textContent = `${uiText('已装载', 'Loaded')}: ${result.extension.name} v${result.extension.version}`
+        setExtensionResult.dataset['state'] = 'ok'
+      }
+    } else {
+      if (setExtensionResult) {
+        setExtensionResult.textContent = `${uiText('扩展加载失败：', 'Failed to load the extension: ')}${result.error ?? 'unknown'}`
+        setExtensionResult.dataset['state'] = 'error'
+      }
+    }
+  } catch (err) {
+    if (currentSettingsRequest(request) && setExtensionResult) {
+      setExtensionResult.textContent = `${uiText('扩展加载失败：', 'Failed to load the extension: ')}${err instanceof Error ? err.message : String(err)}`
+      setExtensionResult.dataset['state'] = 'error'
+    }
+  } finally {
+    if (currentSettingsRequest(request)) {
+      btnExtensionLoad.disabled = false
+      btnExtensionLoad.removeAttribute('aria-busy')
+    }
+  }
+  void refreshExtensions()
+})
+
+btnExtensionRescan?.addEventListener('click', () => {
+  if (!settingsReady) return
+  if (setExtensionResult) setExtensionResult.textContent = ''
+  void refreshExtensions()
+})
+
+extensionList?.addEventListener('click', async (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button.extension-remove')
+  if (!button || !settingsReady || !currentSettingsRequest(settingsRequest) || button.disabled) return
+  const request = settingsRequest
+  const key = button.dataset['key'] ?? ''
+  button.disabled = true
+  if (setExtensionResult) setExtensionResult.textContent = ''
+  try {
+    const result = await window.aa.extensionRemove(key)
+    if (!currentSettingsRequest(request)) return
+    if (setExtensionResult) {
+      if (result.ok) setExtensionResult.textContent = uiText('已移除扩展。', 'Extension removed.')
+      else {
+        setExtensionResult.textContent = `${uiText('移除失败：', 'Failed to remove: ')}${result.error ?? 'unknown'}`
+        setExtensionResult.dataset['state'] = 'error'
+      }
+    }
+  } catch (err) {
+    if (currentSettingsRequest(request) && setExtensionResult) {
+      setExtensionResult.textContent = `${uiText('移除失败：', 'Failed to remove: ')}${err instanceof Error ? err.message : String(err)}`
+      setExtensionResult.dataset['state'] = 'error'
+    }
+  }
+  void refreshExtensions()
+})
+
 btnUpdateCheck?.addEventListener('click', () => { void window.aa.updateCheck() })
 btnUpdateAction?.addEventListener('click', () => {
   if (state.update?.status === 'downloaded') void window.aa.updateInstall()
@@ -1745,6 +1893,7 @@ async function openSettings(): Promise<boolean> {
   hasAgentInfo = true
   applyLocale(savedLocale)
   setSettingsReady(true)
+  void refreshExtensions()
   // 服务可能在读取初始状态时完成启动，补取一次尚未出现的端口和发现文件。
   if (agent && !agent.port && state.bridgeState !== 'starting' && state.bridgeState !== 'disconnected') void refreshAgentInfo()
   if (settingsStatus) {
@@ -1951,6 +2100,13 @@ omnibox.addEventListener('blur', () => {
 omnibox.addEventListener('input', onOmniboxInput)
 
 window.aa.onState(applyState)
+window.aa.onOpenExtensions(() => {
+  void openSettings().then((ready) => {
+    if (!ready || !settingsModal || settingsModal.hidden) return
+    const section = document.getElementById('settings-section-extensions')
+    if (section) scrollToSettingsSection(section.id)
+  })
+})
 window.aa.onFocusOmnibox(() => {
   if (settingsModal && !settingsModal.hidden) return
   focusOmnibox()

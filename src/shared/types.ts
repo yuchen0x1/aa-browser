@@ -128,6 +128,17 @@ export interface DownloadInfo {
   ts: number
 }
 
+/** 已加载的已解压扩展（设置面板与 browser_extensions 工具共用） */
+export interface ExtensionInfo {
+  /** Chromium 分配的扩展 id */
+  id: string
+  name: string
+  version: string
+  manifestVersion: number
+  /** 本机绝对路径（诊断展示用；可分享的诊断不含此字段） */
+  path: string
+}
+
 /** omnibox 历史补全建议条目 */
 export interface HistoryEntry {
   url: string

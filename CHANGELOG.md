@@ -2,6 +2,13 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
+## v0.12.0 — 2026-11-23
+
+- **加载已解压扩展**：设置中新增等价于 Chrome「加载已解压的扩展程序」的目录选择器，支持 MV2 / MV3 扩展并显示名称、版本和清单版本。
+- **Agent 扩展管理**：新增 `browser_extensions`，可列出、加载和移除扩展；加载目录会校验 `manifest.json`，并在共享会话中对之后打开或刷新的页面生效。
+- **跨重启恢复**：扩展目录写入 `~/.aabrowser/extensions.json`，启动时自动恢复；缺失目录会从恢复列表移除，隔离标签不装载共享扩展。
+- **内部地址兼容**：地址栏输入 `chrome://extensions` 会直接打开 Aa Browser 设置中的扩展管理区；既有工具、客户端入口和用户数据格式保持兼容。
+
 ## v0.11.0 — 2026-11-22
 
 - **等待与网络结果更可靠**：`browser_wait` 支持出现/消失条件的 OR 等待并返回实际满足项；网络请求/详情提供结构化状态、大小、耗时和重定向信息；Mock 支持 CORS 预检。

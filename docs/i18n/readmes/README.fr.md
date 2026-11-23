@@ -137,7 +137,7 @@ Une configuration écrite **n'est pas** une connexion qui fonctionne. Vérifiez 
 
 ## Outils MCP
 
-**43 outils** en cinq groupes : navigation et snapshot (5), interaction (9), lecture et état (20), réseau et Mock (6), diagnostic et onglets (3). Les noms d'outils côté client peuvent porter le préfixe `mcp__aa-browser__`.
+**44 outils** en cinq groupes : navigation et snapshot (5), interaction (9), lecture et état (20), réseau et Mock (6), diagnostic et onglets (4). Les noms d'outils côté client peuvent porter le préfixe `mcp__aa-browser__`.
 
 | Groupe | Outils |
 | --- | --- |

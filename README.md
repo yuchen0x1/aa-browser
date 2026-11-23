@@ -32,11 +32,11 @@
 
 <!-- github-release:start -->
 
-**[v0.11.0](./release-notes-v0.11.0.md)** · 2026-11-22 · 最新正式版
+**[v0.12.0](./release-notes-v0.12.0.md)** · 2026-11-23 · 最新正式版
 
-本版让等待、网络、导出和快照结果更可靠：支持多条件等待与结构化网络/重定向信息，Mock 覆盖 CORS 预检，导出拒绝越界和符号链接，快照显示真实截断原因；同时修复后台视口、下载重试、标签焦点、首帧主题/语言和更新反馈问题。用户数据无需迁移。
+本版新增等价于 Chrome「加载已解压的扩展程序」的目录选择器和 `browser_extensions` 工具，支持 MV2/MV3 扩展在共享会话中加载、移除与跨重启恢复；地址栏输入 `chrome://extensions` 可直接打开扩展管理区。既有 MCP 客户端配置和用户数据无需迁移。
 
-**上一版：[v0.10.0](./release-notes-v0.10.0.md)** · 2026-11-22
+**上一版：[v0.11.0](./release-notes-v0.11.0.md)** · 2026-11-22
 
 [全部发行记录](https://github.com/yuchen0x1/aa-browser/releases)
 
@@ -48,7 +48,7 @@
 
 它适合把**真实登录态**交给 Agent 的场景：后台运营、数据采集、回归验证、抓包排障，以及把重复的网页操作交给模型。浏览器本体照常使用，Agent 只是多出来的一个「遥控器」。
 
-一句话概括：**43 个 MCP 工具、增量快照、真实输入、本地 token 鉴权，而浏览器本体也照常上网。**
+一句话概括：**44 个 MCP 工具、增量快照、真实输入、本地 token 鉴权，而浏览器本体也照常上网。**
 
 ## 目录
 
@@ -91,6 +91,7 @@
 - 📊 **性能诊断**：`browser_performance` 一次返回导航耗时、首绘、资源体积与慢资源、JS 堆和 DOM 规模，Agent 不开 DevTools 也能解释慢页面
 - 🌐 **中英双语界面**：跟随系统 / 浏览器语言，也可在设置里固定简体中文或 English
 - 🧭 **地址栏历史补全**：本地记录最近 1000 条访问，按域名 / URL 前缀 / 标题补全并加权排序；隔离标签不写入
+- 🧩 **已解压扩展**：支持从本地目录加载 MV2 / MV3 扩展，跨重启恢复到共享会话；可用地址栏 `chrome://extensions` 快速打开扩展管理区
 - 🗂️ **标签与会话恢复**：`Ctrl+Shift+T` 恢复本次运行中最近关闭的标签（最多 20 个）；重启后按上次顺序恢复普通网页标签与活动标签，隔离标签、内部页和非 HTTP(S) 地址不恢复，地址中的账号密码会被剥离
 - 🛡️ **Agent 可观测、可中断**：工具栏实时显示连接状态，Agent 操作浏览器时窗口四周显示闪烁光圈、右下角显示当前工具；活动日志保留最近 30 条操作；敏感输入由用户亲自填写，高危操作走浏览器内审批。点击「中断」会立即取消所有调用并暂停 30 秒，随后自动恢复接管能力，也可随时手动恢复。长操作（导航 / 等待 / 整页截图 / 多视口矩阵 / 视觉对比）会按 MCP 规范回传 `notifications/progress`；多客户端并发时 HUD 列出每个调用及其进度，并可「停止」单个调用而不影响其他客户端
 - 🧩 **长页面与证据治理**：超长页面可用 `browser_snapshot {maxNodes, cursor}` 分页且跨页 ref 仍有效；closed shadow DOM 内的元素也能被快照与点击；截图 / HAR / PDF / 视觉基线自动登记 sha256、大小与 TTL，按配额清理临时证据而保留用户数据
@@ -347,7 +348,7 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 
 ## MCP 工具
 
-共 **43 个**工具，按能力分为五类：导航与快照 5 个、交互 9 个、读取与状态 20 个、网络与 Mock 6 个、诊断与标签 3 个。工具名在客户端可能带 `mcp__aa-browser__` 前缀（如 `mcp__aa-browser__browser_tabs`），以客户端实际展示为准。
+共 **44 个**工具，按能力分为五类：导航与快照 5 个、交互 9 个、读取与状态 20 个、网络与 Mock 6 个、诊断与标签 4 个。工具名在客户端可能带 `mcp__aa-browser__` 前缀（如 `mcp__aa-browser__browser_tabs`），以客户端实际展示为准。
 
 共享行为：
 
@@ -423,6 +424,7 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 | `browser_performance` | 页面性能摘要：TTFB / DOMContentLoaded / load、首绘、资源体积与慢资源、JS 堆、DOM 规模（只读诊断） |
 | `browser_resize` | 调整视口尺寸 200–5000px（响应式测试） |
 | `browser_tabs` | 列表 / 新建 / 切换 / 关闭标签页；列表附带浏览器实例、PID、版本、启动时间、标签创建时间与恢复标记；`isolated: true` 新建隔离标签；`select` 可加 `bringToFront: true` 同时恢复窗口并聚焦页面 |
+| `browser_extensions` | **加载已解压扩展**：`action=load` 传入含 `manifest.json` 的目录绝对路径（等价 Chrome「加载已解压的扩展程序」），装载到共享会话并跨重启保留；`action=list` / `action=remove` 查看（id/名称/版本/路径）与卸载。扩展对之后打开或刷新的页面生效，隔离标签不装载 |
 
 视觉评审建议流程：先用 `browser_viewport_matrix` 跑一遍响应式矩阵（发现横向溢出），再用 `browser_contrast_audit` 找不可读文本，最后对关键页面用 `browser_visual_diff action=save` 存基线、改动后 `action=compare` 做回归对比。基线目录可用 `AA_BROWSER_BASELINE_DIR` 覆盖。
 
@@ -463,6 +465,10 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 | 连接 AI 客户端 | 扫描已安装客户端，勾选后一键写入 MCP 配置 |
 | Agent 本地服务 | 显示桥端口、发现文件位置、已连接客户端数 |
 
+### 加载已解压扩展
+
+Aa Browser 不提供 Chrome 的原生 `chrome://extensions` 页面；在地址栏输入 `chrome://extensions` 会打开设置里的「扩展」管理区，功能等价于开发者模式中的「加载已解压的扩展程序」。点击该按钮选择包含 `manifest.json` 的扩展目录即可；扩展装载到共享会话，对之后打开或刷新的普通标签页生效，隔离标签页不会注入。已加载目录会写入 `~/.aabrowser/extensions.json`，下次启动自动恢复。也可以让 Agent 调用 `browser_extensions`，用 `action=load` 和绝对路径直接装载。
+
 ## 安全说明
 
 - **连接面很小**：Agent 服务只监听 `127.0.0.1`，每次启动随机生成 token，并拒绝非本机来源的连接；端口与 token 写入用户目录 `~/.aabrowser/connection.json`（正常退出时删除）。
@@ -484,6 +490,7 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 | `~/.aabrowser/settings.json` | 全部设置 | 可用 `AA_BROWSER_SETTINGS_FILE` 覆盖 |
 | `~/.aabrowser/history/history.json` | 最近 1000 条访问（标题 / URL / 次数） | 隔离标签不写入；可用 `AA_BROWSER_HISTORY_DIR` 覆盖 |
 | `~/.aabrowser/session.json` | 上次标签快照（≤20 条，剥离 URL 账号密码） | 可用 `AA_BROWSER_SESSION_FILE` 覆盖 |
+| `~/.aabrowser/extensions.json` | 已加载的已解压扩展目录列表 | 下次启动自动恢复；可用 `AA_BROWSER_EXTENSIONS_FILE` 覆盖 |
 | `~/.aabrowser/downloads/` | 浏览器下载与 PDF | 可在设置中修改下载目录；可用 `AA_BROWSER_DOWNLOAD_DIR` 覆盖 |
 | `~/.aabrowser/screenshots/` | MCP 截图 | 可用 `AA_BROWSER_SCREENSHOT_DIR` 覆盖 |
 | `~/.aabrowser/har/` | `browser_har` 导出的 HAR 文件 | 默认路径 `aa-<时间戳>.har` |
@@ -512,7 +519,7 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 - **未做代码签名**：Windows SmartScreen 会提示，需要手动选择「更多信息 → 仍要运行」。
 - **官方安装包只覆盖 Windows x64 与 Linux x86_64**：macOS、Windows ARM64 和移动端没有官方安装包；从源码自行构建不属于官方验证过的分发渠道。
 - **Linux 的 MCP 接入依赖系统 Node.js 22.12+**：Windows 未安装系统 Node 时使用应用自带的运行时。
-- **不是 Chrome 的替代品**：没有书签、扩展、账号同步和多设备同步，定位是「浏览器内核 + Agent 接入」。
+- **不是 Chrome 的替代品**：没有扩展商店、账号同步和多设备同步；可加载本地已解压扩展，定位仍是「浏览器内核 + Agent 接入」。
 - **Agent 权限很大**：能看到页面内容、Cookie、Storage 与网络流量；白名单、会话隔离、脱敏和审批是缓解措施，不是通用 DLP。
 - **会话恢复有范围**：只恢复普通网页标签，不恢复隔离标签、内部页与非 HTTP(S) 地址，最多 20 条。
 - **同一用户数据目录只运行一个实例**：重复启动会聚焦已有窗口；开发版使用独立目录，可与安装版并存。
@@ -572,6 +579,7 @@ npm run typecheck      # 仅 TypeScript 类型检查
 npm run test:page-scripts # 注入脚本字面量转义回归（特殊字符不被截断、能原样还原）
 npm run smoke          # 端到端冒烟：启动浏览器 → MCP 驱动 → 断言（含抓包，无外网依赖）
 npm run test:desktop   # 原生桌面回归：会话恢复、查找、快捷键、隔离会话、审批
+npm run test:extensions # 已解压扩展清单校验、持久化与卸载回归
 npm run test:update-ui # 更新提示 / 后台下载 / 重试交互（模拟 provider）
 npm run test:stores    # 设置 / 历史 / 会话恢复记录的持久化回归
 npm run test:security  # 安全相关回归

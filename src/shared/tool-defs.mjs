@@ -717,6 +717,20 @@ export const TOOL_DEFS = [
     }
   },
   {
+    name: 'browser_extensions',
+    title: '浏览器扩展',
+    description:
+      'Manage unpacked (Load unpacked) Chrome extensions. action=list shows loaded extensions (id, name, version, manifest version, local path); action=load loads an unpacked extension from an absolute directory path that contains manifest.json (persisted, reloaded on browser restart, injected into the shared session; isolated tabs do not get extensions); action=remove unloads one by path or extension id and removes it from the persisted list. Extensions take effect for new page loads — reload the tab after loading one.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['list', 'load', 'remove'], description: 'Extension operation (default list)' },
+        path: { type: 'string', description: '(load) absolute directory containing manifest.json; (remove) alternative to id' },
+        id: { type: 'string', description: '(remove) extension id from action=list' }
+      }
+    }
+  },
+  {
     name: 'browser_evidence',
     title: '证据文件管理',
     description:
@@ -776,5 +790,6 @@ export const TOOL_ANNOTATIONS = Object.freeze({
   browser_visual_diff: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   browser_contrast_audit: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   browser_viewport_matrix: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  browser_extensions: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   browser_evidence: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false }
 })

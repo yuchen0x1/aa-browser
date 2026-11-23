@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-globalThis.__AA_BRIDGE_VERSION__ = "0.11.0";
+globalThis.__AA_BRIDGE_VERSION__ = "0.12.0";
 // \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -4994,6 +4994,33 @@ const TOOL_DEFS = [
 		}
 	},
 	{
+		name: "browser_extensions",
+		title: "浏览器扩展",
+		description: "Manage unpacked (Load unpacked) Chrome extensions. action=list shows loaded extensions (id, name, version, manifest version, local path); action=load loads an unpacked extension from an absolute directory path that contains manifest.json (persisted, reloaded on browser restart, injected into the shared session; isolated tabs do not get extensions); action=remove unloads one by path or extension id and removes it from the persisted list. Extensions take effect for new page loads — reload the tab after loading one.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				action: {
+					type: "string",
+					enum: [
+						"list",
+						"load",
+						"remove"
+					],
+					description: "Extension operation (default list)"
+				},
+				path: {
+					type: "string",
+					description: "(load) absolute directory containing manifest.json; (remove) alternative to id"
+				},
+				id: {
+					type: "string",
+					description: "(remove) extension id from action=list"
+				}
+			}
+		}
+	},
+	{
 		name: "browser_evidence",
 		title: "证据文件管理",
 		description: "Inspect and maintain generated evidence files (screenshots, viewport PNGs, HAR, PDF, visual baselines/diffs, context-menu shots). action=list shows registered files with sha256, size, TTL and age; action=sweep deletes expired or over-quota temporary evidence (baselines/downloads are preserved); action=hash computes a file sha256; action=forget removes a registry entry without deleting the file. Registry path can be overridden with AA_BROWSER_EVIDENCE_FILE.",
@@ -5273,6 +5300,12 @@ const TOOL_ANNOTATIONS = Object.freeze({
 		readOnlyHint: false,
 		destructiveHint: false,
 		idempotentHint: true,
+		openWorldHint: false
+	},
+	browser_extensions: {
+		readOnlyHint: false,
+		destructiveHint: true,
+		idempotentHint: false,
 		openWorldHint: false
 	},
 	browser_evidence: {
