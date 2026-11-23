@@ -61,6 +61,22 @@ type ValidSpec = Required<ViewportSpec>
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
+const CDP_COMMAND_TIMEOUT_MS = 8_000
+
+async function sendCdp<T>(dbg: Electron.Debugger, method: string, params?: Record<string, unknown>, timeoutMs = CDP_COMMAND_TIMEOUT_MS): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      dbg.sendCommand(method, params) as Promise<T>,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new ActionError(`CDP 命令超时：${method}`)), timeoutMs)
+      })
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
 /** 校验并规范化一条视口定义；非法输入直接抛 ActionError。 */
 function validateSpec(spec: ViewportSpec): ValidSpec {
   if (!spec || typeof spec !== 'object') {
@@ -101,6 +117,28 @@ function readPngSize(base64: string): { width: number; height: number } {
 }
 
 /**
+ * 取一张视口截图。
+ *
+ * 必须走 CDP：只有 Page.captureScreenshot 会按 Emulation 覆盖后的 CSS 视口与 DPI
+ * 输出像素（320×480@2x → 640×960）。capturePage 只截 WebContentsView 实际尺寸，
+ * 会丢掉模拟视口，因此这里用它没有意义；隐藏窗口下的挂起改由有界超时兜底。
+ */
+async function captureViewportShot(
+  dbg: Electron.Debugger,
+  signal?: AbortSignal
+): Promise<string | null> {
+  const shot = (await raceAbort(
+    sendCdp(dbg, 'Page.captureScreenshot', {
+      format: 'png',
+      fromSurface: true,
+      captureBeyondViewport: false
+    }),
+    signal
+  )) as { data?: string } | undefined
+  return shot?.data ?? null
+}
+
+/**
  * 多视口截图矩阵：通过 CDP Emulation.setDeviceMetricsOverride 直接设定 CSS 视口与 DPI，
  * 从而绕过 Electron BrowserWindow 的最小尺寸限制（960x640），并支持高 DPI 截图。
  *
@@ -131,26 +169,23 @@ export async function captureViewportMatrix(
   const usedFiles = new Set<string>()
   const results: ViewportResult[] = []
   let attachedHere = false
-  // 最小化时窗口后台会维持一个虚拟视口；矩阵工具结束后必须把它恢复，
-  // 否则 backgroundViewportTabs 仍认为已覆盖，后续快照会读到 0×0。
-  const wasMinimized = opts?.isMinimized?.() === true
+  // 保存当前视口；矩阵工具结束后显式恢复，避免 Chromium 在隐藏/最小化
+  // 窗口下把 clearDeviceMetricsOverride 留在最后一个矩阵尺寸。
   let restoreViewport: { width: number; height: number; deviceScaleFactor: number } | null = null
-  if (wasMinimized) {
-    try {
-      const size = (await wc.executeJavaScript(
-        '({ width: window.innerWidth, height: window.innerHeight, deviceScaleFactor: window.devicePixelRatio || 1 })',
-        false
-      )) as { width?: number; height?: number; deviceScaleFactor?: number } | null
-      if ((size?.width ?? 0) > 0 && (size?.height ?? 0) > 0) {
-        restoreViewport = {
-          width: Math.round(size!.width!),
-          height: Math.round(size!.height!),
-          deviceScaleFactor: size?.deviceScaleFactor ?? 1
-        }
+  try {
+    const size = (await wc.executeJavaScript(
+      '({ width: window.innerWidth, height: window.innerHeight, deviceScaleFactor: window.devicePixelRatio || 1 })',
+      false
+    )) as { width?: number; height?: number; deviceScaleFactor?: number } | null
+    if ((size?.width ?? 0) > 0 && (size?.height ?? 0) > 0) {
+      restoreViewport = {
+        width: Math.round(size!.width!),
+        height: Math.round(size!.height!),
+        deviceScaleFactor: size?.deviceScaleFactor ?? 1
       }
-    } catch {
-      /* 页面可能尚未就绪 */
     }
+  } catch {
+    /* 页面可能尚未就绪 */
   }
 
   try {
@@ -164,7 +199,7 @@ export async function captureViewportMatrix(
       throwIfAborted(signal)
       reportProgress(index + 1, specs.length, '视口 ' + spec.name)
 
-      await dbg.sendCommand('Emulation.setDeviceMetricsOverride', {
+      await sendCdp(dbg, 'Emulation.setDeviceMetricsOverride', {
         width: spec.width,
         height: spec.height,
         deviceScaleFactor: spec.deviceScaleFactor,
@@ -177,21 +212,13 @@ export async function captureViewportMatrix(
       await delay(200)
       throwIfAborted(signal)
 
-      const shot = (await raceAbort(
-        dbg.sendCommand('Page.captureScreenshot', {
-          format: 'png',
-          fromSurface: true,
-          captureBeyondViewport: false
-        }),
-        signal
-      )) as { data?: string } | undefined
+      const shot = await captureViewportShot(dbg, signal)
       throwIfAborted(signal)
-      if (!shot?.data) {
+      if (!shot) {
         throw new ActionError(`视口 ${spec.name} 截图失败：浏览器未返回图像数据`)
       }
-
       // 无 clip：PNG 物理尺寸应为 width*dsf × height*dsf，从 IHDR 实测确认。
-      const pngSize = readPngSize(shot.data)
+      const pngSize = readPngSize(shot)
 
       const metrics = (await wc.executeJavaScript(
         '(() => ({' +
@@ -210,7 +237,7 @@ export async function captureViewportMatrix(
         file = path.join(dir, `aa-matrix-${spec.name}-${Date.now()}-${dup++}.png`)
       }
       usedFiles.add(file)
-      fs.writeFileSync(file, Buffer.from(shot.data, 'base64'))
+      fs.writeFileSync(file, Buffer.from(shot, 'base64'))
       getEvidenceManager().record(file, 'viewport')
 
       results.push({
@@ -235,19 +262,19 @@ export async function captureViewportMatrix(
   } finally {
     // 关键：一定要先清除覆盖（并吞掉清理过程中的异常），再分离本次附加的调试器。
     try {
-      await dbg.sendCommand('Emulation.clearDeviceMetricsOverride')
-      // Linux 上 renderer 应用“恢复原尺寸”比 CDP 响应略慢，留一帧避免后续 evaluate 读到旧尺寸。
-      await delay(150)
-      if (wasMinimized && restoreViewport) {
-        await dbg.sendCommand('Emulation.setDeviceMetricsOverride', {
+      await sendCdp(dbg, 'Emulation.clearDeviceMetricsOverride', undefined, 2_000)
+      if (restoreViewport) {
+        await sendCdp(dbg, 'Emulation.setDeviceMetricsOverride', {
           width: restoreViewport.width,
           height: restoreViewport.height,
           deviceScaleFactor: restoreViewport.deviceScaleFactor,
           mobile: false,
           screenWidth: restoreViewport.width,
           screenHeight: restoreViewport.height
-        })
+        }, 2_000)
       }
+      // Linux 上 renderer 应用“恢复原尺寸”比 CDP 响应略慢，留一帧避免后续 evaluate 读到旧尺寸。
+      await delay(150)
     } catch {
       /* 调试器可能已分离或页面已销毁 */
     }

@@ -25,6 +25,13 @@ export interface Tab {
   canUseWindowInput: () => boolean
   /** 主窗口当前是否最小化；截图收尾据此决定恢复还是清除虚拟视口。 */
   isWindowMinimized?: () => boolean
+  /**
+   * 该页面视图当前是否挂在窗口上。
+   * 后台标签（其他 MCP 客户端的标签、未切换到的标签）不在窗口里，
+   * capturePage 会一直等不到帧，截图必须改走 CDP。最小化但已挂载的页面
+   * 仍可经 capturePage 得到画面（由 stayHidden 驱动合成），因此不算在内。
+   */
+  isComposited?: () => boolean
   /** 调用期间保持计时器与合成帧，不改变闲置网页的节能策略。 */
   keepRendering: () => () => void
   /** 由监控中心接收 Agent 的输入位置，供实时预览显示，不参与定位。 */
@@ -191,6 +198,8 @@ export class TabManager {
   shouldShowAgentTab: () => boolean = () => true
   /** 由主进程注入：内部页加载完成后同步当前主题 */
   applyInternalTheme: ((wc: WebContents) => void) | null = null
+  /** 由主进程注入：判断页面视图是否已挂到窗口（参与合成）。 */
+  isViewAttached: ((view: WebContentsView) => boolean) | null = null
   /** 由主进程注入：隔离标签关闭时回调（用于清理分区数据） */
   onIsolatedClosed: ((partition: string) => void) | null = null
   /** 由监控中心接收后台输入位置。 */
@@ -339,6 +348,7 @@ export class TabManager {
       initialNavigation: deferInitialNavigation ? ready : ready.then(() => this.loadPage(wc, target)),
       canUseWindowInput: () => this.activeId === id && this.isWindowForeground(),
       isWindowMinimized: () => this.isWindowMinimized(),
+      isComposited: () => this.isViewAttached?.(view) ?? false,
       keepRendering,
       recordPointer: (pointer) => this.onAgentPointer?.(tab, pointer)
     }
@@ -352,7 +362,10 @@ export class TabManager {
       }
       else {
         this.agentActiveTabs.set(clientId, tab.id)
-        if (this.shouldShowAgentTab()) this.activeId = tab.id
+        // 只有主 Agent 客户端可以接管窗口里显示的标签。次级客户端的标签留在后台执行，
+        // 否则两个客户端会互相把对方的视图从窗口摘下——被摘下的视图不再被桌面合成器
+        // 绘制，截图与可视化都会失去画面。
+        if (this.shouldShowAgentTab() && clientId === this.primaryAgentClientId) this.activeId = tab.id
       }
     }
     this.onSession?.(ses)
@@ -533,6 +546,12 @@ export class TabManager {
     if (clientId !== undefined) {
       this.agentActiveTabs.set(clientId, id)
       if (!bringToFront && !this.shouldShowAgentTab()) {
+        this.onChange()
+        return
+      }
+      // 只有主客户端的“切换”才改变窗口里显示的标签；次级客户端的切换只影响
+      // 自己的标签视图，否则会把主标签摘下窗口、导致其不再被合成。
+      if (clientId !== this.primaryAgentClientId) {
         this.onChange()
         return
       }

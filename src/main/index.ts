@@ -1095,6 +1095,7 @@ app.whenReady().then(async () => {
   tabManager.onChange = onTabChange
   tabManager.isWindowForeground = () => !!win && win.isVisible() && !win.isMinimized() && win.isFocused()
   tabManager.isWindowMinimized = () => !!win && win.isMinimized()
+  tabManager.isViewAttached = (view) => !!win && !win.isDestroyed() && win.contentView.children.includes(view)
   tabManager.shouldShowAgentTab = () => getSettingsStore().get().backgroundMode === 'visible'
   tabManager.onContextMenu = (wc) => {
     handleBeforeInput(wc)
