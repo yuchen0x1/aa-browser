@@ -90,5 +90,27 @@ npm run test:background
 
 - [anomalyco/browse](https://github.com/anomalyco/browse)：把 tab id 作为 Agent 句柄、默认后台打开、禁止 Agent 把窗口带到前台，并在交接登录/2FA 时暂停自动化。Aa Browser 已采用显式 `tabId`、`browser_window takeover/release` 和真实窗口焦点保护；标签分组/借出用户标签仍是后续阶段。
 - [smouj/agent-browser](https://github.com/smouj/agent-browser)：独立会话、实时 Dashboard、DOM/Accessibility/视觉快照与动作日志。Aa Browser 本阶段实现了只捕获单标签的实时预览、有限历史和 `browser_tasks`；完整多会话数据库和远程 Dashboard 尚未引入，以免泄漏本机配置。
-- [JIRBOY/Agent-Browser](https://github.com/JIRBOY/Agent-Browser)：强调后台浏览器任务与故障记录。Aa Browser 复用现有 MCP 调用日志、客户端编号和取消协议，不复制其实现；30 分钟 Windows soak 已通过，崩溃注入与恢复仍列为下一阶段证据。
+- [JIRBOY/Agent-Browser](https://github.com/JIRBOY/Agent-Browser)：其上游 [vercel-labs/agent-browser](https://github.com/vercel-labs/agent-browser) 强调后台浏览器任务、故障记录与 trace/HAR 取证。Aa Browser 复用现有 MCP 调用日志、客户端编号和取消协议，不复制其实现；30 分钟 Windows soak 已通过，崩溃注入与恢复仍列为下一阶段证据。
+
+### 权限隔离与录屏的取舍
+
+| 维度 | anomalyco/browse | smouj/agent-browser | Aa Browser（本阶段） |
+| --- | --- | --- | --- |
+| 会话隔离 | 直接使用用户真实浏览器 profile 与扩展，登录态共享，隔离最弱 | 独立 Playwright context，但单进程单页面，不支持横向扩展 | 共享会话 + 按标签租约；隔离标签用独立分区并在关闭时清理 |
+| 画面能力 | 支持把标签录制为视频，并可在演示时边操作边录 | 仅实时预览，无录屏 | 单标签实时预览 + 有界截图历史（最多 20 帧）；**未提供录屏** |
+| 取证 | 演示录制 + 交接 | 动作日志 | MCP 调用日志、证据目录、截图历史；trace/HAR 复用现有抓包能力，未做自动化录屏 |
+
+不引入录屏是明确取舍：持续编码视频会显著增加后台渲染与磁盘开销，且容易把用户其它标签或敏感页面录进文件。需要过程证据时，当前方案是截图历史 + 抓包 HAR。
+
+### 许可证审查
+
+三个参考仓库的许可证已于 2026-11-23 实际核对：
+
+| 仓库 | 许可证 | 依据 |
+| --- | --- | --- |
+| anomalyco/browse | MIT | `LICENSE` 首行 “MIT License”，版权声明署 opencode |
+| smouj/agent-browser | MIT | `LICENSE` “Copyright (c) 2025 AgentBrowser Contributors” |
+| JIRBOY/Agent-Browser | Apache-2.0（继承上游） | 该仓库是 vercel-labs/agent-browser 的 fork，无自有提交，`LICENSE` 为 Apache License 2.0 |
+
+三者均无 NOTICE 文件，也没有额外的商用或再分发限制；MIT 与 Apache-2.0 都要求保留版权与许可证声明。本项目**只参考其公开的产品设计，没有复制任何代码**，因此不产生许可证传染或署名义务。
 

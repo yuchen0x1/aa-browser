@@ -275,8 +275,12 @@ export class BrowserMonitor {
       if (this.previewRequested && this.windowVisible) this.deps.emitFrame(frame)
     } catch (error) {
       if (generation === this.captureGeneration) {
+        const message = error instanceof Error ? error.message : String(error)
         this.state.status = 'error'
-        this.state.currentTask = error instanceof Error ? error.message : String(error)
+        this.state.currentTask = message
+        // 预览出帧失败必须留痕：否则上层只看到「帧序号一直是 0」，
+        // 无从判断是合成器没给画面、还是截图超时。
+        console.warn(`[aa-browser] 预览截图失败: ${message}`)
       }
     } finally {
       if (timeoutHandle) clearTimeout(timeoutHandle)

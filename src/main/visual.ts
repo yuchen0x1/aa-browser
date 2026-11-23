@@ -132,24 +132,42 @@ export async function captureVisual(wc: WebContents, opts?: { fullPage?: boolean
       // capturePage 依赖桌面合成器给出的表面。窗口最小化时尚可用，窗口被完全
       // 隐藏（Linux/X11 实测）时可能返回空图或永不结算，因此加一个上限，
       // 失败就退回 CDP 截图——它直接向渲染器要画面，不依赖窗口是否可见。
+      const failures: string[] = []
       let image: Electron.NativeImage | null = null
       try {
         image = await settleWithin(wc.capturePage(undefined, { stayHidden: true }), 4_000, '预览截图')
-      } catch {
+      } catch (error) {
+        failures.push(`capturePage: ${error instanceof Error ? error.message : String(error)}`)
         image = null
       }
       if (image && !image.isEmpty()) {
         const size = image.getSize()
         return { base64: image.toPNG().toString('base64'), width: size.width, height: size.height }
       }
-      const shot = (await dbg.sendCommand('Page.captureScreenshot', {
-        format: 'png',
-        fromSurface: false,
-        captureBeyondViewport: !!opts?.fullPage
-      })) as { data?: string }
-      if (!shot?.data) throw new ActionError('截图失败：页面合成器未返回图像数据')
-      const dims = pngDimensions(Buffer.from(shot.data, 'base64'))
-      return { base64: shot.data, width: dims.width, height: dims.height }
+      if (image) failures.push('capturePage: 返回空图像')
+      // 依次尝试两条 CDP 通道：fromSurface=false 直读渲染器主帧（从未合成过的
+      // 页面），fromSurface=true 读合成表面（有虚拟视口覆盖时可用）。
+      for (const fromSurface of [false, true]) {
+        try {
+          const shot = (await settleWithin(
+            dbg.sendCommand('Page.captureScreenshot', {
+              format: 'png',
+              fromSurface,
+              captureBeyondViewport: !!opts?.fullPage
+            }) as Promise<{ data?: string }>,
+            8_000,
+            'CDP 截图'
+          ))
+          if (shot?.data) {
+            const dims = pngDimensions(Buffer.from(shot.data, 'base64'))
+            return { base64: shot.data, width: dims.width, height: dims.height }
+          }
+          failures.push(`CDP fromSurface=${fromSurface}: 未返回数据`)
+        } catch (error) {
+          failures.push(`CDP fromSurface=${fromSurface}: ${error instanceof Error ? error.message : String(error)}`)
+        }
+      }
+      throw new ActionError(`截图失败：页面可能不可见或无合成表面（${failures.join('；')}）`)
     }
     // 最小化/隐藏时合成器可能没有首帧；先请求一次不改变可见性的捕获激活渲染。
     if (opts?.fullPage) await wc.capturePage(undefined, { stayHidden: true })

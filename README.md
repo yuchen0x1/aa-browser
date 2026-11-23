@@ -433,6 +433,17 @@ Cloudflare 验证辅助的完整流程与边界见 [`docs/CLOUDFLARE.md`](./docs
 
 后台运行、独立预览、人工接管和 15 项能力审计见 [`docs/BACKGROUND_CONTROL.md`](./docs/BACKGROUND_CONTROL.md)。
 
+### 两套引擎如何分工
+
+Aa Browser 的页面理解不是单一路径，而是**结构化快照引擎**与**视觉引擎**互为补充：
+
+| 引擎 | 负责 | 何时使用 |
+| --- | --- | --- |
+| 结构化快照（Accessibility Tree + ref） | 读取页面语义、定位元素、执行点击 / 输入 / 选择 | 默认路径。ref 稳定、可校验命中测试，不依赖像素坐标 |
+| 视觉（CDP 截图 + 元素截图 + 基线对比） | 元素坐标、遮挡判断、布局变化、视觉回归 | 快照无法表达时（canvas、图片、图表），或需要人眼可见的证据 |
+
+两者不是二选一：视觉定位失败时回退到 DOM，DOM 表达不了的视觉差异再交给截图与基线对比。**坐标点击永远不是默认操作方式**——它只在结构化定位不可用、且已确认命中测试通过时才作为补充手段，避免把「碰巧点在那个位置」当成可靠操作。
+
 视觉评审建议流程：先用 `browser_viewport_matrix` 跑一遍响应式矩阵（发现横向溢出），再用 `browser_contrast_audit` 找不可读文本，最后对关键页面用 `browser_visual_diff action=save` 存基线、改动后 `action=compare` 做回归对比。基线目录可用 `AA_BROWSER_BASELINE_DIR` 覆盖。
 
 > 开发者注意：工具的名称、说明、参数 schema 与 MCP annotations 只维护在 [`src/shared/tool-defs.mjs`](./src/shared/tool-defs.mjs)。主进程只写 `name` + `handler`，桥直接导入同一份定义。`npm run check` 会断言唯一来源、主进程、桥与文档四方一致，并阻止任何一方重新手写 schema。
@@ -533,6 +544,8 @@ Aa Browser 不提供 Chrome 的原生 `chrome://extensions` 页面；在地址�
 - **会话恢复有范围**：只恢复普通网页标签，不恢复隔离标签、内部页与非 HTTP(S) 地址，最多 20 条。
 - **同一用户数据目录只运行一个实例**：重复启动会聚焦已有窗口；开发版使用独立目录，可与安装版并存。
 - **安装与更新依赖 GitHub Releases**：访问受限时需要手动下载安装包；AppImage 原地更新要求当前文件目录可写。
+- **不伪造页面可见性**：后台模式下页面拿到的 `document.visibilityState` 仍是真实值。少数站点会在不可见时暂停视频、轮询或渲染，这类站点请显式选择 `visible` 或 `background`；Aa Browser 不会用伪造状态绕过站点的安全检查。
+- **后台拖放有平台差异**：原生 HTML5 拖放在窗口最小化或完全隐藏时，部分平台（实测 Linux/X11）不会建立系统级拖放会话。此时 `browser_drag` 会改用页面内 DataTransfer 事件序列完成拖放，并在返回结果中标注「DOM 事件回退」；这条路径的事件不是 `isTrusted`，对强制校验可信输入的站点可能无效。
 
 ## 故障排查
 
@@ -617,6 +630,7 @@ CI 在 Windows x64 与 Linux x64 上执行 `check`、工具与客户端接入校
 | [自动更新](./docs/AUTO_UPDATE.md) | 检查、下载、重启安装、SHA-512 与回滚 |
 | [插件市场接入](./docs/MARKETPLACE.md) | DeepSeek Harness 插件安装与验证 |
 | [维护状态](./docs/MAINTENANCE.md) | 发行证据、回归记录与维护边界 |
+| [后台控制与实时预览](./docs/BACKGROUND_CONTROL.md) | 窗口模式、后台操控审计、预览与接管、竞品取舍与许可证审查 |
 | [发布说明](./docs/releases/release-notes.md) / [Release 正文归档](./docs/releases/bodies/) / [发布模板](./docs/releases/release-notes-template.md) | 按版本摘要、线上正文副本与下一版模板；`npm run check:release-bodies:remote` 可对照 GitHub 检查漂移 |
 | [CHANGELOG](./CHANGELOG.md) | 工程与产品变更摘要 |
 | [竞品与生态调研](./docs/RESEARCH.md) | 开源项目对标、平台可行性依据 |

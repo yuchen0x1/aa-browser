@@ -435,10 +435,15 @@ async function runElectron() {
     }
     const hiddenMode = await call('browser_window', { action: 'mode', mode: 'hidden', monitor: true, tabId: activeForMonitor })
     assert.match(hiddenMode.text, /实时预览|监控/)
+    let lastMonitorError
     const monitorState = await until(async () => {
       const value = await state()
+      // 把截图失败原因带进超时消息：只报「frameSeq 为 0」无法定位。
+      if (value.monitor?.status === 'error') lastMonitorError = value.monitor.currentTask
       return value.monitor?.enabled && (value.monitor?.frameSeq ?? 0) > 0 ? value.monitor : null
-    }, 'hidden live preview frame', 20_000)
+    }, 'hidden live preview frame', 20_000).catch((error) => {
+      throw new Error(`${error.message}${lastMonitorError ? `（监控错误: ${lastMonitorError}）` : ''}`)
+    })
     assert.equal(win.isVisible(), false)
     const historyFile = monitorState.history?.at(-1)?.file
     assert.ok(historyFile && fs.existsSync(historyFile), `missing monitor history file: ${historyFile}`)
