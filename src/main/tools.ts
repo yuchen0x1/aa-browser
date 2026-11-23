@@ -28,6 +28,7 @@ import { getEvidenceManager } from './evidence'
 import { getExtensionManager } from './extensions'
 import { auditContrast, formatContrast } from './contrast'
 import { captureViewportMatrix, VIEWPORT_PRESETS, formatViewportMatrix, type ViewportSpec } from './viewport'
+import { clickCloudflareControl, formatCloudflareStatus, inspectCloudflare, waitForCloudflare } from './cloudflare'
 import {
   ActionError,
   captureSnapshot,
@@ -597,6 +598,54 @@ export function buildTools(
         ready: page['readyState'] === 'complete' && !tab.loading
       }
       return { content: [text(JSON.stringify(state, null, 2))] }
+    }
+  })
+
+  pushTool({
+    name: 'browser_cloudflare',
+    handler: async (args) => {
+      const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
+      const action = String(args['action'] ?? 'inspect')
+      if (!['inspect', 'click', 'wait'].includes(action)) {
+        throw new ActionError('Cloudflare 操作必须为 inspect、click 或 wait。')
+      }
+      const signal = callSignal(args)
+      return onTab(tab, signal, async (): Promise<{ content: ToolContent[]; isError?: boolean }> => {
+        if (action === 'inspect') {
+          const status = await inspectCloudflare(tab)
+          return { content: [text(formatCloudflareStatus(status))] }
+        }
+        if (action === 'wait') {
+          const timeoutMs = typeof args['timeoutMs'] === 'number' ? args['timeoutMs'] : undefined
+          const result = await waitForCloudflare(tab, timeoutMs, signal)
+          const body = JSON.stringify({ completed: result.completed, elapsedMs: result.elapsedMs, status: JSON.parse(formatCloudflareStatus(result.status)) }, null, 2)
+          return { content: [text(body)], ...(result.completed ? {} : { isError: true }) }
+        }
+        if (args['confirm'] !== true) {
+          throw new ActionError('Cloudflare click 是真实鼠标操作；确认页面上的复选框属于你要访问的站点后，传入 confirm:true。滑块或图片挑战必须由用户手动完成。')
+        }
+        await opGate(
+          {
+            site: siteOf(tab),
+            tabTitle: tab.title,
+            action: '点击 Cloudflare 验证复选框',
+            detail: '仅发送一次可见复选框的真实鼠标事件，不读取或修改挑战令牌。'
+          },
+          signal
+        )
+        assertToolRunning(signal)
+        const result = await clickCloudflareControl(tab, {
+          frameId: typeof args['frameId'] === 'string' ? args['frameId'] : undefined,
+          candidateIndex: typeof args['candidateIndex'] === 'number' ? args['candidateIndex'] : undefined,
+          focus: windowCtl.focus
+        })
+        assertToolRunning(signal)
+        const body = {
+          clicked: { frameId: result.frameId, control: result.control, point: result.point },
+          status: JSON.parse(formatCloudflareStatus(result.status))
+        }
+        return { content: [text(JSON.stringify(body, null, 2))] }
+      })
     }
   })
 

@@ -32,11 +32,11 @@
 
 <!-- github-release:start -->
 
-**[v0.12.1](./release-notes-v0.12.1.md)** · 2026-11-23 · 最新正式版
+**[v0.13.0](./release-notes-v0.13.0.md)** · 2026-11-23 · 最新正式版
 
-本版在保留扩展管理能力的基础上，收紧网络响应体边界：响应体最多 1 MiB，文本/二进制结果有明确摘要，JSON、表单和常见授权凭据默认内容级脱敏；既有 MCP 客户端配置和用户数据无需迁移。
+本版新增 `browser_cloudflare` 验证辅助：可识别跨域 Cloudflare 挑战 iframe、等待验证完成，并在显式确认后对可见复选框发送一次真实鼠标点击；不读取令牌、不改 Cookie，也不自动完成滑块或图片挑战。
 
-**上一版：[v0.12.0](./release-notes-v0.12.0.md)** · 2026-11-23
+**上一版：[v0.12.1](./release-notes-v0.12.1.md)** · 2026-11-23
 
 [全部发行记录](https://github.com/yuchen0x1/aa-browser/releases)
 
@@ -387,6 +387,7 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 | --- | --- |
 | `browser_extract` | 提取整页或指定元素的纯文本 |
 | `browser_page_state` | 一次读取页面状态：URL / 标题 / `readyState` / 可见性与焦点 / 滚动位置与高度 / 可见弹窗与被拦截的原生对话框 / Cloudflare 验证 / 限流提示，并附带浏览器实例、标签创建时间等身份信息 |
+| `browser_cloudflare` | Cloudflare 验证辅助：`inspect` 枚举跨域挑战 iframe 与可见复选框，`click`（必须 `confirm:true`）发送一次真实鼠标点击，`wait` 等待挑战完成；不提取令牌、不改 Cookie，不自动完成滑块或图片挑战 |
 | `browser_evaluate` | 在页面执行 JS 表达式并返回 JSON（可按 ref 绑定 `element`） |
 | `browser_dialogs` | 读取页面弹过的 `alert` / `confirm` / `prompt`（已被拦截，不会卡死），并显示守卫实际返回的值 |
 | `browser_dialog_respond` | 预设 `confirm` / `prompt` 的返回值（可 `once:false` 常驻、`reset:true` 清除），用于测试需要确认或输入的流程 |
@@ -425,6 +426,8 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 | `browser_resize` | 调整视口尺寸 200–5000px（响应式测试） |
 | `browser_tabs` | 列表 / 新建 / 切换 / 关闭标签页；列表附带浏览器实例、PID、版本、启动时间、标签创建时间与恢复标记；`isolated: true` 新建隔离标签；`select` 可加 `bringToFront: true` 同时恢复窗口并聚焦页面 |
 | `browser_extensions` | **加载已解压扩展**：`action=load` 传入含 `manifest.json` 的目录绝对路径（等价 Chrome「加载已解压的扩展程序」），装载到共享会话并跨重启保留；`action=list` / `action=remove` 查看（id/名称/版本/路径）与卸载。扩展对之后打开或刷新的页面生效，隔离标签不装载 |
+
+Cloudflare 验证辅助的完整流程与边界见 [`docs/CLOUDFLARE.md`](./docs/CLOUDFLARE.md)。
 
 视觉评审建议流程：先用 `browser_viewport_matrix` 跑一遍响应式矩阵（发现横向溢出），再用 `browser_contrast_audit` 找不可读文本，最后对关键页面用 `browser_visual_diff action=save` 存基线、改动后 `action=compare` 做回归对比。基线目录可用 `AA_BROWSER_BASELINE_DIR` 覆盖。
 

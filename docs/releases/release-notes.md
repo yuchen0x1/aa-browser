@@ -6,6 +6,7 @@
 
 | 版本 | 完整 Release 正文 |
 | --- | --- |
+| v0.13.0 | [bodies/v0.13.0.md](./bodies/v0.13.0.md) |
 | v0.12.1 | [bodies/v0.12.1.md](./bodies/v0.12.1.md) |
 | v0.12.0 | [bodies/v0.12.0.md](./bodies/v0.12.0.md) |
 | v0.11.0 | [bodies/v0.11.0.md](./bodies/v0.11.0.md) |
@@ -33,6 +34,13 @@
 | v0.0.3 | [bodies/v0.0.3.md](./bodies/v0.0.3.md) |
 | v0.0.2 | [bodies/v0.0.2.md](./bodies/v0.0.2.md) |
 | v0.0.1 | [bodies/v0.0.1.md](./bodies/v0.0.1.md) |
+
+## v0.13.0 — 2026-11-23
+
+- 新增 `browser_cloudflare` MCP 工具：识别 `challenges.cloudflare.com` 跨域验证 iframe，枚举可见复选框，并等待挑战稳定消失。
+- `click` 必须显式传入 `confirm:true`，只发送一次真实鼠标事件；不读取或注入 challenge token，不修改 Cookie、请求头或网络响应。
+- 普通跨域 iframe、滑块、图片验证码和 Turnstile 不会被自动点击或求解；完整流程与边界见 [`docs/CLOUDFLARE.md`](../CLOUDFLARE.md)。
+- 新增专项回归，并同步主进程、工具定义、DSH 桥、README 与文档。
 
 ## v0.12.1 — 2026-11-23
 

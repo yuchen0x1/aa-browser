@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-globalThis.__AA_BRIDGE_VERSION__ = "0.12.1";
+globalThis.__AA_BRIDGE_VERSION__ = "0.13.0";
 // \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -3967,6 +3967,45 @@ const TOOL_DEFS = [
 		}
 	},
 	{
+		name: "browser_cloudflare",
+		title: "Cloudflare 验证助手",
+		description: "Inspect a Cloudflare challenge that is hidden inside a cross-origin iframe, wait until the challenge settles, or (with confirm:true) send one real pointer click to a visible checkbox. This is a human-in-the-loop helper: it does not extract tokens, alter cookies, or solve sliders/images; complete those challenges yourself in the page.",
+		inputSchema: {
+			type: "object",
+			properties: {
+				action: {
+					type: "string",
+					enum: [
+						"inspect",
+						"click",
+						"wait"
+					],
+					description: "Challenge operation (default inspect)"
+				},
+				frameId: {
+					type: "string",
+					description: "(click) frame id returned by inspect; omit to choose the first visible checkbox"
+				},
+				candidateIndex: {
+					type: "number",
+					description: "(click) control index returned by inspect"
+				},
+				confirm: {
+					type: "boolean",
+					description: "(click) must be true to send the real pointer event"
+				},
+				timeoutMs: {
+					type: "number",
+					description: "(wait) maximum wait in milliseconds, default 30000, max 120000"
+				},
+				tabId: {
+					type: "string",
+					description: "Tab id (default: active tab)"
+				}
+			}
+		}
+	},
+	{
 		name: "browser_wait",
 		title: "等待",
 		description: "Wait for one of: text to appear (`text`), text to disappear (`textGone`), a selector to appear (`selector`) or disappear (`selectorGone`), the URL to contain a string (`urlContains`), or a fixed delay (`time`, ms). Multiple conditions wait for whichever happens first. Polls every 250ms. Prefer selector/urlContains on SPAs where text is reused; use text conditions for plain pages.",
@@ -5108,6 +5147,12 @@ const TOOL_ANNOTATIONS = Object.freeze({
 		readOnlyHint: true,
 		destructiveHint: false,
 		idempotentHint: true,
+		openWorldHint: true
+	},
+	browser_cloudflare: {
+		readOnlyHint: false,
+		destructiveHint: true,
+		idempotentHint: false,
 		openWorldHint: true
 	},
 	browser_wait: {

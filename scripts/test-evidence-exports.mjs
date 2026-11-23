@@ -70,7 +70,7 @@ try {
   const { buildTools } = load('tools', {
     '@shared/tool-defs.mjs': { TOOL_DEFS, TOOL_ANNOTATIONS }, '@snapshot/scripts': {}, './actions': actions,
     './evidence': evidence, './tabs': {}, './network': {}, './dialogs': {}, './assertions': {}, './frames': {},
-    './visual': {}, './contrast': {}, './viewport': {}, './extensions': extensions
+    './visual': {}, './contrast': {}, './viewport': {}, './extensions': extensions, './cloudflare': {}
   })
   let revision = 0
   const tab = {
@@ -84,6 +84,11 @@ try {
     assert.ok(tool, `Missing tool: ${name}`)
     return tool.handler(args)
   }
+  await assert.rejects(
+    () => call('browser_cloudflare', { action: 'click', confirm: false }),
+    /真实鼠标操作.*confirm:true/,
+    'Cloudflare pointer actions must require explicit confirmation'
+  )
   const entries = () => JSON.parse(fs.readFileSync(registry, 'utf8')).entries
   const userFiles = [path.join(downloads, 'aa-page-123.pdf'), path.join(harDir, 'aa-123.har')]
   for (const [i, kind] of ['pdf', 'har'].entries()) {

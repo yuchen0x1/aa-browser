@@ -2,6 +2,13 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
+## v0.13.0 — 2026-11-23
+
+- **Cloudflare 验证辅助**：新增 `browser_cloudflare`，可检查 `challenges.cloudflare.com` 跨域挑战 iframe、列出可见复选框，并等待验证稳定完成。
+- **显式真实点击**：只有传入 `confirm:true` 才会对可见复选框发送一次真实鼠标事件；滑块、图片验证码和 Turnstile 仍由用户手动完成。
+- **安全边界**：不读取、生成或注入 challenge token，不修改 Cookie、请求头或网络响应；普通跨域 iframe 不会被误判或点击。
+- **回归与文档**：新增 Cloudflare 专项测试，工具契约、DSH 桥、README 和使用边界文档同步更新。
+
 ## v0.12.1 — 2026-11-23
 
 - **网络响应体边界**：`browser_network_detail` 获取响应体时在主进程侧限制为最多 1 MiB，并明确区分文本、二进制和截断结果，避免超大响应完整穿过 MCP 桥。
