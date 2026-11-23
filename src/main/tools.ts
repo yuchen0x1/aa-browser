@@ -1018,7 +1018,7 @@ export function buildTools(
       ]
       if (args['body'] === true) {
         const body = await tab.net.getResponseBody(entry.requestId)
-        parts.push('', '响应体:', clipBody(body, entry.mimeType))
+        parts.push('', '响应体:', clipBody(body, entry.mimeType, includeSensitive))
       }
       const structured = {
         requestId: entry.requestId,

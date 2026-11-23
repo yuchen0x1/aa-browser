@@ -1,9 +1,10 @@
 # 项目状态
 
-更新于 2026-11-21（UTC+8）。
+更新于 2026-11-23（UTC+8）。
 
-- Aa Browser 是 Electron + TypeScript 桌面浏览器；本地 token WebSocket 连接主进程，MCP stdio 桥提供 42 个工具，官网是独立静态站点。
-- 正式基线：[v0.6.12](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.6.12)（2026-11-21 发布，Latest、7 项不可变资产，标签 CI `44865353450` 双平台与发布作业全绿）。标签提交 `580566f` 的主线 CI/CodeQL 成功，开放扫描告警为 0。
+- Aa Browser 是 Electron + TypeScript 桌面浏览器；本地 token WebSocket 连接主进程，MCP stdio 桥提供 44 个工具，官网是独立静态站点。
+- v0.12.1 候选收紧网络响应体：`browser_network_detail` 在主进程侧限制 1 MiB，文本/二进制结果结构化，JSON、表单和常见授权凭据默认内容级脱敏；EV-014 的捕获阶段内存分级仍待后续。
+- 最新已发布基线：[v0.12.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.12.0)（2026-11-23）；当前分支为 v0.12.1 候选，正式 Release 需以标签 CI 和公开资产核验为准。
 - v0.6.10 修复：MCP 桥并发握手单飞与 socket 所有权、iframe 敏感值描述回显和冷启动回归 profile 清理竞态。
 - v0.6.11 修复：设置面板代次隔离与输入法保护、一键接入客户端配置 JSONC/TOML 安全写入（新依赖 jsonc-parser、smol-toml）、discovery 文件权限加固、同毫秒下载 ID 冲突；无数据迁移或 MCP schema 变更。
 - 发行链补全：v0.6.9 标签 CI 失败且未发布，其修复随 v0.6.10 一并发行；孤儿标签已于 2026-11-21 核验后删除（记录在 [问题](AUTONOMOUS_ISSUES.md)）。

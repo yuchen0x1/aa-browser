@@ -2,6 +2,12 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
+## v0.12.1 — 2026-11-23
+
+- **网络响应体边界**：`browser_network_detail` 获取响应体时在主进程侧限制为最多 1 MiB，并明确区分文本、二进制和截断结果，避免超大响应完整穿过 MCP 桥。
+- **响应体默认脱敏**：JSON 对象中的 token、密码、Cookie、授权、支付字段等敏感键，以及表单 / Bearer / Basic 文本凭据默认替换为 `[redacted]`；只有显式 `includeSensitive:true` 并通过既有审批后才返回原文。
+- **回归覆盖**：新增网络响应体大小、UTF-8 截断、二进制摘要和内容级脱敏测试，并继续通过真实 Electron/MCP 抓包冒烟。
+
 ## v0.12.0 — 2026-11-23
 
 - **加载已解压扩展**：设置中新增等价于 Chrome「加载已解压的扩展程序」的目录选择器，支持 MV2 / MV3 扩展并显示名称、版本和清单版本。

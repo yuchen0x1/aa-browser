@@ -6,6 +6,7 @@
 
 | 版本 | 完整 Release 正文 |
 | --- | --- |
+| v0.12.1 | [bodies/v0.12.1.md](./bodies/v0.12.1.md) |
 | v0.12.0 | [bodies/v0.12.0.md](./bodies/v0.12.0.md) |
 | v0.11.0 | [bodies/v0.11.0.md](./bodies/v0.11.0.md) |
 | v0.10.0 | [bodies/v0.10.0.md](./bodies/v0.10.0.md) |
@@ -32,6 +33,12 @@
 | v0.0.3 | [bodies/v0.0.3.md](./bodies/v0.0.3.md) |
 | v0.0.2 | [bodies/v0.0.2.md](./bodies/v0.0.2.md) |
 | v0.0.1 | [bodies/v0.0.1.md](./bodies/v0.0.1.md) |
+
+## v0.12.1 — 2026-11-23
+
+- `browser_network_detail` 的响应体在主进程侧限制为最多 1 MiB，文本按 UTF-8 安全截断，二进制返回大小与 MIME 摘要。
+- JSON、表单以及 Bearer / Basic 等常见授权文本默认内容级脱敏；`includeSensitive:true` 仍遵循既有人工审批。
+- 新增网络响应体安全专项测试，真实 Electron/MCP 抓包、桌面回归和全量 `check` 继续通过。
 
 ## v0.12.0 — 2026-11-23
 

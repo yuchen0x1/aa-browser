@@ -21,9 +21,13 @@ export interface NetRequest {
 }
 
 const MAX_ENTRIES = 500
-const MAX_BODY_CHARS = 50000
+export const MAX_RESPONSE_BODY_BYTES = 1024 * 1024
+export const MAX_RESPONSE_BODY_CHARS = 50000
 const SENSITIVE_HEADER = /^(authorization|proxy-authorization|cookie2?|set-cookie|.*(?:auth|token|secret|api[-_]?key|password|passwd|credential).*)$/i
 const SENSITIVE_QUERY = /^(access[-_]?token|refresh[-_]?token|id[-_]?token|token|jwt|bearer|api[-_]?key|key|secret|signature|sig|password|passwd|auth|authorization|session|session[-_]?id|credential|code)$/i
+const SENSITIVE_BODY_KEY = /^(?:access[-_]?token|refresh[-_]?token|id[-_]?token|token|jwt|bearer|api[-_]?key|client[-_]?secret|private[-_]?key|secret|signature|sig|password|passwd|auth|authorization|cookie|set[-_]?cookie|session|session[-_]?id|credential|otp|one[-_]?time[-_]?code|security[-_]?code|card[-_]?number|cc[-_]?number|cvv|cvc|expiry|expiration|code)$/i
+const BEARER_SECRET = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]+/gi
+const BODY_KEY_VALUE = /((?:access[-_]?token|refresh[-_]?token|id[-_]?token|token|jwt|bearer|api[-_]?key|client[-_]?secret|private[-_]?key|secret|signature|sig|password|passwd|auth|authorization|cookie|set[-_]?cookie|session|session[-_]?id|credential|otp|one[-_]?time[-_]?code|security[-_]?code|card[-_]?number|cc[-_]?number|cvv|cvc|expiry|expiration|code)\s*[:=]\s*)(["']?)([^"'&\s,}]+)\2/gi
 
 /** 兜底：URL 本身无法解析时，仍按 `?/&/#` 分隔符抹掉明显的凭据参数。 */
 function redactRawUrl(raw: string): string {
@@ -432,8 +436,8 @@ export class NetworkCapture {
     return this.byId.get(requestId) ?? null
   }
 
-  /** 拉取响应体（仅响应完成后可用） */
-  async getResponseBody(requestId: string): Promise<{ content: string; base64Encoded: boolean } | null> {
+  /** 拉取响应体（仅响应完成后可用），并在主进程边界限制返回体大小。 */
+  async getResponseBody(requestId: string): Promise<NetworkResponseBody | null> {
     if (!this.attached) return null
     try {
       const result = (await this.wc.debugger.sendCommand('Network.getResponseBody', { requestId })) as {
@@ -441,7 +445,30 @@ export class NetworkCapture {
         base64Encoded?: boolean
       } | null
       if (!result || typeof result['body'] !== 'string') return null
-      return { content: result['body'], base64Encoded: !!result['base64Encoded'] }
+      const content = result['body']
+      if (result['base64Encoded']) {
+        const estimatedBytes = Math.floor(Buffer.byteLength(content, 'utf8') * 3 / 4)
+        const maxBase64Chars = Math.floor(MAX_RESPONSE_BODY_BYTES / 3) * 4
+        if (content.length > maxBase64Chars) {
+          return {
+            content: content.slice(0, maxBase64Chars),
+            base64Encoded: true,
+            truncated: true,
+            sizeBytes: estimatedBytes
+          }
+        }
+        return { content, base64Encoded: true, truncated: false, sizeBytes: estimatedBytes }
+      }
+      const sizeBytes = Buffer.byteLength(content, 'utf8')
+      if (sizeBytes > MAX_RESPONSE_BODY_BYTES) {
+        return {
+          content: truncateUtf8(content, MAX_RESPONSE_BODY_BYTES),
+          base64Encoded: false,
+          truncated: true,
+          sizeBytes
+        }
+      }
+      return { content, base64Encoded: false, truncated: false, sizeBytes }
     } catch {
       return null
     }
@@ -516,18 +543,121 @@ function toHarQuery(url: string): { name: string; value: string }[] {
   }
 }
 
-/** 截断响应体为 Agent 可读文本 */
+interface NetworkResponseBody {
+  content: string
+  base64Encoded: boolean
+  truncated?: boolean
+  sizeBytes?: number
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  if (Buffer.byteLength(value, 'utf8') <= maxBytes) return value
+  let low = 0
+  let high = Math.min(value.length, maxBytes)
+  let best = 0
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2)
+    if (Buffer.byteLength(value.slice(0, middle), 'utf8') <= maxBytes) {
+      best = middle
+      low = middle + 1
+    } else {
+      high = middle - 1
+    }
+  }
+  return value.slice(0, best)
+}
+
+interface RedactedJson {
+  value: unknown
+  changed: boolean
+}
+
+function redactJson(value: unknown, depth = 0): RedactedJson {
+  if (depth > 32) return { value: '[redacted: nesting limit]', changed: true }
+  if (Array.isArray(value)) {
+    let changed = false
+    const next = value.map((item) => {
+      const redacted = redactJson(item, depth + 1)
+      changed ||= redacted.changed
+      return redacted.value
+    })
+    return { value: next, changed }
+  }
+  if (!value || typeof value !== 'object') {
+    if (typeof value === 'string') {
+      const redacted = redactPlainSecrets(value)
+      return { value: redacted, changed: redacted !== value }
+    }
+    return { value, changed: false }
+  }
+  let changed = false
+  const next: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (SENSITIVE_BODY_KEY.test(key)) {
+      next[key] = '[redacted]'
+      changed = true
+      continue
+    }
+    const redacted = redactJson(item, depth + 1)
+    next[key] = redacted.value
+    changed ||= redacted.changed
+  }
+  return { value: next, changed }
+}
+
+function redactPlainSecrets(value: string): string {
+  return value
+    .replace(BEARER_SECRET, '$1 [redacted]')
+    .replace(BODY_KEY_VALUE, (_match, prefix: string, quote: string) => `${prefix}${quote}[redacted]${quote}`)
+}
+
+interface RedactedBodyText {
+  text: string
+  changed: boolean
+}
+
+function redactBodyText(value: string, mimeType: string): RedactedBodyText {
+  const mime = mimeType.toLowerCase()
+  if (mime.includes('json')) {
+    try {
+      const parsed = redactJson(JSON.parse(value))
+      if (parsed.changed) return { text: JSON.stringify(parsed.value, null, 2), changed: true }
+      return { text: value, changed: false }
+    } catch {
+      /* malformed JSON still goes through conservative text redaction below */
+    }
+  }
+  const redacted = redactPlainSecrets(value)
+  return { text: redacted, changed: redacted !== value }
+}
+
+/** 对网络响应体做默认内容级脱敏；显式 includeSensitive 时由调用方跳过。 */
+export function redactNetworkBody(value: string, mimeType = ''): string {
+  return redactBodyText(value, mimeType).text
+}
+
+/** 截断、脱敏响应体为 Agent 可读文本 */
 export function clipBody(
-  body: { content: string; base64Encoded: boolean } | null,
-  mimeType: string
+  body: NetworkResponseBody | null,
+  mimeType: string,
+  includeSensitive = false
 ): string {
   if (!body) return '（响应体不可用：请求可能未完成，或已被浏览器丢弃）'
   if (body.base64Encoded) {
-    return `（二进制响应体，${body.content.length} 字节 base64，mimeType: ${mimeType || 'unknown'}；如需内容请用 browser_har 导出后人工分析）`
+    const size = body.sizeBytes ? `约 ${body.sizeBytes} 字节` : `${body.content.length} 字节 base64`
+    const truncated = body.truncated ? `，原始响应超过 ${Math.round(MAX_RESPONSE_BODY_BYTES / 1024)}KB` : ''
+    return `（二进制响应体，${size}${truncated}，mimeType: ${mimeType || 'unknown'}；内容未直接返回）`
   }
-  const text = body.content
-  if (text.length > MAX_BODY_CHARS) {
-    return text.slice(0, MAX_BODY_CHARS) + '\n…（响应体过长已截断）'
+  const redacted = includeSensitive ? { text: body.content, changed: false } : redactBodyText(body.content, mimeType)
+  const text = redacted.text
+  const clipped = text.length > MAX_RESPONSE_BODY_CHARS
+    ? text.slice(0, MAX_RESPONSE_BODY_CHARS) + '\n…（响应体过长已截断）'
+    : text
+  const notices = []
+  if (redacted.changed) notices.push('响应体中的敏感字段已脱敏')
+  if (body.truncated) notices.push(`响应体超过 ${Math.round(MAX_RESPONSE_BODY_BYTES / 1024)}KB，仅返回前 ${Math.round(MAX_RESPONSE_BODY_BYTES / 1024)}KB`)
+  if (notices.length) {
+    return `${clipped}\n…（${notices.join('；')}）`
   }
-  return text
+  return clipped
 }
