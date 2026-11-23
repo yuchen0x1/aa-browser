@@ -130,6 +130,7 @@ function createFixture({ requireOperationApproval = false } = {}) {
     './evidence': { getEvidenceManager: forbidden },
     './contrast': { auditContrast: forbidden, formatContrast: forbidden },
     './viewport': { captureViewportMatrix: forbidden, VIEWPORT_PRESETS: [], formatViewportMatrix: forbidden },
+    './extensions': { getExtensionManager: forbidden },
     './downloads': {}
   }
 
