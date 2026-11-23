@@ -775,9 +775,13 @@ if (!process.versions.electron) {
 
     await ui(`document.querySelector("#omnibox").value=${jsLiteral(draft)}; document.querySelector("#omnibox").dispatchEvent(new Event("input"))`)
     await until(() => ui('!document.querySelector("#suggest-panel").hidden'), 'keyboard history suggestions')
+    // 键盘事件经输入通道异步投递，可能与后续 executeJavaScript 抢跑；先确认地址栏
+    // 仍是焦点目标，再等选中态真正落到第一条建议上，而不是按发送顺序假设已完成。
+    assert.equal(await ui('document.activeElement.id'), 'omnibox', 'omnibox must hold focus for keyboard suggestion navigation')
     const suggestedUrl = await ui('document.querySelector("#suggestion-0 .suggest-url").textContent')
     chrome.sendInputEvent({ type: 'keyDown', keyCode: 'Down' })
     chrome.sendInputEvent({ type: 'keyUp', keyCode: 'Down' })
+    await until(() => ui('document.querySelector("#suggestion-0")?.getAttribute("aria-selected") === "true"'), 'keyboard suggestion highlight')
     assert.equal((await addressSelection()).value, suggestedUrl)
     chrome.sendInputEvent({ type: 'keyDown', keyCode: 'Enter' })
     chrome.sendInputEvent({ type: 'keyUp', keyCode: 'Enter' })
