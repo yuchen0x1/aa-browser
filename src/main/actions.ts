@@ -212,6 +212,9 @@ export async function withTabLock<T>(
   tabQueues.set(tab, tail)
   void tail.then(() => {
     if (tabQueues.get(tab) === tail) tabQueues.delete(tab)
+  }, () => {
+    // 队尾按设计永不拒绝；万一上游引入拒绝，这里也要收尾，否则队列会卡死。
+    if (tabQueues.get(tab) === tail) tabQueues.delete(tab)
   })
   let started = false
   try {
@@ -226,6 +229,10 @@ export async function withTabLock<T>(
       }
       signal?.addEventListener('abort', onAbort, { once: true })
       void prev.then(() => {
+        signal?.removeEventListener('abort', onAbort)
+        resolve()
+      }, () => {
+        // 前驱失败不代表本调用应失败：继续进入锁槽，但必须消费该拒绝。
         signal?.removeEventListener('abort', onAbort)
         resolve()
       })
@@ -430,6 +437,92 @@ async function dispatchDragEvent(
   data: DragData
 ): Promise<void> {
   await dbg.sendCommand('Input.dispatchDragEvent', { type, x, y, data })
+}
+
+/**
+ * 在页面里记录 HTML5 拖放事件是否真的发生。
+ * 原生拖放是否生效只能由页面侧证明：CDP 命令返回成功 ≠ 页面收到 dragstart。
+ * 窗口最小化时这条差别是决定性的（见 doDrag 的回退分支）。
+ */
+async function armDragProbe(wc: WebContents): Promise<void> {
+  try {
+    await wc.executeJavaScript(
+      `(() => {
+        const probe = { start: false, drop: false }
+        window.__aaDragProbe = probe
+        const mark = (key) => () => { probe[key] = true }
+        document.addEventListener('dragstart', mark('start'), { capture: true, once: true })
+        document.addEventListener('drop', mark('drop'), { capture: true, once: true })
+        return true
+      })()`,
+      false
+    )
+  } catch {
+    /* 页面可能已关闭；探针缺失按「未验证」处理 */
+  }
+}
+
+async function readDragProbe(wc: WebContents): Promise<{ start: boolean; drop: boolean } | null> {
+  try {
+    return (await wc.executeJavaScript(
+      `(() => { const p = window.__aaDragProbe; return p ? { start: !!p.start, drop: !!p.drop } : null })()`,
+      false
+    )) as { start: boolean; drop: boolean } | null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * DOM 级拖放回退。
+ *
+ * 原生拖放在后台有平台限制：X11 下窗口最小化或不可见时，Chromium 根本不会
+ * 建立系统级 DnD 会话，`Input.dragIntercepted` 永不触发，页面连 dragstart 都收不到，
+ * 于是拖放静默失效（调用仍返回成功）。这里用页面内的 DataTransfer 走完整的
+ * dragstart → dragenter/dragover → drop → dragend 序列，让页面自己的处理函数执行。
+ *
+ * 这是兼容回退，不是默认路径：只有可信输入没有产生真实 drop 时才会走到这里，
+ * 且返回值会明确标注「DOM 回退」，让上层知道事件不是 isTrusted。
+ */
+async function syntheticHtml5Drag(wc: WebContents, fromRef: string, toRef: string): Promise<boolean> {
+  try {
+    return (await wc.executeJavaScript(
+      `(() => {
+        const src = (window.__aaRefs || {})[${refLiteral(fromRef)}]
+        const tgt = (window.__aaRefs || {})[${refLiteral(toRef)}]
+        if (!src || !tgt || !src.isConnected || !tgt.isConnected) return false
+        const center = (el) => {
+          const r = el.getBoundingClientRect()
+          return { clientX: Math.round(r.x + r.width / 2), clientY: Math.round(r.y + r.height / 2) }
+        }
+        let dt
+        try {
+          dt = new DataTransfer()
+        } catch {
+          return false
+        }
+        const make = (type, el) => new DragEvent(type, {
+          bubbles: true, cancelable: true, composed: true, dataTransfer: dt, ...center(el)
+        })
+        try {
+          src.dispatchEvent(make('dragstart', src))
+          tgt.dispatchEvent(make('dragenter', tgt))
+          // dragover 必须被页面 preventDefault，否则 drop 不会发生。
+          const over = make('dragover', tgt)
+          tgt.dispatchEvent(over)
+          const drop = make('drop', tgt)
+          tgt.dispatchEvent(drop)
+          src.dispatchEvent(make('dragend', src))
+        } catch {
+          return false
+        }
+        return true
+      })()`,
+      false
+    )) === true
+  } catch {
+    return false
+  }
 }
 
 /** 未预先建立连接时的单事件兜底路径（悬停等无取消语义的调用）。 */
@@ -675,7 +768,7 @@ export async function doDrag(
   tab: Tab,
   ref: string,
   opts: { toRef?: string; dx?: number; dy?: number; wantSnapshot?: boolean; signal?: AbortSignal }
-): Promise<{ dragged: string; snapshot?: SnapshotSummary }> {
+): Promise<{ dragged: string; snapshot?: SnapshotSummary; dropped: boolean }> {
   throwIfAborted(opts.signal)
   const wc = tab.view.webContents
   const loc1 = (await wc.executeJavaScript(locateScript(ref), false)) as {
@@ -736,6 +829,9 @@ export async function doDrag(
   } catch { /* 页面可能已关闭；交给后续步骤报错 */ }
   throwIfAborted(opts.signal)
   const send = await gestureSender(tab)
+  // 先装页面侧探针：CDP 命令全部返回成功也可能一个 drop 都没发生。
+  await armDragProbe(wc)
+  let nativeDropped = false
   try {
     throwIfAborted(opts.signal)
     if (dragCandidate) {
@@ -804,10 +900,27 @@ export async function doDrag(
       }
     }
   }
+  const probeAfterNative = await readDragProbe(wc)
+  nativeDropped = probeAfterNative?.drop === true
+  // 后台原生拖放在 X11 最小化/不可见窗口下不会建立系统 DnD 会话，
+  // 页面连 dragstart 都收不到。此时用 DOM 级 DataTransfer 序列补一次，
+  // 保证「拖到目标元素」这类操作在后台仍然有实际效果。
+  let usedDomFallback = false
+  if (!nativeDropped && opts.toRef) {
+    usedDomFallback = await syntheticHtml5Drag(wc, ref, opts.toRef)
+  }
   await settle(wc)
 
   const snapshot = opts.wantSnapshot ? await captureSnapshot(wc) : undefined
-  return { dragged: `从 (${x1},${y1}) 拖动至 (${x2},${y2})`, snapshot }
+  // 是否真的产生 drop 只能由页面侧探针证明；命令返回成功不算证据。
+  const probeFinal = await readDragProbe(wc)
+  const dropped = probeFinal?.drop === true
+  const note = dropped
+    ? usedDomFallback
+      ? '（DOM 事件回退：后台原生拖放不可用）'
+      : ''
+    : '（未验证到页面 drop；可能该元素不支持拖放，或页面已重绘）'
+  return { dragged: `从 (${x1},${y1}) 拖动至 (${x2},${y2})${note}`, snapshot, dropped }
 }
 
 export async function inspectTypeTarget(tab: Tab, ref: string): Promise<{ ok: boolean; sensitive?: boolean; label?: string; type?: string; fingerprint?: string }> {

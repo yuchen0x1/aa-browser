@@ -100,8 +100,8 @@ export class BrowserMonitor {
     this.pointer = undefined
     this.pointerTabId = undefined
     this.state.status = 'idle'
-    if (!this.timer) this.timer = setInterval(() => { void this.capture() }, FRAME_INTERVAL_MS)
-    void this.capture()
+    if (!this.timer) this.timer = setInterval(() => { this.queueCapture() }, FRAME_INTERVAL_MS)
+    this.queueCapture()
     this.deps.emitState(this.getState())
     return this.getState()
   }
@@ -125,7 +125,7 @@ export class BrowserMonitor {
     this.state.tabId = tab.id
     this.pointer = undefined
     this.pointerTabId = undefined
-    void this.capture()
+    this.queueCapture()
     this.deps.emitState(this.getState())
     return this.getState()
   }
@@ -142,8 +142,21 @@ export class BrowserMonitor {
     this.state.control = 'ai'
     this.state.status = 'idle'
     this.deps.emitState(this.getState())
-    if (this.state.enabled) void this.capture()
+    if (this.state.enabled) this.queueCapture()
     return this.getState()
+  }
+
+  /**
+   * 定时器/公开方法里的截图都不该逃逸出拒绝：窗口关闭瞬间读取已销毁的
+   * BaseWindow/WebContents 会同步抛错，变成进程级未处理拒绝后进程静默退出。
+   */
+  private queueCapture(): void {
+    void this.capture().catch((error: unknown) => {
+      if (this.state.enabled) {
+        this.state.status = 'error'
+        this.state.currentTask = error instanceof Error ? error.message : String(error)
+      }
+    })
   }
 
   recordTask(task: string | undefined): void {
@@ -190,30 +203,32 @@ export class BrowserMonitor {
     // 人工接管时必须继续推送画面，让用户看得见自己正在操作的页面；只停止 AI 输入，
     // 不能因为接管而让预览黑屏或停在旧帧。
     if (!this.state.enabled || this.captureRunning) return
-    const tab = this.deps.getTab(this.state.tabId)
-    if (!tab || tab.view.webContents.isDestroyed()) {
-      this.state.status = 'error'
-      this.state.currentTask = '监控标签已关闭'
-      this.deps.emitState(this.getState())
-      return
-    }
-    this.captureRunning = true
-    const generation = this.captureGeneration
-    this.state.status = 'capturing'
-    this.deps.emitState(this.getState())
-    const releaseRendering = tab.keepRendering()
+    // 前置步骤（取标签、keepRendering、emitState→pushState）同样可能抛错；
+    // 全部纳入 try，避免任何一步逃逸成未处理拒绝。
+    let releaseRendering: (() => void) | null = null
     let captureSettled = false
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined
-    const capturePromise = captureVisual(tab.view.webContents, {
-      background: !tab.canUseWindowInput(),
-      isWindowMinimized: () => tab.isWindowMinimized?.() ?? false
-    }).finally(() => { captureSettled = true })
-    const finishCapture = (): void => {
-      releaseRendering()
-      this.captureRunning = false
-      this.deps.emitState(this.getState())
-    }
+    let capturePromise: Promise<{ base64: string }> | null = null
+    let generation = -1
+    let tab: Tab | null = null
     try {
+      tab = this.deps.getTab(this.state.tabId)
+      if (!tab || tab.view.webContents.isDestroyed()) {
+        this.state.status = 'error'
+        this.state.currentTask = '监控标签已关闭'
+        this.deps.emitState(this.getState())
+        return
+      }
+      this.captureRunning = true
+      generation = this.captureGeneration
+      this.state.status = 'capturing'
+      this.deps.emitState(this.getState())
+      const target = tab
+      releaseRendering = target.keepRendering()
+      capturePromise = captureVisual(target.view.webContents, {
+        background: !target.canUseWindowInput(),
+        isWindowMinimized: () => target.isWindowMinimized?.() ?? false
+      }).finally(() => { captureSettled = true })
       const capture = await Promise.race([
         capturePromise,
         new Promise<never>((_, reject) => {
@@ -265,7 +280,18 @@ export class BrowserMonitor {
       }
     } finally {
       if (timeoutHandle) clearTimeout(timeoutHandle)
-      if (captureSettled) finishCapture()
+      const finishCapture = (): void => {
+        releaseRendering?.()
+        this.captureRunning = false
+        this.deps.emitState(this.getState())
+      }
+      if (!capturePromise) {
+        // 还没进入截图阶段：仍需归还占位状态。
+        if (this.captureRunning) {
+          this.captureRunning = false
+          if (releaseRendering) finishCapture()
+        }
+      } else if (captureSettled) finishCapture()
       else {
         void capturePromise.then(finishCapture, finishCapture)
       }

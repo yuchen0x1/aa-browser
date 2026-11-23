@@ -364,7 +364,9 @@ async function runElectron() {
     const dragFixture = await call('browser_snapshot', { full: true })
     const dragSource = findRef(dragFixture.text, /Drag source/)
     const dragTarget = findRef(dragFixture.text, /Drag target/)
-    await call('browser_drag', { ref: dragSource, toRef: dragTarget, snapshot: false })
+    const dragResult = await call('browser_drag', { ref: dragSource, toRef: dragTarget, snapshot: false })
+    // 拖放是否真的落到目标元素上，必须由页面状态证明；不能只看调用是否返回成功。
+    assert.doesNotMatch(dragResult.text, /没有在页面侧观测到 drop/, `drag reported no drop: ${dragResult.text}`)
     assert.equal(await page.executeJavaScript('document.querySelector("#drag-effect").textContent'), 'drop:drag-probe')
     // 拖拽后焦点属于可拖动按钮；键盘提交必须先回到目标输入框，才能证明按键进入页面而不是旧焦点。
     const submissionInput = findRef((await call('browser_snapshot', { full: true })).text, /textbox.*Search query/)

@@ -485,7 +485,10 @@ export function buildTools(
         wantSnapshot: want,
         signal
       }))
-      return { content: [text(withSnap(`已拖拽: ${r.dragged}`, r.snapshot, want))] }
+      // 拖放是否真的被页面接收必须如实回报：命令成功但页面没有 drop
+      // 是后台拖拽最典型的静默失败。
+      const verdict = r.dropped ? '' : '\n注意：没有在页面侧观测到 drop 事件，目标元素可能不支持该拖放。'
+      return { content: [text(withSnap(`已拖拽: ${r.dragged}${verdict}`, r.snapshot, want))] }
     }
   })
 

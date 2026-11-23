@@ -191,6 +191,10 @@ function updateBackgroundViewports(): void {
         backgroundMetricsRerun = false
         await syncBackgroundViewports()
       } while (backgroundMetricsRerun)
+    } catch (error) {
+      // 每次布局/最小化/显示都会走到这里；页面或窗口销毁瞬间的异常
+      // 若逃逸成未处理拒绝，进程会静默退出，因此必须就地收敛。
+      console.warn(`[aa-browser] 后台视口同步失败: ${error instanceof Error ? error.message : String(error)}`)
     } finally {
       backgroundMetricsRunning = false
     }
@@ -199,12 +203,13 @@ function updateBackgroundViewports(): void {
 
 function pushState(): void {
   if (!chromeView || chromeView.webContents.isDestroyed()) return
-  // 窗口关闭期间 win 对象仍然存在但已销毁；此时读取 bounds 会抛
-  // "Object has been destroyed"，把整个关窗流程带崩。布局与窗口尺寸都需要活窗口。
-  const liveWindow = win && !win.isDestroyed() ? win : null
-  layout()
-  updateBackgroundViewports()
-  const state: UiState = {
+  try {
+    // 窗口关闭期间 win 对象仍然存在但已销毁；此时读取 bounds 会抛
+    // "Object has been destroyed"，把整个关窗流程带崩。布局与窗口尺寸都需要活窗口。
+    const liveWindow = win && !win.isDestroyed() ? win : null
+    layout()
+    updateBackgroundViewports()
+    const state: UiState = {
     tabs: tabManager?.infosForUi() ?? [],
     activeId: tabManager?.activeId ?? null,
     agentCount,
@@ -221,9 +226,14 @@ function pushState(): void {
     // windowHeight 反映真实窗口（最小化时为 0）；后台布局使用记忆中的最后有效尺寸。
     windowHeight: liveWindow ? liveWindow.getContentBounds().height : 0,
     backgroundMode: currentWindowMode(),
-    monitor: monitor?.getState()
+      monitor: monitor?.getState()
+    }
+    chromeView.webContents.send('aa:state', state)
+  } catch (error) {
+    // pushState 是几乎每条路径都会调用的状态出口（窗口事件、监控、更新器、
+    // 工具回调）。关窗与页面销毁瞬间的同步异常若逃逸，会让进程静默退出。
+    console.warn(`[aa-browser] 状态推送失败: ${error instanceof Error ? error.message : String(error)}`)
   }
-  chromeView.webContents.send('aa:state', state)
 }
 
 function handleBeforeInput(wc: Electron.WebContents): void {
@@ -358,7 +368,7 @@ function installPageContextMenu(wc: Electron.WebContents): void {
     if (menu.items.length) push({ type: 'separator' })
 
     if (hasLink) {
-      push({ label: L.openLink, enabled: linkAllowed, click: () => { if (linkAllowed) void wc.loadURL(params.linkURL) } })
+      push({ label: L.openLink, enabled: linkAllowed, click: () => { if (linkAllowed) void wc.loadURL(params.linkURL).catch(() => {}) } })
       push({ label: L.openLinkNewTab, enabled: linkAllowed, click: () => {
         const source = tabManager?.tabs.find((t) => t.view.webContents === wc)
         if (linkAllowed) tabManager?.createTab(params.linkURL, true, source?.isolated)
@@ -383,7 +393,8 @@ function installPageContextMenu(wc: Electron.WebContents): void {
     push({ label: L.reload, click: () => wc.reload() })
     push({ type: 'separator' })
     push({ label: L.viewSource, enabled: !getSettingsStore().get().allowedSites.length, click: () => {
-      if (!getSettingsStore().get().allowedSites.length) void wc.loadURL(`view-source:${wc.getURL()}`)
+      // view-source: 会被 will-navigate 拦下，loadURL 必然 reject；不能让它逃逸。
+      if (!getSettingsStore().get().allowedSites.length) void wc.loadURL(`view-source:${wc.getURL()}`).catch(() => {})
     } })
     push({ label: L.devtools, click: () => {
       const t = tabManager?.tabs.find((x) => x.view.webContents === wc)
@@ -535,7 +546,7 @@ function createWindow(): void {
   window.on('hide', () => { monitor?.setWindowVisible(false); pushState() })
   window.on('focus', () => {
     window.flashFrame(false)
-    void updater?.checkIfDue()
+    void updater?.checkIfDue().catch(() => {})
   })
   win.on('closed', () => {
     // 两种退出路径都会关闭窗口；在清理 WebContentsView 之前保留最终标签快照。
@@ -1070,7 +1081,8 @@ app.whenReady().then(async () => {
     directory: path.join(app.getPath('userData'), 'previous-versions')
   } : undefined)
   updater.init(pushState)
-  powerMonitor.on('resume', () => { void updater?.checkIfDue() })
+  // 唤醒事件可能在窗口关闭阶段触发：不能让更新检查的拒绝逃逸成进程级异常。
+  powerMonitor.on('resume', () => { void updater?.checkIfDue().catch(() => {}) })
 
   registerIpc()
 
@@ -1112,7 +1124,12 @@ app.whenReady().then(async () => {
     applyPermissionPolicy(ses, { requestApproval: (meta) => approvals.request(meta) })
     getDownloadTracker().attach(ses)
   }
-  tabManager.onIsolatedClosed = (partition) => void clearIsolatedPartition(partition)
+  // 清理隔离分区发生在关标签的同步路径上：任何失败都不能变成进程级未处理拒绝。
+  tabManager.onIsolatedClosed = (partition) => {
+    void clearIsolatedPartition(partition).catch((error: unknown) => {
+      console.warn(`[aa-browser] 隔离分区清理失败: ${error instanceof Error ? error.message : String(error)}`)
+    })
+  }
   tabManager.onViewDetach = (view) => detachTabView(view)
   monitor = new BrowserMonitor({
     getTab: (tabId) => tabId ? tabManager?.get(tabId) ?? null : tabManager?.active() ?? null,
@@ -1355,6 +1372,21 @@ app.whenReady().then(async () => {
       try { monitor.start(tabManager?.active()?.id) } catch { /* 没有可恢复标签时等待用户选择 */ }
     }
   }
+}).catch((error) => {
+  // 启动链里任何未捕获错误都会让应用在没有窗口、没有提示的情况下退出；
+  // 至少留下日志并以非零码退出，便于用户与 CI 定位。
+  const text = error instanceof Error ? (error.stack ?? error.message) : String(error)
+  try {
+    fs.appendFileSync(path.join(app.getPath('userData'), 'error.log'), `${new Date().toISOString()} startup failed ${text}\n`)
+  } catch {
+    /* 忽略 */
+  }
+  try {
+    fs.writeSync(2, `[aa-browser] startup failed: ${text}\n`)
+  } catch {
+    /* 忽略 */
+  }
+  app.exit(1)
 })
 
 app.on('before-quit', () => {
