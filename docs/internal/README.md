@@ -1,6 +1,6 @@
 # 内部工作档案
 
-本目录保存**面向维护者**的过程档案，不是产品文档：根目录 `README.md`、`docs/` 下的指南和站点都不会链接到这里。
+本目录保存**面向维护者**的过程档案，不是产品文档：根目录只保留用户文档和构建入口，历史过程记录统一归档到这里；`README.md`、`docs/` 下的指南和站点都不会链接到这里。
 
 | 文件 | 内容 |
 |---|---|
@@ -9,6 +9,12 @@
 | [UPGRADE_ROADMAP.md](./UPGRADE_ROADMAP.md) | 40 项可验收升级路线图与取舍依据 |
 | [COMPETITOR_ANALYSIS.md](./COMPETITOR_ANALYSIS.md) | 19 个同类项目的深度对标结论 |
 | [2026-11-19-round2.md](./2026-11-19-round2.md) | 2026-11-19 第二轮（v0.2.0）升级交付报告 |
+| [AUTONOMOUS_TASKS.md](./AUTONOMOUS_TASKS.md) | 自主开发待办与历史轮次归档 |
+| [AUTONOMOUS_CHANGELOG.md](./AUTONOMOUS_CHANGELOG.md) | 自主开发过程记录与发行证据 |
+| [AUTONOMOUS_ISSUES.md](./AUTONOMOUS_ISSUES.md) | 未解决问题与验证边界 |
+| [PROJECT_STATUS.md](./PROJECT_STATUS.md) | 2026-11-21 项目状态快照（历史档案） |
+| [SECURITY_AUDIT.md](./SECURITY_AUDIT.md) | 2026-11-21 定向安全审查记录 |
+| [RELEASE_HISTORY.md](./RELEASE_HISTORY.md) | v0.6.10–v0.6.12 正式发行核验记录 |
 
 约定：
 

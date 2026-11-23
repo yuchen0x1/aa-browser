@@ -36,7 +36,7 @@
 
 本版新增等价于 Chrome「加载已解压的扩展程序」的目录选择器和 `browser_extensions` 工具，支持 MV2/MV3 扩展在共享会话中加载、移除与跨重启恢复；地址栏输入 `chrome://extensions` 可直接打开扩展管理区。既有 MCP 客户端配置和用户数据无需迁移。
 
-**上一版：[v0.11.0](./release-notes-v0.11.0.md)** · 2026-11-22
+**上一版：[v0.11.0](./docs/releases/bodies/v0.11.0.md)** · 2026-11-22
 
 [全部发行记录](https://github.com/yuchen0x1/aa-browser/releases)
 
@@ -562,6 +562,7 @@ aa-browser/
 ├── installer/         # 通用安装 / 接入提示词源文件（生成 PROMPT.md 与新标签页）
 ├── packages/dsh/      # DeepSeek Harness 插件（插件市场接入）
 ├── docs/              # 接入、平台、自动更新、发行与维护文档
+│   ├── internal/      # 维护者过程档案、审计与调研记录
 │   └── media/         # README 演示录屏与动图预览
 ├── scripts/           # 冒烟 / 回归 / 安装器与接入校验 / 图标与 SBOM 生成
 ├── build/             # 图标等打包资源
