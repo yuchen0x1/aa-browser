@@ -32,11 +32,11 @@
 
 <!-- github-release:start -->
 
-**[v0.12.0](./release-notes-v0.12.0.md)** · 2026-11-23 · 最新正式版
+**[v0.12.1](./release-notes-v0.12.1.md)** · 2026-11-23 · 最新正式版
 
-本版新增等价于 Chrome「加载已解压的扩展程序」的目录选择器和 `browser_extensions` 工具，支持 MV2/MV3 扩展在共享会话中加载、移除与跨重启恢复；地址栏输入 `chrome://extensions` 可直接打开扩展管理区。既有 MCP 客户端配置和用户数据无需迁移。
+本版在保留扩展管理能力的基础上，收紧网络响应体边界：响应体最多 1 MiB，文本/二进制结果有明确摘要，JSON、表单和常见授权凭据默认内容级脱敏；既有 MCP 客户端配置和用户数据无需迁移。
 
-**上一版：[v0.11.0](./docs/releases/bodies/v0.11.0.md)** · 2026-11-22
+**上一版：[v0.12.0](./release-notes-v0.12.0.md)** · 2026-11-23
 
 [全部发行记录](https://github.com/yuchen0x1/aa-browser/releases)
 
@@ -356,7 +356,7 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 - 除 `browser_resize`（调整整个窗口视口）和 `browser_downloads`（全局下载列表）外，工具都接受 `tabId`，默认作用于活动标签。
 - 浏览器未运行时，桥返回 `isError` 工具结果而不是挂起；桥每 5 秒重试连接，启动浏览器后无需重启客户端。
 - 单次调用超时 180 秒；等待人工审批最长 120 秒，超时按拒绝处理。
-- 网络详情与 HAR 默认脱敏；开启「高危操作人工确认」后，`includeSensitive: true` 需要用户在浏览器里批准。
+- 网络详情与 HAR 默认脱敏；响应体额外对 JSON、表单和常见授权文本做内容级脱敏，并在 MCP 边界限制为最多 1 MiB。开启「高危操作人工确认」后，`includeSensitive: true` 需要用户在浏览器里批准。
 
 **导航与快照**
 
@@ -411,7 +411,7 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 | 工具 | 说明 |
 | --- | --- |
 | `browser_network_requests` | **抓包**：列出捕获的 HTTP 请求（方法 / 状态 / 类型 / 大小 / 耗时 / URL，支持过滤） |
-| `browser_network_detail` | **抓包**：单个请求的完整请求 / 响应头 + 响应体（`body: true`） |
+| `browser_network_detail` | **抓包**：单个请求的请求 / 响应头 + 响应体（`body: true`）；响应体默认内容级脱敏并限制为最多 1 MiB |
 | `browser_har` | **抓包**：导出 HAR 1.2 文件（可导入 DevTools / Fiddler 人工分析） |
 | `browser_mock_requests` | **拦截 Mock**：按 URL 子串 + 方法拦截请求，返回假状态 / 头 / 体（`action: continue` 只观察放行） |
 | `browser_list_mocks` | **拦截 Mock**：列出当前 mock 规则（匹配器 / 状态 / 命中次数） |

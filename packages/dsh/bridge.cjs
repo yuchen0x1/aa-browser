@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-globalThis.__AA_BRIDGE_VERSION__ = "0.12.0";
+globalThis.__AA_BRIDGE_VERSION__ = "0.12.1";
 // \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;
@@ -4424,7 +4424,7 @@ const TOOL_DEFS = [
 	{
 		name: "browser_network_detail",
 		title: "网络请求详情",
-		description: "Inspect one captured network request: headers, status, size, duration, and (with body:true) the response body text. Authentication headers and credential-like URL parameters are redacted by default; pass includeSensitive:true only when needed.",
+		description: "Inspect one captured network request: headers, status, size, duration, and (with body:true) the response body text. Authentication headers, credential-like URL parameters, and recognized sensitive fields in JSON/text bodies are redacted by default; response bodies are capped before crossing the MCP boundary. Pass includeSensitive:true only when needed.",
 		inputSchema: {
 			type: "object",
 			properties: {
