@@ -1,4 +1,4 @@
-import { WebContentsView, WebContents, session } from 'electron'
+import { WebContentsView, WebContents, app, session } from 'electron'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { Session } from 'electron'
 import type { TabInfo, TabRecoveryInfo } from '@shared/types'
@@ -219,7 +219,15 @@ export class TabManager {
   constructor(
     private newtabUrl: string,
     private searchUrl: string
-  ) {}
+  ) {
+    // Use Electron's app-level event as the single Renderer-exit source. Some
+    // platform/Electron combinations omit the WebContents event, and listening
+    // to both channels risks counting one exit twice or suppressing a real one.
+    app.on('render-process-gone', (_event, wc, details) => {
+      const tab = this.tabs.find((entry) => entry.view.webContents === wc)
+      if (tab) this.handleRendererGone(tab, details)
+    })
+  }
 
   isUrlAllowed(url: string): boolean {
     return isUrlAllowed(url, this.getAllowedSites(), this.newtabUrl)
@@ -634,6 +642,18 @@ export class TabManager {
     }
   }
 
+  private handleRendererGone(tab: Tab, details?: Electron.RenderProcessGoneDetails): void {
+    // 新渲染进程没有旧的 window.__aaRefs；先递增 epoch，任何旧 ref 都会在操作前被拒绝。
+    noteRendererRestart(tab.view.webContents)
+    tab.title = '页面已崩溃'
+    // 崩溃的渲染进程不再持有任何租约；立即清空计数，避免 keepRendering 永久阻止
+    // 后续标签恢复 backgroundThrottling，并让监控/视觉工具下次重新持有。
+    this.renderUsers.delete(tab.view.webContents)
+    this.syncRendering(tab.view.webContents)
+    this.recoverTab(tab, 'crash')
+    this.onChange()
+  }
+
   private attachEvents(tab: Tab): void {
     const wc = tab.view.webContents
 
@@ -688,17 +708,6 @@ export class TabManager {
       if (url) tab.url = url
       this.onChange()
       if (!tab.isolated) this.onNavigate?.(url, tab.title)
-    })
-    wc.on('render-process-gone', () => {
-      // 新渲染进程没有旧的 window.__aaRefs；先递增 epoch，任何旧 ref 都会在操作前被拒绝。
-      noteRendererRestart(wc)
-      tab.title = '页面已崩溃'
-      // 崩溃的渲染进程不再持有任何租约；立即清空计数，避免 keepRendering 永久阻止
-      // 后续标签恢复 backgroundThrottling，并让监控/视觉工具下次重新持有。
-      this.renderUsers.delete(wc)
-      this.syncRendering(wc)
-      this.recoverTab(tab, 'crash')
-      this.onChange()
     })
     wc.on('unresponsive', () => {
       this.recoverTab(tab, 'unresponsive')

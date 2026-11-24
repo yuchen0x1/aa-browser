@@ -73,12 +73,14 @@ export const locateScript = (ref: string): string => {
   const x = Math.round(ox + r.x + r.width / 2)
   const y = Math.round(oy + r.y + r.height / 2)
   let hitOk = false
+  const root = el.getRootNode()
+  const shadowHost = root && root !== el.ownerDocument && 'host' in root ? root.host : null
   try {
     const hit = document.elementFromPoint(x, y)
-    hitOk = !!hit && (hit === el || hit.contains(el) || el.contains(hit) ||
+    hitOk = !!hit && (hit === el || hit.contains(el) || el.contains(hit) || hit === shadowHost ||
       (hit.tagName === 'IFRAME' && hit.contentDocument && hit.contentDocument.contains(el)))
   } catch (e) {}
-  return { ok: true, x, y, hitOk, tag, type, editable, checked }
+  return { ok: true, x, y, hitOk, shadow: !!shadowHost, tag, type, editable, checked }
 })()`
 }
 

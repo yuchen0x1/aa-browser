@@ -94,9 +94,25 @@ export interface AgentTaskRecord extends AgentCallInfo {
   taskId?: string
   tabId?: string
   source?: string
+  /** 创建该任务的浏览器进程实例；进程重启后 numeric client id 不能单独作为所有权证明。 */
+  browserInstanceId?: string
+  /** MCP 桥会话标识；应用重启后同一桥仍可用它查询原任务。 */
+  clientSession?: string
   updatedAt?: number
   retryCount?: number
   steps?: Array<{ at: number; label: string; status?: string; detail?: string }>
+  recovery?: {
+    automaticReplay: false
+    resumable: boolean
+    requiresConfirmation: boolean
+    reason: string
+    lastAttemptAt?: number
+  }
+  sideEffect?: {
+    risk: 'none' | 'possible' | 'committed' | 'uncertain'
+    destructive: boolean
+    updatedAt?: number
+  }
 }
 
 export interface UiState {
@@ -269,6 +285,8 @@ export interface PageSnapshot {
   depthLimitReached?: boolean
   textClipped?: boolean
   optionsClipped?: boolean
+  /** 本快照分配到的最大 ref 序号；主进程用它推进跨文档单调底线。 */
+  refSeq?: number
   /** 分页模式：总行数 / 当前游标 / 下一页游标 / 是否还有后续页 */
   totalLines?: number
   cursor?: number
@@ -286,6 +304,8 @@ export interface WsRequest {
   tool: string
   args?: Record<string, unknown>
   cancel?: boolean
+  /** 桥在同一 MCP 请求重连后保持不变；用于阻止高危操作被重复执行。 */
+  idempotencyKey?: string
   /** MCP tools/call 的 _meta.progressToken，由桥透传，用于回传 notifications/progress */
   progressToken?: string | number
 }

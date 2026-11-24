@@ -36,7 +36,7 @@ if (!process.versions.electron) {
   fs.mkdirSync(env.AA_BROWSER_HISTORY_DIR, { recursive: true })
   fs.writeFileSync(env.AA_BROWSER_SETTINGS_FILE, JSON.stringify({ autoUpdate: false, restoreSession: false, backgroundMode: 'hidden' }))
   const child = spawn(require('electron'), [fileURLToPath(import.meta.url)], { cwd: ROOT, env, stdio: 'inherit' })
-  const timer = setTimeout(() => { console.error('Renderer crash suite timed out'); child.kill() }, 240_000)
+  const timer = setTimeout(() => { console.error('Renderer crash suite timed out'); child.kill() }, 300_000)
   child.on('exit', (code) => { clearTimeout(timer); process.exitCode = code ?? 1 })
 } else {
   void run().catch((error) => { console.error(error); process.exit(1) })
@@ -62,7 +62,9 @@ async function run() {
   const { app, BaseWindow, webContents } = await import('electron')
   const runDir = process.env.AA_BROWSER_TEST_DIR
   const checks = []
+  const skips = []
   const pass = (message) => { checks.push(message); console.log(`PASS: ${message}`) }
+  const skip = (message) => { skips.push(message); console.warn(`SKIP: ${message}`) }
   let server
   let secondServer
   let child
@@ -150,9 +152,34 @@ async function run() {
     assert.ok(oldPid > 0, 'renderer process id is available')
 
     const crash = async (wc) => {
-      const gone = new Promise((resolve) => wc.once('render-process-gone', (_event, details) => resolve(details)))
-      wc.forcefullyCrashRenderer()
-      const details = await Promise.race([gone, delay(8_000).then(() => null)])
+      // Linux 上 Electron 可能只通过 app 级通道送达 render-process-gone；
+      // 两路都观察，但只接受同一个 webContents，避免把其它 Renderer 当成目标。
+      let cleanup = () => {}
+      const gone = new Promise((resolve) => {
+        const onGone = (details) => {
+          cleanup()
+          resolve(details)
+        }
+        const onWebContents = (_event, details) => onGone(details)
+        const onApp = (_event, crashed, details) => {
+          if (crashed === wc) onGone(details)
+        }
+        cleanup = () => {
+          wc.removeListener('render-process-gone', onWebContents)
+          app.removeListener('render-process-gone', onApp)
+        }
+        wc.once('render-process-gone', onWebContents)
+        app.on('render-process-gone', onApp)
+      })
+      if (process.platform === 'linux') {
+        const pid = wc.getOSProcessId()
+        assert.ok(pid > 0, 'renderer OS process id before Linux crash injection')
+        process.kill(pid, 'SIGKILL')
+      } else {
+        wc.forcefullyCrashRenderer()
+      }
+      const details = await Promise.race([gone, delay(12_000).then(() => null)])
+      if (!details) cleanup()
       assert.ok(details, 'render-process-gone event')
       assert.ok(['crashed', 'killed', 'abnormal-exit'].includes(details.reason), `unexpected crash reason: ${JSON.stringify(details)}`)
     }
@@ -170,9 +197,9 @@ async function run() {
     assert.ok(recovered.recovery.recoveredAt > during.recovery.lastAttemptAt)
     const recoveredPid = target.getProcessId()
     assert.ok(recoveredPid > 0, 'recovered renderer has a process id')
-    pass('forcefullyCrashRenderer triggers real render-process-gone and bounded reload recovery')
+    pass('a real renderer crash injection triggers render-process-gone and bounded reload recovery')
 
-    await call('browser_click', { ref, snapshot: false }, /RENDERER_CRASH|渲染进程已重启|请先重新调用 browser_snapshot/)
+    await call('browser_click', { ref, snapshot: false }, /reason=renderer_restarted/)
     const fresh = await call('browser_snapshot', { full: true })
     assert.match(fresh.text, /Renderer crash fixture/)
     pass('old ref is rejected and a fresh snapshot restores control after restart')
@@ -212,6 +239,12 @@ async function run() {
     assert.match(tasks.text, /来源 mcp:renderer-crash-test/)
     assert.match(tasks.text, /标签 t/)
     assert.match(tasks.text, /当前步骤/)
+    const taskId = tasks.text.match(/任务 (\S+)/)?.[1]
+    assert.ok(taskId, 'task list exposes a durable task id')
+    const taskDetail = await call('browser_tasks', { action: 'get', taskId })
+    assert.match(taskDetail.text, /恢复策略:/)
+    assert.match(taskDetail.text, /副作用:/)
+    assert.match(taskDetail.text, /步骤/)
     await until(async () => (await state()).tabs.find((tab) => tab.id === tabA.id)?.recovery?.attempts === 2, 'second recovery attempt')
     await until(async () => (await state()).tabs.find((tab) => tab.id === tabA.id)?.recovery?.status === 'recovered', 'second recovery completes')
     pass('a tool call in flight during a real renderer crash fails with a task record instead of hanging')
@@ -222,7 +255,7 @@ async function run() {
     assert.equal(exhausted.recovery.attempts, 2)
     assert.equal(exhausted.recovery.reason, 'crash')
     assert.equal(exhausted.recovery.error, '已达到最大自动恢复次数')
-    await call('browser_click', { ref, snapshot: false }, /RENDERER_CRASH|页面正在恢复|最大自动恢复次数/)
+    await call('browser_click', { ref, snapshot: false }, /RENDERER_CRASH.*reason=recovery_failed|页面恢复失败|最大自动恢复次数/)
     pass('recovery stops at the configured limit and exposes an actionable terminal error')
 
     await call('browser_tabs', { action: 'new', url: `${base}slow-crash` })
@@ -304,6 +337,58 @@ async function run() {
     pass('a renderer crash during page navigation fails the in-flight tool, preserves a supported URL and restores snapshots')
     await call('browser_tabs', { action: 'close', tabId: navTab.id })
 
+    await call('browser_tabs', { action: 'new', url: `${base}unresponsive` })
+    const unresponsiveTab = await until(async () => {
+      const tab = (await state()).tabs.find((entry) => entry.url === `${base}unresponsive`)
+      return tab && !tab.loading ? tab : null
+    }, 'unresponsive tab')
+    const unresponsiveTarget = await until(() => pageWc(`${base}unresponsive`), 'unresponsive webContents')
+    // hidden 模式下 Agent 标签保持后台可用性，但对应 WebContentsView 不参与
+    // 桌面合成，Chromium 不会启动输入 ACK hang monitor。通过产品自身的窗口
+    // 模式 API 切到 visible，再选择标签，确保测的是可见页面的真实生命周期。
+    await chrome.executeJavaScript('window.aa.windowMode("visible")')
+    const selected = await call('browser_tabs', { action: 'select', tabId: unresponsiveTab.id, bringToFront: true })
+    unresponsiveTarget.focus()
+    assert.ok(window.isVisible(), 'window visible for unresponsive injection')
+    assert.ok(
+      window.contentView.children.some((child) => child.webContents === unresponsiveTarget),
+      'unresponsive tab view is attached to the composited window'
+    )
+    assert.match(selected.text, /windowFocused: true/, 'window focused before unresponsive injection')
+    const selectedTab = (await state()).tabs.find((tab) => tab.id === unresponsiveTab.id)
+    assert.equal(selectedTab.active, true, 'unresponsive tab is the active composited tab')
+    await until(
+      () => unresponsiveTarget.executeJavaScript('document.visibilityState === "visible"', false),
+      'composited page visibility'
+    )
+    await delay(750)
+    let unresponsiveFired = false
+    unresponsiveTarget.once('unresponsive', () => { unresponsiveFired = true })
+    const hangExecution = unresponsiveTarget.executeJavaScript(
+      '(() => { const deadline = Date.now() + 40_000; while (Date.now() < deadline) {} return true })()',
+      false
+    )
+    await delay(250)
+    unresponsiveTarget.sendInputEvent({ type: 'mouseDown', x: 40, y: 80, button: 'left', clickCount: 1 })
+    unresponsiveTarget.sendInputEvent({ type: 'mouseUp', x: 40, y: 80, button: 'left', clickCount: 1 })
+    await hangExecution.catch(() => {})
+    if (!unresponsiveFired) {
+      skip('Electron emitted no real unresponsive event after a 40s Renderer main-thread hang on this runtime; no recovery pass is claimed')
+    } else {
+      await until(async () => {
+        const tab = (await state()).tabs.find((entry) => entry.id === unresponsiveTab.id)
+        return tab?.recovery?.reason === 'unresponsive' &&
+          ['recovering', 'recovered'].includes(tab.recovery.status)
+      }, 'unresponsive recovery state', 20_000)
+      await until(async () => (await state()).tabs.find((tab) => tab.id === unresponsiveTab.id)?.recovery?.status === 'recovered', 'unresponsive recovery', 20_000)
+      const recoveredUnresponsive = (await state()).tabs.find((tab) => tab.id === unresponsiveTab.id)
+      assert.equal(recoveredUnresponsive.recovery.attempts, 1)
+      const afterUnresponsive = await call('browser_snapshot', { tabId: unresponsiveTab.id, full: true })
+      assert.match(afterUnresponsive.text, /Renderer crash fixture/)
+      pass('a hung Renderer emits Electron unresponsive, recovers within its retry bound and restores snapshots')
+    }
+    await call('browser_tabs', { action: 'close', tabId: unresponsiveTab.id })
+
     await call('browser_tabs', { action: 'new', url: `${base}forms` })
     await until(async () => {
       const tab = (await state()).tabs.find((entry) => entry.url === `${base}forms`)
@@ -319,12 +404,12 @@ async function run() {
     const hideRef = findRef(forms.text, /Hide me/)
     const detachRef = findRef(forms.text, /Detach me/)
 
-    await call('browser_click', { ref: disabledRef, snapshot: false }, /OPERATION_REJECTED|已禁用/)
+    await call('browser_click', { ref: disabledRef, snapshot: false }, /reason=element_disabled|已禁用/)
     await call('browser_type', { ref: readonlyRef, text: 'x', snapshot: false }, /OPERATION_REJECTED|只读/)
     await call('browser_evaluate', { expression: "document.querySelector('#hide').style.display='none'" })
-    await call('browser_click', { ref: hideRef, snapshot: false }, /OPERATION_REJECTED|不可见/)
+    await call('browser_click', { ref: hideRef, snapshot: false }, /reason=element_not_visible|不可见/)
     await call('browser_evaluate', { expression: "document.querySelector('#detach').remove()" })
-    await call('browser_click', { ref: detachRef, snapshot: false }, /ELEMENT_NOT_FOUND|DOM 移除/)
+    await call('browser_click', { ref: detachRef, snapshot: false }, /reason=element_detached|DOM 移除/)
     await call('browser_evaluate', {
       expression: "(() => { document.querySelector('#first').focus(); document.querySelector('#trapped-wrap').inert=true; return true })()"
     })
@@ -340,7 +425,8 @@ async function run() {
       expression:
         "(() => { const el=document.querySelector('#moving'); window.__movingClicks=0; el.addEventListener('click',()=>window.__movingClicks++); const original=el.getBoundingClientRect.bind(el); let shift=0; el.getBoundingClientRect=()=>{ const r=original(); shift=(shift+7)%56; return new DOMRect(r.x+shift,r.y,r.width,r.height) }; return true })()"
     })
-    await call('browser_click', { ref: movingRef, snapshot: false }, /OPERATION_REJECTED|持续移动/)
+    const movingFailure = await call('browser_click', { ref: movingRef, snapshot: false }, /reason=element_not_stable|持续移动/)
+    assert.match(movingFailure.text, /^\[OPERATION_REJECTED\]/, 'unstable target has an operation-rejected category')
     const movingClicks = await call('browser_evaluate', { expression: 'window.__movingClicks' })
     assert.match(movingClicks.text, /\b0\b/)
     pass('disabled, readonly, hidden and detached targets fail with typed actionable errors')
@@ -348,7 +434,7 @@ async function run() {
     pass('a target with continuously changing coordinates is rejected before any click is dispatched')
 
     await call('browser_navigate', { url: `${base}second`, snapshot: false })
-    await call('browser_click', { ref: probeRef, snapshot: false }, /NAVIGATION_ERROR|页面在快照后已导航/)
+    await call('browser_click', { ref: probeRef, snapshot: false }, /reason=navigation_changed|页面在快照后已导航/)
     const afterNavigation = await call('browser_snapshot', { full: true })
     assert.match(afterNavigation.text, /sibling tab/)
     pass('a ref from before navigation is rejected instead of being mapped to another element')
@@ -360,7 +446,7 @@ async function run() {
     child?.kill()
     server?.close()
     secondServer?.close()
-    fs.writeFileSync(path.join(runDir, 'result.json'), JSON.stringify({ exitCode, checks }, null, 2))
+    fs.writeFileSync(path.join(runDir, 'result.json'), JSON.stringify({ exitCode, checks, skips }, null, 2))
     console.log(`Renderer crash verification: ${path.join(runDir, 'result.json')}`)
     if (exitCode === 0) app.quit()
   }

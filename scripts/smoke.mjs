@@ -398,7 +398,7 @@ async function main() {
     check('主文档连接中断返回导航失败', disconnected.isError && disconnectedText.includes('ERR_EMPTY_RESPONSE') && !disconnectedText.includes('已导航'), disconnectedText.slice(0, 200))
 
     console.log('\n[2b] WS 双客户端：同标签串行、不同标签并行（并发协调回归）')
-    const connectPeer = async () => {
+    const connectPeer = async (peerName) => {
       let socket
       try {
         socket = new WebSocket(`ws://127.0.0.1:${info.port}/?token=${info.token}`, { handshakeTimeout: 10000 })
@@ -448,7 +448,7 @@ async function main() {
             entry.finish(new Error('WS 测试客户端已关闭'))
           } else {
             try {
-              socket.send(JSON.stringify({ id, tool, args }), (error) => {
+              socket.send(JSON.stringify({ id, tool, args, idempotencyKey: `smoke:${peerName}:${id}` }), (error) => {
                 if (error) fail(new Error('WS 测试客户端发送失败'))
               })
             } catch {
@@ -494,9 +494,9 @@ async function main() {
       (row) => row.includes(`[${id}]`) && row.trimEnd().endsWith(`\n   ${url}`)
     )
     try {
-      const clientA = await connectPeer()
+      const clientA = await connectPeer('client-a')
       peers.push(clientA)
-      const clientB = await connectPeer()
+      const clientB = await connectPeer('client-b')
       peers.push(clientB)
       // 每个 MCP 客户端现在拥有独立的标签视图；不要从主 bridge 的活动标签
       // 推断 clientA 可见的 tabId。由 clientA 自己创建测试标签，既符合隔离契约，
@@ -1152,7 +1152,7 @@ async function main() {
         if (closedRef) {
           const clicked = await mcp.call('browser_click', { ref: closedRef, snapshot: false })
           const clickedTitle = mcp.text(await mcp.call('browser_evaluate', { expression: 'document.title' }))
-          check('按 ref 可点击 closed shadow 内部按钮', !clicked.isError && clickedTitle.includes('shadow-clicked'), clickedTitle.slice(0, 120))
+          check('按 ref 可点击 closed shadow 内部按钮', !clicked.isError && clickedTitle.includes('shadow-clicked'), `${clickedTitle}; ${mcp.text(clicked)}`.slice(0, 240))
         }
       } finally {
         closedServer.close()

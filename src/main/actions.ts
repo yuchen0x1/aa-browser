@@ -5,7 +5,6 @@ import { __aaSnapshot } from '@snapshot/engine'
 import {
   locateScript,
   inspectInputScript,
-  syntheticClickScript,
   focusScript,
   focusStateScript,
   clearScript,
@@ -28,7 +27,7 @@ import {
 import type { Tab, TabManager } from './tabs'
 import { reportProgress } from './progress'
 import { getEvidenceManager } from './evidence'
-import { checkRefContext, noteSnapshot, type RefContextError } from './ref-context'
+import { checkRefContext, getRefFloor, noteSnapshot, type RefContextError } from './ref-context'
 
 export type ActionErrorCode =
   | 'NAVIGATION_ERROR'
@@ -65,12 +64,35 @@ const REF_REASON_CODES: Record<string, ActionErrorCode> = {
   'not-editable': 'OPERATION_REJECTED',
   'not-focusable': 'OPERATION_REJECTED',
   'option-disabled': 'OPERATION_REJECTED',
+  'not-stable': 'OPERATION_REJECTED',
+  obscured: 'OPERATION_REJECTED',
   'dispatch-failed': 'OPERATION_REJECTED',
+  'clear-failed': 'OPERATION_REJECTED',
+  'set-failed': 'OPERATION_REJECTED',
   'cross-origin': 'FRAME_ERROR'
+}
+
+const REF_INVALIDATION_REASONS: Record<string, string> = {
+  'no-ref': 'stale_ref',
+  detached: 'element_detached',
+  hidden: 'element_not_visible',
+  'not-visible': 'element_not_visible',
+  disabled: 'element_disabled',
+  readonly: 'element_readonly',
+  'not-editable': 'element_not_editable',
+  'not-focusable': 'element_not_focusable',
+  'option-disabled': 'option_disabled',
+  'not-stable': 'element_not_stable',
+  obscured: 'element_obscured',
+  'dispatch-failed': 'element_dispatch_failed',
+  'clear-failed': 'element_write_failed',
+  'set-failed': 'element_write_failed',
+  'cross-origin': 'frame_unavailable'
 }
 
 function refFailure(ref: string, reason: string): ActionError {
   const code = REF_REASON_CODES[reason] ?? 'ELEMENT_NOT_FOUND'
+  const invalidation = REF_INVALIDATION_REASONS[reason] ?? 'element_unavailable'
   const nextStep = '请先重新调用 browser_snapshot，再使用新 ref 操作'
   let message: string
   switch (reason) {
@@ -100,13 +122,19 @@ function refFailure(ref: string, reason: string): ActionError {
     case 'not-stable':
       message = `元素 ${ref} 在点击前持续移动：请等待动画或布局稳定后重新获取快照`
       break
+    case 'obscured':
+      message = `元素 ${ref} 的点击位置被其他内容遮挡：请关闭遮挡层或选中正确的页面区域，再重新获取快照`
+      break
+    case 'dispatch-failed':
+      message = `未能确认元素 ${ref} 已收到点击；为避免重复副作用不会自动重放。请先检查页面状态，再决定是否发起新操作`
+      break
     case 'cross-origin':
       message = `元素 ${ref} 位于跨域 iframe，无法直接操作：请导航到该 frame 的页面后再试`
       break
     default:
       message = `无法定位元素 ${ref}（${reason}）：${nextStep}`
   }
-  return new ActionError(`[${code}] ${message}`, code)
+  return new ActionError(`[${code}] reason=${invalidation} ${message}`, code)
 }
 
 function navigationFailure(prefix: string, error: unknown): ActionError {
@@ -134,9 +162,12 @@ export function assertRefContext(wc: WebContents): void {
 
 export function assertTabUsable(tab: Tab): void {
   const wc = tab.view.webContents
-  if (wc.isDestroyed()) throw new ActionError('[TARGET_CLOSED] 页面已关闭', 'TARGET_CLOSED')
-  if (tab.recovery?.status === 'recovering' || tab.recovery?.status === 'failed') {
-    throw new ActionError(`[RENDERER_CRASH] 页面正在恢复：${tab.recovery?.error ?? '请稍后重新获取快照'}`, 'RENDERER_CRASH')
+  if (wc.isDestroyed()) throw new ActionError('[TARGET_CLOSED] reason=target_closed 页面已关闭', 'TARGET_CLOSED')
+  if (tab.recovery?.status === 'recovering') {
+    throw new ActionError(`[RENDERER_CRASH] reason=renderer_recovering 页面正在恢复：${tab.recovery?.error ?? '请稍后重新获取快照'}`, 'RENDERER_CRASH')
+  }
+  if (tab.recovery?.status === 'failed') {
+    throw new ActionError(`[RENDERER_CRASH] reason=recovery_failed 页面恢复失败：${tab.recovery?.error ?? '已达到最大自动恢复次数，请关闭标签后重新打开页面'}`, 'RENDERER_CRASH')
   }
 }
 
@@ -313,7 +344,7 @@ export async function withTabLock<T>(
   run: () => Promise<T>
 ): Promise<T> {
   throwIfAborted(signal)
-  if (tab.view.webContents.isDestroyed()) throw new ActionError('页面已关闭', 'TARGET_CLOSED')
+  if (tab.view.webContents.isDestroyed()) throw new ActionError('reason=target_closed 页面已关闭', 'TARGET_CLOSED')
   const prev = tabQueues.get(tab) ?? Promise.resolve()
   let release!: () => void
   const slot = new Promise<void>((resolve) => { release = resolve })
@@ -349,7 +380,7 @@ export async function withTabLock<T>(
     })
     throwIfAborted(signal)
     // 排队期间页面可能已被关闭，不能只在入队时检查。
-    if (tab.view.webContents.isDestroyed()) throw new ActionError('页面已关闭', 'TARGET_CLOSED')
+    if (tab.view.webContents.isDestroyed()) throw new ActionError('reason=target_closed 页面已关闭', 'TARGET_CLOSED')
 
     const context = { inFlight: new Set<Promise<unknown>>() }
     const runPromise = tabQueueContext.run(context, () => Promise.resolve().then(async () => {
@@ -419,7 +450,8 @@ export async function captureSnapshot(
   wc: WebContents,
   opts?: { mode?: 'full' | 'auto'; maxNodes?: number; cursor?: number }
 ): Promise<SnapshotSummary> {
-  const source = `(${snapshotEngineSource})(${jsLiteral({ ...opts, includeElements: false })})`
+  const refFloor = typeof getRefFloor === 'function' ? getRefFloor(wc) : 0
+  const source = `(${snapshotEngineSource})(${jsLiteral({ ...opts, includeElements: false, refFloor })})`
   const snap = (await wc.executeJavaScript(source, false)) as (SnapshotSummary & { error?: string }) | null
   if (!snap || typeof snap !== 'object') {
     throw new ActionError('快照执行失败：页面未返回有效数据')
@@ -427,7 +459,7 @@ export async function captureSnapshot(
   if (snap.error) {
     throw new ActionError(`快照执行失败：${snap.error}`)
   }
-  noteSnapshot(wc, snap.url || wc.getURL() || '')
+  noteSnapshot(wc, snap.url || wc.getURL() || '', (snap as SnapshotSummary & { refSeq?: number }).refSeq)
   return snap
 }
 
@@ -731,8 +763,8 @@ async function waitClickProbe(wc: WebContents, urlBefore: string, signal?: Abort
 
 /** 找到 tab 对应的 webContents（可指定 tabId，默认活动标签） */export function resolveWebContents(tabs: { active: () => Tab | null; get: (id: string) => Tab | null }, tabId?: string): Tab {
   const tab = tabId ? tabs.get(tabId) : tabs.active()
-  if (!tab) throw new ActionError(tabId ? `标签不存在: ${tabId}` : '浏览器没有打开的标签页', 'TARGET_CLOSED')
-  if (tab.view.webContents.isDestroyed()) throw new ActionError('页面已关闭', 'TARGET_CLOSED')
+  if (!tab) throw new ActionError(tabId ? `reason=target_closed 标签不存在: ${tabId}` : 'reason=target_closed 浏览器没有打开的标签页', 'TARGET_CLOSED')
+  if (tab.view.webContents.isDestroyed()) throw new ActionError('reason=target_closed 页面已关闭', 'TARGET_CLOSED')
   return tab
 }
 
@@ -780,7 +812,7 @@ async function navigateInTab(
   } catch (error) {
     throw navigationFailure('导航失败', error)
   }
-  if (wc.isDestroyed()) throw new ActionError('页面已关闭', 'TARGET_CLOSED')
+  if (wc.isDestroyed()) throw new ActionError('reason=target_closed 页面已关闭', 'TARGET_CLOSED')
   reportProgress(1, 1, '导航完成')
   return { tabId: tab.id, url: wc.getURL(), title: wc.getTitle() }
 }
@@ -806,6 +838,7 @@ export async function doClick(
     type?: string
     editable?: boolean
     checked?: boolean
+    shadow?: boolean
   }
   // 动画或异步布局可能在定位与鼠标派发之间移动目标；连续两次坐标一致才点击。
   let loc = await locate()
@@ -830,7 +863,6 @@ export async function doClick(
   if (!loc || !loc.ok) {
     throw refFailure(ref, loc?.reason ?? 'unknown')
   }
-
   const x = Math.max(0, loc.x ?? 0)
   const y = Math.max(0, loc.y ?? 0)
   tab.recordPointer?.({ kind: 'click', x, y })
@@ -838,6 +870,16 @@ export async function doClick(
   const clickCount = Math.max(1, Math.min(3, opts?.clickCount ?? 1))
   const actName = clickCount === 2 ? '双击' : button === 'right' ? '右键' : '点击'
   let clicked = `${loc.tag}${loc.type ? `[type=${loc.type}]` : ''} (${actName})`
+  if (loc.shadow && button === 'left') {
+    const result = await wc.executeJavaScript(clickScript(ref), false)
+    if (result !== true) throw refFailure(ref, 'detached')
+    throwIfAborted(signal)
+    await settle(wc)
+    throwIfAborted(signal)
+    const snapshot = wantSnapshot ? await captureSnapshot(wc) : undefined
+    return { clicked, snapshot }
+  }
+  if (!loc.hitOk) throw refFailure(ref, 'obscured')
 
   // 视觉激光波纹投影（让用户直观看到 AI 点击位置）
   void wc.executeJavaScript(laserCursorScript(x, y, 'click'), false).catch(() => {})
@@ -845,20 +887,6 @@ export async function doClick(
   const urlBefore = wc.getURL()
   const probeArmed = button === 'left' && (await armClickProbe(wc, ref))
   throwIfAborted(signal)
-  const runFallback = async (): Promise<void> => {
-    let result: unknown
-    if (button === 'left' && (loc.type === 'checkbox' || loc.type === 'radio')) {
-      result = await wc.executeJavaScript(clickScript(ref), false)
-    } else {
-      result = await wc.executeJavaScript(syntheticClickScript(ref, button), false)
-    }
-    const failure = result === false
-      ? { reason: 'detached' }
-      : result && typeof result === 'object' && (result as { ok?: unknown }).ok !== true
-        ? { reason: String((result as { reason?: unknown }).reason ?? 'dispatch-failed') }
-        : null
-    if (failure) throw refFailure(ref, failure.reason)
-  }
   if (loc.hitOk) {
     // 优先走真实输入事件（isTrusted=true，兼容防爬站点）。
     // 后台 CDP 路径整个手势共用一条连接；取消发生在按下与抬起之间时，
@@ -872,10 +900,6 @@ export async function doClick(
     } finally {
       gestureSenders.delete(wc)
     }
-  } else {
-    // 元素被遮挡 → 页面内合成事件兜底
-    // 合成 MouseEvent 不会执行 checkbox/radio 的默认切换行为，这两类走原生 click()。
-    await runFallback()
   }
 
   throwIfAborted(signal)
@@ -883,8 +907,7 @@ export async function doClick(
     const delivered = await waitClickProbe(wc, urlBefore, signal)
     throwIfAborted(signal)
     if (delivered !== true) {
-      // sendInputEvent 偶发静默丢失；补发页面点击，避免“调用成功但页面没动”。
-      await runFallback()
+      throw refFailure(ref, 'dispatch-failed')
     }
   }
 
@@ -1089,6 +1112,7 @@ export async function doType(
   const tag = focus.tag ?? 'unknown'
   const assertFocused = async (): Promise<void> => {
     const state = (await wc.executeJavaScript(focusStateScript(ref), false)) as { ok?: boolean; reason?: string } | null
+    throwIfAborted(signal)
     if (!state?.ok) throw refFailure(ref, state?.reason ?? 'not-focusable')
   }
   await assertFocused()
@@ -1517,7 +1541,7 @@ export async function doReload(tab: Tab, hard = false, signal?: AbortSignal): Pr
     const stopped = (): void => {
       if (aborted) finish()
     }
-    const destroyed = (): void => failWith(new ActionError('页面已关闭', 'TARGET_CLOSED'))
+    const destroyed = (): void => failWith(new ActionError('reason=target_closed 页面已关闭', 'TARGET_CLOSED'))
     wc.once('did-finish-load', finish)
     wc.on('did-fail-load', fail)
     wc.on('did-stop-loading', stopped)

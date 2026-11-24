@@ -5,6 +5,7 @@ Aa Browser v0.16.0 将发布治理推进到核心运行时：任务中心现在�
 ## ✅ 主要变更
 
 - **持久任务中心**：`TaskCenter` 接入 `AgentServer`，把任务状态、步骤、执行历史、客户端来源、活动标签、Renderer PID、错误和恢复次数写入版本化 `task-center.json`。原子写入、损坏文件备份、有界裁剪；任务 ID 含客户端、调用序号和启动时间，桥或应用重启后复用请求 ID 也不会与旧终态记录撞键。若任务历史文件丢失，可从有效 TaskCenter 重建记录；进程重启后非终态任务统一标记为 `interrupted`，不会把历史任务当成正在运行，也不会自动重放。
+- **副作用防重账本**：独立 `task-idempotency.json` 在危险处理器运行前先记录调用 key；缺 key、重复 key、账本损坏或写入失败时 fail closed。任务记录损坏不会消除防重保护，任务历史查询按 MCP session 隔离。
 - **真实 Renderer 崩溃恢复**：使用 `webContents.forcefullyCrashRenderer()` 与系统级强杀注入真实进程退出，验证正常关闭、标签身份与 URL 保留、多标签隔离、执行中崩溃、导航中崩溃、恢复中再次崩溃、旧 Ref 失效和恢复次数上限。恢复失败返回明确错误，不再静默卡住。
 - **Ref 生命周期**：快照、导航和渲染进程分别记录代际。导航后、Renderer 重启后或快照过期时，旧 Ref 返回 `NAVIGATION_ERROR`、`RENDERER_CRASH` 或 `STALE_REF`；元素脱离返回 `ELEMENT_NOT_FOUND`，跨域 Frame 返回 `FRAME_ERROR`，标签关闭返回 `TARGET_CLOSED`。不会把旧 Ref 自动映射到相似元素。
 - **操作预检**：点击、输入、清空和下拉选择前检查元素存在、DOM 连接、可见性、尺寸、原生/ARIA 禁用、只读和可编辑状态；禁用 `<option>` 单独拒绝。点击前要求定位稳定，输入前二次核验焦点，避免 inert/焦点陷阱把文本写入错误字段；DOM 兜底失败不再返回假成功。后台 DOM/CDP 操作与屏幕坐标点击保持区分。

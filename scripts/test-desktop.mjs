@@ -118,7 +118,7 @@ if (!process.versions.electron) {
   const server = http.createServer((req, res) => {
     res.setHeader('Content-Type', 'text/html; charset=utf-8')
     if (req.url === '/new-tab') newTabRequests++
-    if (req.url === '/frame') { res.end('<p>Child frame</p>'); return }
+    if (req.url === '/frame') { res.end('<p>Child frame</p><button>Frame target</button>'); return }
     if (req.url === '/hud-pointer') {
       res.end(`<title>HUD pointer</title><button id="hud-target" style="margin:40px;padding:20px">HUD target</button>
         <div style="height:3000px"></div>
@@ -127,7 +127,8 @@ if (!process.versions.electron) {
     }
     if (req.url === '/ref-fixture') {
       res.end(`<title>Ref fixture</title><ul id="ref-list"><li><button>One</button></li><li><button>Two</button></li><li><button>Three</button></li></ul>
-        <button id="hidden-target" onclick="window.__hiddenClicks = (window.__hiddenClicks || 0) + 1">Hidden target</button>`)
+        <button id="hidden-target" onclick="window.__hiddenClicks = (window.__hiddenClicks || 0) + 1">Hidden target</button>
+        <iframe id="ref-frame" srcdoc="<button>Frame target</button>"></iframe>`)
       return
     }
     res.end(`<title>Desktop fixture</title><h1>Aa desktop regression</h1><p>needle needle needle</p><input aria-label="Fixture input"><a href="/popup-private" target="_blank">Open child</a><iframe src="about:blank"></iframe>`)
@@ -165,13 +166,14 @@ if (!process.versions.electron) {
     await pause(100)
   }
   let callId = 0
+  const clientSession = `desktop-${Date.now()}-${process.pid}`
   const pending = new Map()
   function tool(toolName, args) {
     const id = ++callId
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => { pending.delete(id); reject(new Error(`Tool timeout: ${toolName}`)) }, 15_000)
       pending.set(id, { resolve, reject, timer })
-      ws.send(JSON.stringify({ id, tool: toolName, args }))
+      ws.send(JSON.stringify({ id, tool: toolName, args, idempotencyKey: `${clientSession}:${id}` }))
     })
   }
   const toolText = (result) => (result?.content ?? []).filter((item) => item?.type === 'text').map((item) => item.text).join('\n')
@@ -334,7 +336,7 @@ if (!process.versions.electron) {
       return new Promise((resolve, reject) => {
         const timer = setTimeout(() => { pending2.delete(id); reject(new Error(`Tool2 timeout: ${name}`)) }, 15_000)
         pending2.set(id, { resolve, reject, timer })
-        ws2.send(JSON.stringify({ id, tool: name, args, ...(progressToken !== undefined ? { progressToken } : {}) }))
+        ws2.send(JSON.stringify({ id, tool: name, args, idempotencyKey: `${clientSession}:ws2:${id}`, ...(progressToken !== undefined ? { progressToken } : {}) }))
       })
     }
     const settle = (promise) => promise.then((value) => ({ ok: true, value }), (error) => ({ ok: false, error }))
@@ -676,7 +678,7 @@ if (!process.versions.electron) {
     assert.deepEqual(page.navigationHistory.getAllEntries().map(({ url }) => url), [base + '/normal'])
     pass('first page in a new desktop tab has no synthetic blank history entry')
 
-    // ── P1-4：ref 单调递增、失连元素按 DOM 顺序复用、隐藏目标拒绝点击 ──
+    // ── P1-4：精确 Node 复用、替换节点换新 ref、隐藏目标拒绝点击 ──
     await tool('browser_navigate', { url: base + '/ref-fixture', tabId: normalId, snapshot: false })
     const refPage = await until(
       () => webContents.getAllWebContents().find((wc) => wc !== chrome && wc.getURL() === base + '/ref-fixture'),
@@ -696,10 +698,7 @@ if (!process.versions.electron) {
     )
     await tool('browser_snapshot', { tabId: normalId, full: true })
     const refsB = await refsNow()
-    assert.ok(
-      Object.values(refsB).every((ref) => Number(ref.slice(1)) > 4),
-      `a forced full snapshot must keep the ref counter monotonic: ${JSON.stringify(refsB)}`
-    )
+    assert.deepEqual(refsB, refsA, `a forced full snapshot must preserve refs for exact DOM nodes: ${JSON.stringify(refsB)}`)
     await refPage.executeJavaScript('document.querySelector("#hidden-target").style.display = "none"', false)
     await assert.rejects(
       tool('browser_click', { tabId: normalId, ref: refsB['Hidden target'], snapshot: false }),
@@ -714,7 +713,7 @@ if (!process.versions.electron) {
     await tool('browser_snapshot', { tabId: normalId })
     const refsC = await refsNow()
     for (const name of ['One', 'Two', 'Three']) {
-      assert.equal(refsC[name], refsB[name], `disconnected refs must be reused FIFO for ${name}: ${JSON.stringify({ refsB, refsC })}`)
+      assert.notEqual(refsC[name], refsB[name], `a replacement node must receive a new ref for ${name}: ${JSON.stringify({ refsB, refsC })}`)
     }
     const pointed = await refPage.executeJavaScript(`(() => {
       const out = {}
@@ -722,7 +721,76 @@ if (!process.versions.electron) {
       return out
     })()`, false)
     for (const name of ['One', 'Two', 'Three']) assert.equal(pointed[refsC[name]], name, `${refsC[name]} must point at ${name}`)
-    pass('snapshot refs stay monotonic, reuse disconnected refs in DOM order, and reject hidden targets')
+    await assert.rejects(
+      tool('browser_click', { tabId: normalId, ref: refsB.One, snapshot: false }),
+      /STALE_REF|找不到元素/,
+      'a ref for a replaced node must not alias the new node'
+    )
+    const frameReplacement = await refPage.executeJavaScript(`(() => {
+      const iframe = document.querySelector('#ref-frame')
+      const oldTarget = iframe.contentDocument && iframe.contentDocument.querySelector('button')
+      window.__oldFrameDoc = iframe.contentDocument
+      window.__oldFrameTarget = oldTarget
+      window.__oldFrameRef = Object.entries(window.__aaRefs || {}).find(([, el]) => el === oldTarget)?.[0] || ''
+      iframe.removeAttribute('srcdoc')
+      iframe.src = '/frame'
+      return { oldRef: window.__oldFrameRef }
+    })()`, false)
+    assert.ok(frameReplacement.oldRef, 'the iframe target must have a ref')
+    await until(
+      () => refPage.executeJavaScript(
+        'document.querySelector("#ref-frame").contentDocument !== window.__oldFrameDoc',
+        false
+      ),
+      'same-origin iframe document replacement'
+    )
+    assert.equal(
+      await refPage.executeJavaScript('!!window.__oldFrameTarget?.isConnected', false),
+      true,
+      'the old iframe node should still report connected after its document was replaced'
+    )
+    await assert.rejects(
+      tool('browser_click', { tabId: normalId, ref: frameReplacement.oldRef, snapshot: false }),
+      /STALE_REF|找不到元素|FRAME_ERROR/,
+      'the old iframe ref must fail even before the next snapshot'
+    )
+    await tool('browser_snapshot', { tabId: normalId, full: true })
+    const refsD = await refsNow()
+    assert.ok(refsD['Frame target'], 'a new snapshot must expose the replacement iframe target')
+    assert.notEqual(refsD['Frame target'], frameReplacement.oldRef, 'a replacement iframe target must receive a new ref')
+    await assert.rejects(
+      tool('browser_click', { tabId: normalId, ref: frameReplacement.oldRef, snapshot: false }),
+      /STALE_REF|找不到元素|FRAME_ERROR/,
+      'an old iframe ref must fail instead of targeting the replacement document'
+    )
+    const beforeNavigationRefs = refsD
+    await tool('browser_navigate', { url: base + '/normal', tabId: normalId, snapshot: false })
+    await until(() => refPage.getURL() === base + '/normal', 'ref fixture navigation')
+    await assert.rejects(
+      tool('browser_click', { tabId: normalId, ref: beforeNavigationRefs['One'], snapshot: false }),
+      /NAVIGATION_ERROR|页面在快照后已导航/,
+      'a ref from the previous document must fail after navigation'
+    )
+    await tool('browser_snapshot', { tabId: normalId, full: true })
+    const afterNavigationRefs = await refsNow()
+    assert.equal(
+      Object.values(afterNavigationRefs).some((ref) => Object.values(beforeNavigationRefs).includes(ref)),
+      false,
+      `a new document must not reuse old ref names: ${JSON.stringify({ beforeNavigationRefs, afterNavigationRefs })}`
+    )
+    await tool('browser_reload', { tabId: normalId, snapshot: false })
+    await until(async () => {
+      const tab = (await state()).tabs.find((entry) => entry.id === normalId)
+      return tab && !tab.loading && tab.url === base + '/normal'
+    }, 'ref fixture reload')
+    await tool('browser_snapshot', { tabId: normalId, full: true })
+    const afterReloadRefs = await refsNow()
+    assert.equal(
+      Object.values(afterReloadRefs).some((ref) => Object.values(afterNavigationRefs).includes(ref)),
+      false,
+      `a reloaded document must not reuse old ref names: ${JSON.stringify({ afterNavigationRefs, afterReloadRefs })}`
+    )
+    pass('snapshot refs reuse only exact DOM nodes, reject replaced nodes, iframe documents, navigation and reload, and reject hidden targets')
 
     const roundTripUrl = base + '/address-roundtrip?encoded=%2F%23&query=one%20two#route/part?mode=edit'
     await ui(`window.aa.submit(${jsLiteral(roundTripUrl)})`)

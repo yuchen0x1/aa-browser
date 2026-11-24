@@ -690,11 +690,12 @@ export const TOOL_DEFS = [
     name: 'browser_tasks',
     title: '后台任务中心',
     description:
-      'Inspect tasks and recent execution logs scoped to the calling MCP client. action=list returns that client’s active calls and bounded history; action=cancel stops one owned call; action=pause/resume only affects the calling client. The browser UI can pause all clients, and browser_window takeover locks the shared browser for human control with a live preview.',
+      'Inspect tasks and recent execution logs scoped to the calling MCP client/session. action=list returns active calls and bounded history; action=get returns one durable task with its recorded steps and recovery policy; action=cancel stops one owned call; action=pause/resume only affects the calling client. Restarted processes never auto-replay interrupted work. The browser UI can pause all clients, and browser_window takeover locks the shared browser for human control with a live preview.',
     inputSchema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['list', 'cancel', 'pause', 'resume'], description: 'Task operation' },
+        action: { type: 'string', enum: ['list', 'get', 'cancel', 'pause', 'resume'], description: 'Task operation' },
+        taskId: { type: 'string', description: '(action=get) durable task id returned by list or a tool result' },
         id: { type: 'number', description: '(action=cancel) MCP call id' },
         client: { type: 'number', description: '(action=cancel) optional client number; must match the calling MCP client' }
       },

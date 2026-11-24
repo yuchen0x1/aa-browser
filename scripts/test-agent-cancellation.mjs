@@ -22,7 +22,7 @@ try {
   const compiled = spawnSync(process.execPath, [
     tsc, '--ignoreConfig', '--noCheck', '--noResolve', '--outDir', out,
     '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--esModuleInterop',
-    ...['agent-server', 'progress', 'atomic-json', 'task-center'].map((name) => path.join(root, `src/main/${name}.ts`))
+    ...['agent-server', 'progress', 'atomic-json', 'task-center', 'idempotency-ledger'].map((name) => path.join(root, `src/main/${name}.ts`))
   ], { cwd: root, encoding: 'utf8' })
   assert.equal(compiled.status, 0, `Compilation failed: ${compiled.error ?? ''}\n${compiled.stdout}\n${compiled.stderr}`)
 } catch (error) {
@@ -56,15 +56,25 @@ const taskCenterAtomic = loadMain('atomic-json', { 'node:fs': {
   }
 } })
 const taskCenterModule = loadMain('task-center', { './atomic-json': taskCenterAtomic, './atomic-json.js': taskCenterAtomic })
-const { AgentServer } = loadMain('agent-server', { './progress': progress, './atomic-json': atomic, './task-center': taskCenterModule })
+const idempotencyModule = loadMain('idempotency-ledger', { './atomic-json': taskCenterAtomic, './atomic-json.js': taskCenterAtomic })
+const { AgentServer } = loadMain('agent-server', {
+  './progress': progress,
+  './atomic-json': atomic,
+  './task-center': taskCenterModule,
+  './idempotency-ledger': idempotencyModule
+})
 const previousConnectionFile = process.env.AA_BROWSER_CONNECTION_FILE
 const previousTaskCenterFile = process.env.AA_BROWSER_TASK_CENTER_FILE
+const previousIdempotencyFile = process.env.AA_BROWSER_IDEMPOTENCY_FILE
 process.env.AA_BROWSER_CONNECTION_FILE = path.join(tmp, 'connection.json')
 process.env.AA_BROWSER_TASK_CENTER_FILE = path.join(tmp, 'task-center.json')
+process.env.AA_BROWSER_IDEMPOTENCY_FILE = path.join(tmp, 'task-idempotency.json')
 const scopedPrivateWrites = () => privateWrites.filter((entry) => entry.file === undefined)
 const running = new Map()
 const peers = []
 const activityEvents = []
+let guardedWrites = 0
+let guardedReads = 0
 function deferred() {
   let resolve
   const promise = new Promise((yes) => { resolve = yes })
@@ -85,6 +95,14 @@ const server = new AgentServer([{
 }, {
   name: 'list_tasks',
   handler: ({ __aaClientId }) => ({ clientId: __aaClientId, tasks: server.activity().tasks })
+}, {
+  name: 'guarded_write',
+  annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  handler: () => ({ writes: ++guardedWrites })
+}, {
+  name: 'guarded_read',
+  annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  handler: () => ({ reads: ++guardedReads })
 }], () => {}, 'test', undefined, (state) => activityEvents.push(state), undefined, undefined, (tabId) => ({
   id: tabId ?? 'tab-active-fixture',
   rendererPid: 4242
@@ -162,7 +180,7 @@ try {
   if (process.platform !== 'win32') {
     const managedHome = path.join(tmp, 'managed-home')
     const { AgentServer: ManagedAgentServer } = loadMain('agent-server', {
-      './progress': progress, './atomic-json': atomic, './task-center': taskCenterModule,
+      './progress': progress, './atomic-json': atomic, './task-center': taskCenterModule, './idempotency-ledger': idempotencyModule,
       'node:os': { ...os, homedir: () => managedHome }
     })
     const legacyDir = path.join(managedHome, '.aabrowser')
@@ -203,7 +221,7 @@ try {
     fs.mkdirSync(linkedHome)
     fs.symlinkSync(customDir, path.join(linkedHome, '.aabrowser'), 'dir')
     const { AgentServer: LinkedAgentServer } = loadMain('agent-server', {
-      './progress': progress, './atomic-json': atomic, './task-center': taskCenterModule,
+      './progress': progress, './atomic-json': atomic, './task-center': taskCenterModule, './idempotency-ledger': idempotencyModule,
       'node:os': { ...os, homedir: () => linkedHome }
     })
     for (const suffix of ['/connection.json', '/./connection.json', '//connection.json']) {
@@ -405,6 +423,10 @@ try {
   assert.equal(cancelledRecord?.context?.client, firstClient)
   assert.equal(cancelledRecord?.context?.tool, 'test_wait')
   assert.equal(cancelledRecord?.context?.tabId, 'tab-password=task-secret-value')
+  assert.equal(cancelledRecord?.source?.clientId, firstClient)
+  assert.equal(cancelledRecord?.tab?.id, 'tab-password=task-secret-value')
+  assert.equal(cancelledRecord?.sideEffect?.risk, 'uncertain')
+  assert.equal(cancelledRecord?.recovery?.automaticReplay, false)
   assert.ok(cancelledRecord?.updatedAt >= cancelledRecord?.createdAt, 'persisted tasks carry update timestamps')
   assert.ok(Array.isArray(cancelledRecord?.history) && cancelledRecord.history.some((event) => event.state === 'cancelled'))
 
@@ -424,9 +446,313 @@ try {
   const activeTabCenter = JSON.parse(fs.readFileSync(taskCenterFile, 'utf8')).tasks.find((task) => task.id === activeTabTask.taskId)
   assert.equal(activeTabCenter?.context?.tabId, 'tab-active-fixture')
   assert.equal(activeTabCenter?.context?.rendererPid, 4242, 'the TaskCenter records the active renderer process')
+  assert.equal(activeTabCenter?.tab?.id, 'tab-active-fixture')
+  assert.equal(activeTabCenter?.tab?.rendererPid, 4242)
+  assert.equal(activeTabCenter?.browser?.pid, process.pid)
   running.get('active-tab-context').finish()
   await waitFor(() => response(first, 35), 'implicit active-tab call finishes')
   console.log('PASS: tasks without an explicit tabId record the active tab and renderer PID')
+
+  first.socket.send(JSON.stringify({ id: 36, tool: 'guarded_write', args: {}, idempotencyKey: 'operation-1' }))
+  await waitFor(() => response(first, 36), 'idempotent write completes once')
+  assert.equal(response(first, 36).ok, true)
+  assert.equal(guardedWrites, 1)
+  first.socket.send(JSON.stringify({ id: 37, tool: 'guarded_write', args: {}, idempotencyKey: 'operation-1' }))
+  await waitFor(() => response(first, 37), 'duplicate write is rejected')
+  assert.equal(response(first, 37).ok, false)
+  assert.match(response(first, 37).error, /TASK_STATE_CONFLICT/)
+  assert.doesNotMatch(response(first, 37).error, /任务 \S+ 受理|工具 guarded_write/)
+  assert.equal(guardedWrites, 1, 'a repeated high-risk request must not execute twice')
+  second.socket.send(JSON.stringify({ id: 41, tool: 'guarded_write', args: {}, idempotencyKey: 'operation-1' }))
+  await waitFor(() => response(second, 41), 'separate MCP session can independently use the same client-supplied key')
+  assert.equal(response(second, 41).ok, true)
+  assert.equal(guardedWrites, 2, 'idempotency keys are scoped to the originating MCP session')
+  first.socket.send(JSON.stringify({ id: 38, tool: 'guarded_read', args: {}, idempotencyKey: 'operation-2' }))
+  first.socket.send(JSON.stringify({ id: 39, tool: 'guarded_read', args: {}, idempotencyKey: 'operation-2' }))
+  await waitFor(() => response(first, 38) && response(first, 39), 'read-only calls may safely repeat')
+  assert.equal(response(first, 38).ok, true)
+  assert.equal(response(first, 39).ok, true)
+  assert.equal(guardedReads, 2, 'idempotency guard must not block read-only retries')
+  const guardedRecord = JSON.parse(fs.readFileSync(taskCenterFile, 'utf8')).tasks.find((task) => task.context?.callId === 36)
+  assert.equal(guardedRecord?.sideEffect?.risk, 'committed')
+  assert.equal(guardedRecord?.highRisk, true)
+  const ledgerFile = process.env.AA_BROWSER_IDEMPOTENCY_FILE
+  const ledger = JSON.parse(fs.readFileSync(ledgerFile, 'utf8'))
+  const ledgerEntry = ledger.entries.find((entry) => entry.taskId === guardedRecord?.id)
+  assert.equal(ledgerEntry?.state, 'completed')
+  assert.equal(ledgerEntry?.taskId, guardedRecord?.id)
+  first.socket.send(JSON.stringify({ id: 40, tool: 'guarded_write', args: {} }))
+  await waitFor(() => response(first, 40), 'destructive request without an idempotency key is rejected')
+  assert.equal(response(first, 40).ok, false)
+  assert.match(response(first, 40).error, /缺少 idempotencyKey/)
+  assert.equal(guardedWrites, 2, 'a destructive request without a stable key must not execute')
+  console.log('PASS: durable idempotency keys block repeated destructive calls while allowing read-only retries')
+
+  {
+    const dir = path.join(tmp, 'idempotency-corrupt-center')
+    fs.mkdirSync(dir, { recursive: true })
+    const previous = {
+      connection: process.env.AA_BROWSER_CONNECTION_FILE,
+      center: process.env.AA_BROWSER_TASK_CENTER_FILE,
+      ledger: process.env.AA_BROWSER_IDEMPOTENCY_FILE
+    }
+    process.env.AA_BROWSER_CONNECTION_FILE = path.join(dir, 'connection.json')
+    process.env.AA_BROWSER_TASK_CENTER_FILE = path.join(dir, 'task-center.json')
+    process.env.AA_BROWSER_IDEMPOTENCY_FILE = path.join(dir, 'task-idempotency.json')
+    const durableSession = randomUUID()
+    let writesA = 0
+    let writesB = 0
+    const toolsFor = (counter) => [{
+      name: 'guarded_write',
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      handler: () => ({ writes: counter() })
+    }]
+    const firstInstance = new AgentServer(toolsFor(() => ++writesA), () => {}, 'test')
+    try {
+      await firstInstance.start()
+      const peer = await connectTo(firstInstance, durableSession, 'ledger-first')
+      peer.socket.send(JSON.stringify({ id: 1, tool: 'guarded_write', args: {}, idempotencyKey: 'durable-key' }))
+      await waitFor(() => peer.messages.some((message) => message.id === 1 && typeof message.ok === 'boolean'), 'first durable write completes')
+      assert.equal(peer.messages.find((message) => message.id === 1)?.ok, true)
+      assert.equal(writesA, 1)
+      peer.socket.close()
+      firstInstance.stop()
+      fs.writeFileSync(process.env.AA_BROWSER_TASK_CENTER_FILE, '{broken')
+      const secondInstance = new AgentServer(toolsFor(() => ++writesB), () => {}, 'test')
+      try {
+        await secondInstance.start()
+        const peer2 = await connectTo(secondInstance, durableSession, 'ledger-second')
+        peer2.socket.send(JSON.stringify({ id: 1, tool: 'guarded_write', args: {}, idempotencyKey: 'durable-key' }))
+        await waitFor(() => peer2.messages.some((message) => message.id === 1 && typeof message.ok === 'boolean'), 'corrupt TaskCenter still rejects the durable key')
+        assert.equal(peer2.messages.find((message) => message.id === 1)?.ok, false)
+        assert.match(peer2.messages.find((message) => message.id === 1)?.error ?? '', /TASK_STATE_CONFLICT/)
+        assert.equal(writesB, 0, 'a corrupt TaskCenter must not erase idempotency protection')
+        peer2.socket.close()
+      } finally {
+        secondInstance.stop()
+      }
+    } finally {
+      firstInstance.stop()
+      process.env.AA_BROWSER_CONNECTION_FILE = previous.connection
+      process.env.AA_BROWSER_TASK_CENTER_FILE = previous.center
+      process.env.AA_BROWSER_IDEMPOTENCY_FILE = previous.ledger
+    }
+    console.log('PASS: the independent idempotency ledger blocks replay even when TaskCenter is corrupted')
+  }
+
+  {
+    const dir = path.join(tmp, 'idempotency-corrupt-ledger')
+    fs.mkdirSync(dir, { recursive: true })
+    const previous = {
+      connection: process.env.AA_BROWSER_CONNECTION_FILE,
+      center: process.env.AA_BROWSER_TASK_CENTER_FILE,
+      ledger: process.env.AA_BROWSER_IDEMPOTENCY_FILE
+    }
+    process.env.AA_BROWSER_CONNECTION_FILE = path.join(dir, 'connection.json')
+    process.env.AA_BROWSER_TASK_CENTER_FILE = path.join(dir, 'task-center.json')
+    process.env.AA_BROWSER_IDEMPOTENCY_FILE = path.join(dir, 'task-idempotency.json')
+    fs.writeFileSync(process.env.AA_BROWSER_IDEMPOTENCY_FILE, '{broken')
+    let writes = 0
+    const instance = new AgentServer([{
+      name: 'guarded_write',
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      handler: () => ({ writes: ++writes })
+    }], () => {}, 'test')
+    try {
+      await instance.start()
+      const peer = await connectTo(instance, randomUUID(), 'ledger-corrupt')
+      peer.socket.send(JSON.stringify({ id: 1, tool: 'guarded_write', args: {}, idempotencyKey: 'uncertain-key' }))
+      await waitFor(() => peer.messages.some((message) => message.id === 1 && typeof message.ok === 'boolean'), 'corrupt ledger rejects the write')
+      assert.equal(peer.messages.find((message) => message.id === 1)?.ok, false)
+      assert.match(peer.messages.find((message) => message.id === 1)?.error ?? '', /幂等账本损坏/)
+      assert.equal(writes, 0, 'a corrupt ledger must fail closed rather than rebuild from a potentially truncated task center')
+      assert.ok(fs.readdirSync(dir).some((name) => name.startsWith('task-idempotency.json.corrupt-')))
+      peer.socket.close()
+    } finally {
+      instance.stop()
+      process.env.AA_BROWSER_CONNECTION_FILE = previous.connection
+      process.env.AA_BROWSER_TASK_CENTER_FILE = previous.center
+      process.env.AA_BROWSER_IDEMPOTENCY_FILE = previous.ledger
+    }
+    console.log('PASS: a corrupt idempotency ledger fails closed and preserves its original bytes')
+  }
+
+  {
+    const dir = path.join(tmp, 'idempotency-unwritable')
+    fs.mkdirSync(dir, { recursive: true })
+    const blocker = path.join(dir, 'not-a-directory')
+    fs.writeFileSync(blocker, 'fixture')
+    const previous = {
+      connection: process.env.AA_BROWSER_CONNECTION_FILE,
+      center: process.env.AA_BROWSER_TASK_CENTER_FILE,
+      ledger: process.env.AA_BROWSER_IDEMPOTENCY_FILE
+    }
+    process.env.AA_BROWSER_CONNECTION_FILE = path.join(dir, 'connection.json')
+    process.env.AA_BROWSER_TASK_CENTER_FILE = path.join(dir, 'task-center.json')
+    process.env.AA_BROWSER_IDEMPOTENCY_FILE = path.join(blocker, 'task-idempotency.json')
+    let writes = 0
+    const instance = new AgentServer([{
+      name: 'guarded_write',
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      handler: () => ({ writes: ++writes })
+    }], () => {}, 'test')
+    try {
+      await instance.start()
+      const peer = await connectTo(instance, randomUUID(), 'ledger-unwritable')
+      peer.socket.send(JSON.stringify({ id: 1, tool: 'guarded_write', args: {}, idempotencyKey: 'blocked-key' }))
+      await waitFor(() => peer.messages.some((message) => message.id === 1 && typeof message.ok === 'boolean'), 'unwritable ledger rejects the write')
+      assert.equal(peer.messages.find((message) => message.id === 1)?.ok, false)
+      assert.match(peer.messages.find((message) => message.id === 1)?.error ?? '', /幂等账本|幂等记录/)
+      assert.equal(writes, 0, 'the destructive handler must not run when its idempotency claim cannot be persisted')
+      peer.socket.close()
+    } finally {
+      instance.stop()
+      process.env.AA_BROWSER_CONNECTION_FILE = previous.connection
+      process.env.AA_BROWSER_TASK_CENTER_FILE = previous.center
+      process.env.AA_BROWSER_IDEMPOTENCY_FILE = previous.ledger
+    }
+    console.log('PASS: an unwritable idempotency ledger fails closed before the destructive handler runs')
+  }
+
+  {
+    const dir = path.join(tmp, 'idempotency-capacity')
+    fs.mkdirSync(dir, { recursive: true })
+    const previous = {
+      connection: process.env.AA_BROWSER_CONNECTION_FILE,
+      center: process.env.AA_BROWSER_TASK_CENTER_FILE,
+      ledger: process.env.AA_BROWSER_IDEMPOTENCY_FILE
+    }
+    process.env.AA_BROWSER_CONNECTION_FILE = path.join(dir, 'connection.json')
+    process.env.AA_BROWSER_TASK_CENTER_FILE = path.join(dir, 'task-center.json')
+    process.env.AA_BROWSER_IDEMPOTENCY_FILE = path.join(dir, 'task-idempotency.json')
+    const makeEntry = (index) => ({
+      key: `historical-${index}`, taskId: `task-${index}`, tool: 'guarded_write', state: 'completed',
+      destructive: true, createdAt: index + 1, updatedAt: index + 1
+    })
+    fs.writeFileSync(process.env.AA_BROWSER_IDEMPOTENCY_FILE, JSON.stringify({ version: 1, entries: Array.from({ length: 5000 }, (_, index) => makeEntry(index)) }))
+    let writes = 0
+    const instance = new AgentServer([{
+      name: 'guarded_write',
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      handler: () => ({ writes: ++writes })
+    }], () => {}, 'test')
+    try {
+      await instance.start()
+      const peer = await connectTo(instance, randomUUID(), 'ledger-capacity')
+      peer.socket.send(JSON.stringify({ id: 1, tool: 'guarded_write', args: {}, idempotencyKey: 'capacity-overflow' }))
+      await waitFor(() => peer.messages.some((message) => message.id === 1 && typeof message.ok === 'boolean'), 'full ledger rejects a destructive write')
+      const reply = peer.messages.find((message) => message.id === 1)
+      assert.equal(reply?.ok, false)
+      assert.match(reply?.error ?? '', /5000 条安全上限/)
+      assert.equal(writes, 0, 'the destructive handler must not run when the durable ledger is full')
+      peer.socket.close()
+    } finally {
+      instance.stop()
+      process.env.AA_BROWSER_CONNECTION_FILE = previous.connection
+      process.env.AA_BROWSER_TASK_CENTER_FILE = previous.center
+      process.env.AA_BROWSER_IDEMPOTENCY_FILE = previous.ledger
+    }
+
+    const oversizedDir = path.join(tmp, 'idempotency-oversized')
+    fs.mkdirSync(oversizedDir, { recursive: true })
+    const oversizedFile = path.join(oversizedDir, 'ledger.json')
+    fs.writeFileSync(oversizedFile, JSON.stringify({ version: 1, entries: Array.from({ length: 5001 }, (_, index) => makeEntry(index)) }))
+    const ledger = new idempotencyModule.IdempotencyLedger(oversizedFile)
+    assert.equal(ledger.load(), false, 'an oversized on-disk ledger must not be silently truncated')
+    assert.equal(ledger.ready, false)
+    assert.ok(fs.readdirSync(oversizedDir).some((name) => name.startsWith('ledger.json.partial-')))
+    assert.throws(() => ledger.claim({ key: 'unsafe-new-key', taskId: 'new-task', tool: 'guarded_write', destructive: true }), /幂等账本不可用/)
+    console.log('PASS: idempotency ledger capacity and oversized-file safeguards fail closed')
+  }
+
+  {
+    const dir = path.join(tmp, 'task-center-unwritable')
+    fs.mkdirSync(dir, { recursive: true })
+    const taskCenterPath = path.join(dir, 'task-center.json')
+    fs.mkdirSync(taskCenterPath)
+    const previous = {
+      connection: process.env.AA_BROWSER_CONNECTION_FILE,
+      center: process.env.AA_BROWSER_TASK_CENTER_FILE,
+      ledger: process.env.AA_BROWSER_IDEMPOTENCY_FILE
+    }
+    process.env.AA_BROWSER_CONNECTION_FILE = path.join(dir, 'connection.json')
+    process.env.AA_BROWSER_TASK_CENTER_FILE = taskCenterPath
+    process.env.AA_BROWSER_IDEMPOTENCY_FILE = path.join(dir, 'task-idempotency.json')
+    let writes = 0
+    const instance = new AgentServer([{
+      name: 'guarded_write',
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+      handler: () => ({ writes: ++writes })
+    }], () => {}, 'test')
+    try {
+      await instance.start()
+      const peer = await connectTo(instance, randomUUID(), 'task-center-unwritable')
+      peer.socket.send(JSON.stringify({ id: 1, tool: 'guarded_write', args: {}, idempotencyKey: 'lossy-center-key' }))
+      await waitFor(() => peer.messages.some((message) => message.id === 1 && typeof message.ok === 'boolean'), 'lossy TaskCenter response')
+      const reply = peer.messages.find((message) => message.id === 1)
+      assert.equal(reply?.ok, true)
+      assert.equal(reply?.result?.isError, true, 'a successful side effect with failed audit persistence must be returned as an MCP tool error')
+      assert.match(reply?.result?.content?.at(-1)?.text ?? '', /审计未能持久化/)
+      assert.equal(writes, 1, 'the side effect may have executed; the warning must not trigger an automatic retry')
+      const ledger = JSON.parse(fs.readFileSync(process.env.AA_BROWSER_IDEMPOTENCY_FILE, 'utf8'))
+      assert.equal(ledger.entries.find((entry) => entry.tool === 'guarded_write')?.state, 'completed')
+      peer.socket.close()
+    } finally {
+      instance.stop()
+      process.env.AA_BROWSER_CONNECTION_FILE = previous.connection
+      process.env.AA_BROWSER_TASK_CENTER_FILE = previous.center
+      process.env.AA_BROWSER_IDEMPOTENCY_FILE = previous.ledger
+    }
+    console.log('PASS: TaskCenter persistence failure is surfaced as a tool error while the idempotency ledger still records the side effect')
+  }
+
+  {
+    const dir = path.join(tmp, 'session-ownership')
+    fs.mkdirSync(dir, { recursive: true })
+    const previous = {
+      connection: process.env.AA_BROWSER_CONNECTION_FILE,
+      center: process.env.AA_BROWSER_TASK_CENTER_FILE,
+      ledger: process.env.AA_BROWSER_IDEMPOTENCY_FILE
+    }
+    process.env.AA_BROWSER_CONNECTION_FILE = path.join(dir, 'connection.json')
+    process.env.AA_BROWSER_TASK_CENTER_FILE = path.join(dir, 'task-center.json')
+    process.env.AA_BROWSER_IDEMPOTENCY_FILE = path.join(dir, 'task-idempotency.json')
+    const oldSession = randomUUID()
+    const firstInstance = new AgentServer([{ name: 'echo', handler: ({ label }) => ({ label }) }], () => {}, 'test')
+    let oldTask
+    try {
+      await firstInstance.start()
+      const peer = await connectTo(firstInstance, oldSession, 'owner')
+      peer.socket.send(JSON.stringify({ id: 1, tool: 'echo', args: { label: 'owned' } }))
+      await waitFor(() => peer.messages.some((message) => message.id === 1 && typeof message.ok === 'boolean'), 'owned task completes')
+      oldTask = firstInstance.activity().tasks.find((task) => task.id === 1)
+      assert.equal(oldTask?.client, 1)
+      assert.equal(oldTask?.clientSession, oldSession)
+      assert.ok(oldTask?.taskId, 'owned task carries a durable id')
+      peer.socket.close()
+    } finally {
+      firstInstance.stop()
+    }
+    const secondInstance = new AgentServer([{ name: 'whoami', handler: ({ __aaClientId }) => ({ clientId: __aaClientId }) }], () => {}, 'test')
+    try {
+      await secondInstance.start()
+      const newSession = randomUUID()
+      const peer = await connectTo(secondInstance, newSession, 'different-session')
+      peer.socket.send(JSON.stringify({ id: 2, tool: 'whoami', args: {} }))
+      await waitFor(() => peer.messages.some((message) => message.id === 2 && typeof message.ok === 'boolean'), 'new process assigns a client id')
+      assert.equal(peer.messages.find((message) => message.id === 2)?.result?.clientId, 1, 'client ids restart at 1 in a new process')
+      assert.deepEqual(secondInstance.tasksFor(1, newSession).filter((task) => task.taskId === oldTask?.taskId), [])
+      assert.equal(secondInstance.taskDetail(oldTask.taskId, 1, newSession), null, 'a reused numeric client id must not authorize another session')
+      assert.equal(secondInstance.taskDetail(oldTask.taskId, undefined, oldSession)?.taskId, oldTask.taskId, 'the original session can still query its task after restart')
+      peer.socket.close()
+    } finally {
+      secondInstance.stop()
+      process.env.AA_BROWSER_CONNECTION_FILE = previous.connection
+      process.env.AA_BROWSER_TASK_CENTER_FILE = previous.center
+      process.env.AA_BROWSER_IDEMPOTENCY_FILE = previous.ledger
+    }
+    console.log('PASS: task ownership requires the original MCP session, not a recycled numeric client id')
+  }
 
   const recoveryDir = path.join(tmp, 'recovery')
   fs.mkdirSync(recoveryDir, { recursive: true })
@@ -545,7 +871,10 @@ try {
   assert.match(listed?.error ?? '', /未自动重放/)
   assert.match(listed?.taskId ?? '', new RegExp(`^${sessionClient}:50:`), 'task IDs stay unique across bridge restarts')
   assert.equal(listed?.source, 'mcp:disconnect-test')
+  assert.equal(listed?.clientSession, sessionKey)
   assert.ok(listed?.steps?.length > 0, 'task keeps its recorded steps across the disconnect')
+  assert.equal(server.taskDetail(listed.taskId, undefined, sessionKey)?.status, 'interrupted')
+  assert.equal(server.taskDetail(listed.taskId, undefined, randomUUID()), null, 'another MCP session cannot query the task by id')
   const disconnectedCenter = JSON.parse(fs.readFileSync(taskCenterFile, 'utf8')).tasks.find((task) => task.id === listed.taskId)
   assert.equal(disconnectedCenter?.state, 'interrupted')
   assert.match(disconnectedCenter?.error ?? '', /未自动重放/)
@@ -560,5 +889,7 @@ try {
   else process.env.AA_BROWSER_CONNECTION_FILE = previousConnectionFile
   if (previousTaskCenterFile === undefined) delete process.env.AA_BROWSER_TASK_CENTER_FILE
   else process.env.AA_BROWSER_TASK_CENTER_FILE = previousTaskCenterFile
+  if (previousIdempotencyFile === undefined) delete process.env.AA_BROWSER_IDEMPOTENCY_FILE
+  else process.env.AA_BROWSER_IDEMPOTENCY_FILE = previousIdempotencyFile
   fs.rmSync(tmp, { recursive: true, force: true })
 }

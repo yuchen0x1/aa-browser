@@ -32,11 +32,11 @@
 
 <!-- github-release:start -->
 
-**[v0.16.0](./release-notes-v0.16.0.md)** · 2026-11-24 · 最新正式版（Windows x64 + Linux x86_64）
+**[v0.15.0](./release-notes-v0.15.0.md)** · 2026-11-24 · 最新正式版（Windows x64）
 
-v0.16.0 把任务中心真正落盘，并用真实 Electron 故障注入验证 Renderer 崩溃恢复；Ref 增加快照代际与明确失效原因，点击/输入执行可见性、启用和可编辑预检。Linux 桌面 CI 恢复，AppImage 重新随版本发布；Linux 证据仅覆盖 Ubuntu 24.04 CI/Xvfb，Windows 安装包仍未 Authenticode 签名。
+v0.16.0 核心运行时升级正在 PR #17 验证中，尚未正式发行。候选变更包括任务持久化、真实 Electron Renderer 故障注入、Ref 代际和操作预检；Linux 资产须等待 Ubuntu 24.04 CI/Xvfb 与 AppImage 门禁通过。Windows 安装包仍未 Authenticode 签名。
 
-**上一版：[v0.14.0](./release-notes-v0.14.0.md)** · 2026-11-23
+**候选说明：[v0.16.0](./release-notes-v0.16.0.md)** · 尚未发布
 
 [全部发行记录](https://github.com/yuchen0x1/aa-browser/releases)
 

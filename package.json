@@ -48,6 +48,7 @@
     "test:task-center": "node --experimental-strip-types scripts/test-task-center.mjs",
     "test:ref-lifecycle": "node scripts/test-ref-lifecycle.mjs",
     "test:renderer-crash": "node scripts/test-renderer-crash.mjs",
+    "measure:runtime-costs": "node scripts/measure-runtime-costs.mjs",
     "test:session-permissions": "node scripts/test-session-permissions.mjs",
     "test:approval-parity": "node scripts/test-tools-approval-runtime.mjs",
     "test:bridge-autolaunch": "node scripts/test-bridge-autolaunch.mjs",

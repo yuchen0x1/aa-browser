@@ -318,7 +318,9 @@ function sendPending(p, socket) {
   const request = {
     id,
     tool: p.name,
-    args: { ...p.args, ...(p.retryCount > 1 ? { __aaRetryCount: p.retryCount - 1 } : {}) }
+    args: { ...p.args, ...(p.retryCount > 1 ? { __aaRetryCount: p.retryCount - 1 } : {}) },
+    // 同一个 MCP tools/call 在浏览器重启/只读重放后保持稳定，供主进程拦截高危重复执行。
+    ...(p.mcpId !== undefined ? { idempotencyKey: `${CLIENT_SESSION_ID}:${p.mcpId}` } : {})
   }
   if (p.progressToken !== undefined) request.progressToken = p.progressToken
   const failSend = (error) => {

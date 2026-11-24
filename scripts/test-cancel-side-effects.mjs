@@ -58,14 +58,17 @@ try {
   const scripts = load('snapshot/scripts.js', {})
   const frames = load('main/frames.js', { '@snapshot/scripts': scripts })
 
-  function fixture({ at, rejectStep = false, verify = text, approval = false, hitOk = true } = {}) {
+  function fixture({ at, rejectStep = false, verify = text, approval = false, hitOk = true, afterFocusCalls = 0 } = {}) {
     const calls = []
     const logs = []
     const entered = deferred()
     const release = deferred()
+    let focusCalls = 0
     async function step(name, value) {
       calls.push(name)
-      if (name === at) {
+      const focusBoundary = name === 'focusState:e1' && focusCalls++ >= afterFocusCalls
+      const shouldBlock = name === at && (name !== 'focusState:e1' || focusBoundary)
+      if (shouldBlock) {
         entered.resolve()
         await release.promise
         if (rejectStep) throw new Error('fixture: in-flight operation failed')
@@ -86,6 +89,7 @@ try {
       [scripts.checkedStateScript('e1'), ['checked:e1', { ok: true, checked: false, type: 'checkbox' }]],
       [scripts.checkedStateScript('e2'), ['checked:e2', { ok: true, checked: false, type: 'checkbox' }]],
       [scripts.locateScript('e1'), ['locate:e1', loc]],
+      [scripts.focusStateScript('e1'), ['focusState:e1', { ok: true }]],
       [scripts.clickScript('e1'), ['domClick:e1', null]],
       [scripts.syntheticClickScript('e1', 'left'), ['syntheticClick:e1', null]],
       [scripts.laserCursorScript(10, 10, 'click'), ['laser', null]],
@@ -103,6 +107,7 @@ try {
       isLoading: () => false,
       async executeJavaScript(script) {
         if (pageSteps.has(script)) return step(...pageSteps.get(script))
+        if (script === scripts.focusStateScript('e1')) return step('focusState:e1', { ok: true })
         if (script.includes('window.__aaClickProbe =')) return step('armProbe', true)
         if (script.includes('const p = window.__aaClickProbe')) return step('readProbe', false)
         if (script.includes('window.__fixtureEvaluate')) return step('evaluateDispatch', 1)
@@ -177,21 +182,23 @@ try {
   const checkbox = { fields: [{ ref: 'e1', checked: true }] }
   const formSubmit = { fields: [{ ref: 'e1', value: text, submit: true }, { ref: 'e2', checked: true }] }
   const input = { ref: 'e1', text, clear: true, submit: true }
-  const trustedClick = ['checked:e1', 'locate:e1', 'laser', 'armProbe', 'mouseMove', 'mouseDown', 'mouseUp']
+  const trustedClick = ['checked:e1', 'locate:e1', 'locate:e1', 'laser', 'armProbe', 'mouseMove', 'mouseDown', 'mouseUp']
 
   for (const { name, tool = 'browser_fill_form', args = checkbox, options, calls } of [
     { name: 'checkbox state return does not proceed to locate', options: { at: 'checked:e1' }, calls: ['checked:e1'] },
     { name: 'checkbox locate return does not start the first click', options: { at: 'locate:e1' }, calls: ['checked:e1', 'locate:e1'] },
-    { name: 'failed probe arming does not start the first click', options: { at: 'armProbe', rejectStep: true }, calls: trustedClick.slice(0, 4) },
-    { name: 'probe arming on an occluded checkbox does not start a DOM click', options: { at: 'armProbe', hitOk: false }, calls: trustedClick.slice(0, 4) },
+    { name: 'failed probe arming does not start the first click', options: { at: 'armProbe', rejectStep: true }, calls: [...trustedClick.slice(0, 4), 'armProbe'] },
     { name: 'click verification does not re-click', options: { at: 'readProbe' }, calls: [...trustedClick, 'readProbe'] },
     { name: 'select tag probe does not change selection', args: { fields: [{ ref: 'e1', label: 'Choice' }] }, options: { at: 'tag:e1' }, calls: ['tag:e1'] },
     { name: 'focus return does not clear the field', tool: 'browser_type', args: input, options: { at: 'focus:e1' }, calls: ['inspect:e1', 'focus:e1'] },
-    { name: 'clear return does not insert or submit', tool: 'browser_type', args: input, options: { at: 'clear:e1' }, calls: ['inspect:e1', 'focus:e1', 'clear:e1'] },
-    { name: 'insertText return does not verify, submit Enter, or touch the next field', args: formSubmit, options: { at: `insertText:${text}` }, calls: ['inspect:e1', 'focus:e1', `insertText:${text}`] },
-    { name: 'verification mismatch does not run setter fallback', args: formSubmit, options: { at: 'verify:e1', verify: '' }, calls: ['inspect:e1', 'focus:e1', `insertText:${text}`, 'verify:e1'] },
-    { name: 'rejected verification does not swallow cancellation and run setter fallback', args: formSubmit, options: { at: 'verify:e1', rejectStep: true }, calls: ['inspect:e1', 'focus:e1', `insertText:${text}`, 'verify:e1'] },
-    { name: 'setter return does not submit Enter', args: formSubmit, options: { at: 'setter:e1', verify: '' }, calls: ['inspect:e1', 'focus:e1', `insertText:${text}`, 'verify:e1', 'setter:e1'] },
+    { name: 'initial focus verification return does not clear the field', tool: 'browser_type', args: input, options: { at: 'focusState:e1' }, calls: ['inspect:e1', 'focus:e1', 'focusState:e1'] },
+    { name: 'pre-insert focus verification return does not insert or submit', tool: 'browser_type', args: { ...input, clear: false }, options: { at: 'focusState:e1', afterFocusCalls: 1 }, calls: ['inspect:e1', 'focus:e1', 'focusState:e1', 'focusState:e1'] },
+    { name: 'clear return does not insert or submit', tool: 'browser_type', args: input, options: { at: 'clear:e1' }, calls: ['inspect:e1', 'focus:e1', 'focusState:e1', 'clear:e1'] },
+    { name: 'insertText return does not verify, submit Enter, or touch the next field', args: formSubmit, options: { at: `insertText:${text}` }, calls: ['inspect:e1', 'focus:e1', 'focusState:e1', 'focusState:e1', `insertText:${text}`] },
+    { name: 'verification mismatch does not run setter fallback', args: formSubmit, options: { at: 'verify:e1', verify: '' }, calls: ['inspect:e1', 'focus:e1', 'focusState:e1', 'focusState:e1', `insertText:${text}`, 'verify:e1'] },
+    { name: 'rejected verification does not swallow cancellation and run setter fallback', args: formSubmit, options: { at: 'verify:e1', rejectStep: true }, calls: ['inspect:e1', 'focus:e1', 'focusState:e1', 'focusState:e1', `insertText:${text}`, 'verify:e1'] },
+    { name: 'setter return does not submit Enter', args: formSubmit, options: { at: 'setter:e1', verify: '' }, calls: ['inspect:e1', 'focus:e1', 'focusState:e1', 'focusState:e1', `insertText:${text}`, 'verify:e1', 'setter:e1'] },
+    { name: 'pre-submit focus verification return does not press Enter', args: formSubmit, options: { at: 'focusState:e1', afterFocusCalls: 2 }, calls: ['inspect:e1', 'focus:e1', 'focusState:e1', 'focusState:e1', `insertText:${text}`, 'verify:e1', 'focusState:e1'] },
     { name: 'form submit approval does not allow focus after cancellation', args: formSubmit, options: { at: 'operationApproval', approval: true }, calls: ['inspect:e1', 'operationApproval'] },
     { name: 'frame type inspection does not dispatch the input script', tool: 'browser_frame', args: { action: 'type', frameId: 'f1', selector: '#field', text }, options: { at: 'frameInspect' }, calls: ['frameInspect'] },
     { name: 'frame evaluate approval does not dispatch the expression', tool: 'browser_frame', args: { action: 'evaluate', frameId: 'f1', expression: '1' }, options: { at: 'operationApproval', approval: true }, calls: ['operationApproval'] }
@@ -202,6 +209,15 @@ try {
       assert.deepEqual(f.calls, calls)
     })
   }
+
+  await test('obscured click is rejected without synthetic DOM dispatch', async () => {
+    const f = fixture({ hitOk: false })
+    await assert.rejects(
+      f.call('browser_fill_form', { fields: [{ ref: 'e1', checked: true }], snapshot: false }),
+      /reason=element_obscured/
+    )
+    assert.deepEqual(f.calls, ['checked:e1', 'locate:e1', 'locate:e1'])
+  })
 
   for (const { tool, args } of [
     ...['set', 'remove', 'clear'].map((action) => ({ tool: 'browser_storage', args: { action, key: 'fixture', value: text } })),
@@ -245,7 +261,7 @@ try {
     const f = fixture({ verify: '' })
     const result = await f.call('browser_fill_form', { fields: [formSubmit.fields[0]], snapshot: false, __aaSignal: new AbortController().signal })
     assert.match(result.content[0].text, /已填写 1 个字段/)
-    assert.deepEqual(f.calls, ['inspect:e1', 'focus:e1', `insertText:${text}`, 'verify:e1', 'setter:e1', 'keyDown:Enter', 'keyUp:Enter'])
+    assert.deepEqual(f.calls, ['inspect:e1', 'focus:e1', 'focusState:e1', 'focusState:e1', `insertText:${text}`, 'verify:e1', 'setter:e1', 'focusState:e1', 'keyDown:Enter', 'keyUp:Enter'])
   })
 
   await test('without cancellation, HAR still saves and registers the approved output', async () => {
