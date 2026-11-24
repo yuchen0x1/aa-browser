@@ -73,9 +73,32 @@ jobs:
       - name: Generate software bill of materials
         run: npm run sbom
 
+  release-ref:
+    name: Validate release ref
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Validate tag ancestry and version
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF_TYPE:-}" != tag ]]; then
+            exit 0
+          fi
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$GITHUB_REF_NAME" = "v$(node -p 'require("./package.json").version')"
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
   desktop:
     name: Desktop (${{ matrix.platform }})
-    needs: [static]
+    needs: [static, release-ref]
     strategy:
       fail-fast: false
       matrix:
@@ -136,6 +159,7 @@ jobs:
           fi
           run_suite test:update-ui "${display[@]}" npm run test:update-ui
           run_suite test:ui-ux "${display[@]}" npm run test:ui-ux
+          run_suite test:extensions-e2e "${display[@]}" npm run test:extensions-e2e
           run_suite test:settings-safety "${display[@]}" npm run test:settings-safety
           run_suite test:cancel-side-effects "${display[@]}" npm run test:cancel-side-effects
           run_suite test:newtab-i18n "${display[@]}" npm run test:newtab-i18n
@@ -155,6 +179,7 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         shell: bash
         env:
+          # release-ref must validate tag ancestry before signing secrets are exposed here.
           CSC_LINK: ${{ startsWith(github.ref, 'refs/tags/v') && runner.os == 'Windows' && secrets.WINDOWS_CSC_LINK || '' }}
           CSC_KEY_PASSWORD: ${{ startsWith(github.ref, 'refs/tags/v') && runner.os == 'Windows' && secrets.WINDOWS_CSC_KEY_PASSWORD || '' }}
         run: |
