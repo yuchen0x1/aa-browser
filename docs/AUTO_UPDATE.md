@@ -1,6 +1,6 @@
 # Aa Browser 自动更新
 
-Windows NSIS 与 Linux AppImage 使用 [GitHub Releases](https://github.com/yuchen0x1/aa-browser/releases) 和 `electron-updater`。开发版和 Linux 解包后二进制模式关闭应用内更新。通过 AppImage 运行时，只有当前文件目录可写才可原地替换。
+v0.15.0 仅 Windows NSIS 使用 [GitHub Releases](https://github.com/yuchen0x1/aa-browser/releases) 和 `electron-updater`；Linux AppImage 因 CI 桌面回归暂缓，最新 Release 不包含 Linux 更新元数据。开发版和 Linux 解包后二进制模式关闭应用内更新；历史 AppImage 只有在当前文件目录可写时才可原地替换。
 
 ## 查找和安装
 
@@ -27,15 +27,15 @@ gh release verify-asset v0.1.0 ./aa-browser-0.1.0-linux-x86_64.AppImage --repo y
 
 应用内 SHA-512 比对和 `gh` 发行证明验证是两个流程。Windows Authenticode 签名需要配置证书，目前无证书。未来启用 Windows 签名时，应在 `WINDOWS_CSC_LINK`、`WINDOWS_CSC_KEY_PASSWORD` 配置发行证书，在首次签名安装包及后续签名更新之间验证发布者校验。代码签名与首次信任建立需单独验收。
 
-安装 AppImage 前会将运行中的版本保存至 Electron 用户数据的 `previous-versions/<版本>.AppImage`。运行旧文件、Windows 重新安装旧版以及数据兼容检查见 [恢复步骤](PLATFORMS.md#安装卸载与恢复)。恢复由用户发起。退回旧版本时可以先暂停自动检查。
+旧版 AppImage 更新安装前会将运行中的版本保存至 Electron 用户数据的 `previous-versions/<版本>.AppImage`；v0.15.0 不发布新的 AppImage。运行旧文件、Windows 重新安装旧版以及数据兼容检查见 [恢复步骤](PLATFORMS.md#安装卸载与恢复)。恢复由用户发起。退回旧版本时可以先暂停自动检查。
 
 ## 发布
 
 1. 在短期分支同步更新 `package.json`、lockfile、`release-notes-vX.Y.Z.md`、版本历史和 README。
-2. 本地跑 `npm run check`、相关回归和 `npm run build`，然后推送 `main`。`main` 推送只跑静态检查与测试；打包、安装和 AppImage 验收只在标签或手动触发时执行，避免每次推送都重复几分钟的构建。
-3. 确认仓库的不可变 Release 已启用后，从通过本地门禁的 `main` 提交创建并推送 `vX.Y.Z` 标签。标签 CI 会重新构建并打包两平台产物，验证安装包/更新描述的版本、文件名、大小和 SHA-512，构建 SHA-256 清单。仅当两平台均通过时才在 `release` 环境上传草稿资产。标签 CI 是发行的权威门禁，可与 `main` CI 并行。
+2. 本地跑 `npm run check`、相关回归和 `npm run build`，然后推送 `main`。`main` 推送只跑静态检查与测试；正式打包和安装验收只在标签或手动触发时执行，避免每次推送都重复几分钟的构建。Linux 回归修复前，v0.15.0 的标签门禁只覆盖 Windows x64。
+3. 确认仓库的不可变 Release 已启用后，从通过本地门禁的 `main` 提交创建并推送 `vX.Y.Z` 标签。标签 CI 会重新构建并打包当前支持平台的产物，验证安装包/更新描述的版本、文件名、大小和 SHA-512，构建 SHA-256 清单。仅当所有声明平台均通过时才在 `release` 环境上传草稿资产。v0.15.0 当前声明平台只有 Windows x64；Linux 回归修复后才恢复双平台发行。标签 CI 是发行的权威门禁，可与 `main` CI 并行。
 4. 草稿资产经 GitHub API 摘要检查后公开。正式版本的标签及资产由 GitHub 锁定。草稿中已有资产若摘要不同，应从原通过的 run 恢复已验证产物或排查草稿，原公开版本始终保留。SBOM 在发布 job 内由同一提交的 lockfile 生成，并进入 `SHA256SUMS.txt` 与资源集校验。
 5. Release verification 检查公开链接、版本元数据、摘要和发行证明。
 6. 发布后归档正文和索引的提交只改文档，提交信息带 `[skip ci]`，避免为已由标签 CI 验证过的同一代码 SHA 再跑一遍完整测试与打包。
 
-建议在发版前保存老版本安装包，并在独立测试 profile 上完成一次升级和恢复。CI 的更新 UI 用模拟 provider 验证交互。打包冒烟会启动实际安装目录或 AppImage 并调用 MCP。完整的已验证证据见 [维护状态](MAINTENANCE.md)。
+建议在发版前保存老版本安装包，并在独立测试 profile 上完成一次升级和恢复。CI 的更新 UI 用模拟 provider 验证交互。打包冒烟会启动当前支持平台的实际安装目录或历史 AppImage 并调用 MCP。完整的已验证证据见 [维护状态](MAINTENANCE.md)。

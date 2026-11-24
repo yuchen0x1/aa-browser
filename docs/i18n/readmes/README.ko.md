@@ -17,7 +17,7 @@
   <a href="./README.hi.md">हिन्दी</a>
 </p>
 
-![License](https://img.shields.io/badge/license-MIT-blue) ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey) ![MCP](https://img.shields.io/badge/protocol-MCP-purple)
+![License](https://img.shields.io/badge/license-MIT-blue) ![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey) ![MCP](https://img.shields.io/badge/protocol-MCP-purple)
 
 > 사람은 사람처럼 브라우징하고, 에이전트는 엔지니어처럼 구동한다.
 
