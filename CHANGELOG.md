@@ -2,7 +2,7 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
-## v0.17.0
+## v0.17.0 — 2026-11-24
 
 - **GitHub Release 智能下载**：公开更新先走 GitHub 官方线路；连接失败、持续低速或传输中断后，按线路评分尝试 GH-Proxy 和备用线路。支持有界重试、退避、冷却和 HTTP Range 断点续传，继续使用现有更新进度界面。
 - **可信完整性校验**：更新包只接受从 GitHub 官方主机取得的 `SHA256SUMS.txt`，并同时核对更新元数据的文件大小与 SHA-512；安装器通过 GitHub Release API 核对公开资产摘要和大小。TLS、受限主机重定向、临时文件及校验失败禁止安装均保持 fail closed，凭据和身份请求头不会发送给代理。

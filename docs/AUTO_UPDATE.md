@@ -1,6 +1,6 @@
 # Aa Browser 自动更新
 
-v0.16.0 的 Windows NSIS 和 Linux AppImage 都使用 [GitHub Releases](https://github.com/yuchen0x1/aa-browser/releases) 和 `electron-updater`。Linux 验证范围是 Ubuntu 24.04 CI/Xvfb、AppImage 启动和 MCP 桥连接；其他发行版仍需实机确认。开发版和 Linux 解包后二进制模式关闭应用内更新；AppImage 只有在当前文件目录可写时才可原地替换。
+v0.17.0 的 Windows NSIS 和 Linux AppImage 都使用 [GitHub Releases](https://github.com/yuchen0x1/aa-browser/releases) 和 `electron-updater`。公开更新默认使用 GitHub 官方线路，遇到超时、持续低速或中断时才回退到代理线路；安装前校验受信任摘要与文件大小。没有中国大陆网络或完整 Release 大包下载实测。Linux 验证范围是 Ubuntu 24.04 CI/Xvfb、AppImage 启动和 MCP 桥连接；其他发行版仍需实机确认。开发版和 Linux 解包后二进制模式关闭应用内更新；AppImage 只有在当前文件目录可写时才可原地替换。
 
 ## 查找和安装
 
@@ -36,8 +36,8 @@ gh release verify-asset v0.1.0 ./aa-browser-0.1.0-linux-x86_64.AppImage --repo y
 ## 发布
 
 1. 在短期分支同步更新 `package.json`、lockfile、`release-notes-vX.Y.Z.md`、版本历史和 README。
-2. 本地跑 `npm run check`、相关回归和 `npm run build`，然后推送 `main`。`main` 推送只跑静态检查与测试；正式打包和安装验收只在标签或手动触发时执行，避免每次推送都重复几分钟的构建。v0.16.0 的标签门禁覆盖 Windows x64 和 Linux x86_64。
-3. 确认仓库的不可变 Release 已启用后，从通过本地门禁的 `main` 提交创建并推送 `vX.Y.Z` 标签。标签 CI 会重新构建并打包当前支持平台的产物，验证安装包/更新描述的版本、文件名、大小和 SHA-512，构建 SHA-256 清单。仅当所有声明平台均通过时才在 `release` 环境上传草稿资产。v0.16.0 声明 Windows x64 与 Linux x86_64；Linux 证据仅限 Ubuntu 24.04 CI。标签 CI 是发行的权威门禁，可与 `main` CI 并行。
+2. 本地跑 `npm run check`、相关回归和 `npm run build`，然后推送 `main`。`main` 推送只跑静态检查与测试；正式打包和安装验收只在标签或手动触发时执行，避免每次推送都重复几分钟的构建。v0.17.0 的标签门禁覆盖 Windows x64 和 Linux x86_64。
+3. 确认仓库的不可变 Release 已启用后，从通过本地门禁的 `main` 提交创建并推送 `vX.Y.Z` 标签。标签 CI 会重新构建并打包当前支持平台的产物，验证安装包/更新描述的版本、文件名、大小和 SHA-512，构建 SHA-256 清单。仅当所有声明平台均通过时才在 `release` 环境上传草稿资产。v0.17.0 声明 Windows x64 与 Linux x86_64；Linux 证据仅限 Ubuntu 24.04 CI。标签 CI 是发行的权威门禁，可与 `main` CI 并行。
 4. 草稿资产经 GitHub API 摘要检查后公开。正式版本的标签及资产由 GitHub 锁定。草稿中已有资产若摘要不同，应从原通过的 run 恢复已验证产物或排查草稿，原公开版本始终保留。SBOM 在发布 job 内由同一提交的 lockfile 生成，并进入 `SHA256SUMS.txt` 与资源集校验。
 5. Release verification 检查公开链接、版本元数据、摘要和发行证明。
 6. 发布后归档正文和索引的提交只改文档，提交信息带 `[skip ci]`，避免为已由标签 CI 验证过的同一代码 SHA 再跑一遍完整测试与打包。

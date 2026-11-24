@@ -5,20 +5,20 @@
 | 平台 | 包 | 启动及 MCP | 更新与恢复 |
 | --- | --- | --- | --- |
 | Windows x64 | NSIS `.exe` | 原生窗口与快捷键。支持系统 Node.js，未安装时使用随包运行时 | 主界面检查、下载及确认重启。安装失败时可从 Releases 手动安装旧版 |
-| Ubuntu 桌面 x86_64 | v0.16.0 恢复 AppImage | MCP 需要系统 Node.js 22.12+；CI 验证 Ubuntu 24.04 + Xvfb，其他发行版需实机确认 | AppImage 可检查、下载及确认重启；替换前保留本机旧 AppImage |
+| Ubuntu 桌面 x86_64 | v0.17.0 AppImage | MCP 需要系统 Node.js 22.12+；CI 验证 Ubuntu 24.04 + Xvfb，其他发行版需实机确认 | AppImage 可检查、下载及确认重启；替换前保留本机旧 AppImage |
 | 其他发行版和架构 | 见评估表 | 兼容性需要实机验证 | 暂无独立发行渠道 |
 
-浏览、查找、共享登录态与隔离标签、下载、历史、权限确认、跨会话标签恢复和 47 个 MCP 工具来自同一内核。v0.16.0 的正式包覆盖 Windows x64 和 Linux x86_64。Windows 安装助手 `install.mjs` 负责 NSIS 安装和 WorkBuddy Connector 生成。Linux AppImage 可直接启动，再在「设置 → 连接 AI 客户端」中写入配置；Linux 证据仅限 Ubuntu 24.04 CI/Xvfb。独立 MCP 配置写入完成后需要重启客户端并成功调用 `browser_tabs`。
+浏览、查找、共享登录态与隔离标签、下载、历史、权限确认、跨会话标签恢复和 47 个 MCP 工具来自同一内核。v0.17.0 的正式包覆盖 Windows x64 和 Linux x86_64。Windows 安装助手 `install.mjs` 负责 NSIS 安装和 WorkBuddy Connector 生成。Linux AppImage 可直接启动，再在「设置 → 连接 AI 客户端」中写入配置；Linux 证据仅限 Ubuntu 24.04 CI/Xvfb。独立 MCP 配置写入完成后需要重启客户端并成功调用 `browser_tabs`。
 
 ## 安装、卸载与恢复
 
 **Windows**。从项目 Release 下载 `aa-browser-setup-<版本>.exe`，按常规向导安装。现有版本可使用应用内更新。卸载入口位于系统「已安装的应用」。桌面快捷方式和卸载项由 NSIS 管理。也可以把新标签页的通用接入提示词发给任意具备本机执行能力的 AI，由它自动完成下载、安装和 MCP 配置。
 
-**Linux AppImage**。v0.16.0 恢复 Linux 包。使用带 GTK 3、NSS、GBM 和音频库的 x86_64 桌面系统，应用需要 Chromium 沙箱可用。AppImage 由当前用户运行，并应放在当前用户可写的位置。通用安装器会把它安装到 `~/Applications/AaBrowser.AppImage`（可用 `--dir` 修改目录）；也可以手动下载后使用固定路径，方便桌面快捷方式跟随更新。
+**Linux AppImage**。v0.17.0 提供 Linux 包。使用带 GTK 3、NSS、GBM 和音频库的 x86_64 桌面系统，应用需要 Chromium 沙箱可用。AppImage 由当前用户运行，并应放在当前用户可写的位置。通用安装器会把它安装到 `~/Applications/AaBrowser.AppImage`（可用 `--dir` 修改目录）；也可以手动下载后使用固定路径，方便桌面快捷方式跟随更新。
 
 ```sh
 mkdir -p ~/Applications
-mv aa-browser-0.16.0-linux-x86_64.AppImage ~/Applications/AaBrowser.AppImage
+mv aa-browser-0.17.0-linux-x86_64.AppImage ~/Applications/AaBrowser.AppImage
 chmod u+x ~/Applications/AaBrowser.AppImage
 ~/Applications/AaBrowser.AppImage
 ```
@@ -38,7 +38,7 @@ A 为直接维护，B 为适配后有明确价值，C 为延后，D 为受产品
 | Windows 11 x64 | A | Chromium 标签、MCP 和用户态安装可完整使用 | 低。现用 NSIS 与 GitHub 更新，CI 和本机覆盖 |
 | Windows 10 x64 | A | 与 Windows 11 共享安装包。实际兼容随 Electron 与系统版本变化 | 低。还需要 Windows 10 实机升级验收 |
 | Windows ARM64 | C | Chromium 可原生编译，需要 ARM64 依赖和设备确认 | 中。新增安装器、更新频道隔离和实机维护 |
-| Linux / Ubuntu x86_64 | B（v0.16.0 恢复） | GTK/XDG 客户端，需可用用户命名空间，MCP 用系统 Node | 中。v0.16.0 通过 Ubuntu 24.04 CI/Xvfb、AppImage 启动和桥冒烟；其他发行版需实机确认 |
+| Linux / Ubuntu x86_64 | B（v0.16.0 恢复） | GTK/XDG 客户端，需可用用户命名空间，MCP 用系统 Node | 中。v0.17.0 通过 Ubuntu 24.04 CI/Xvfb、AppImage 启动和桥冒烟；其他发行版需实机确认 |
 | Debian | C | AppImage 可试用，仍需确认 glibc/GTK、FUSE 和沙箱 | 中。独立 DEB 还需维护 apt 签名与升级策略 |
 | Fedora | C | AppImage 与 RPM 可行，Wayland、沙箱和依赖需要验证 | 中。原生 RPM 需要签名仓库与跨版 CI |
 | Arch Linux | C | 可直接试用 AppImage，滚动 ABI 需长期验收 | 中至高。AUR/Flatpak 发布和签名需额外维护 |

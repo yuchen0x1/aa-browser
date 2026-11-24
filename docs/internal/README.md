@@ -12,9 +12,9 @@
 | [AUTONOMOUS_TASKS.md](./AUTONOMOUS_TASKS.md) | 自主开发待办与历史轮次归档 |
 | [AUTONOMOUS_CHANGELOG.md](./AUTONOMOUS_CHANGELOG.md) | 自主开发过程记录与发行证据 |
 | [AUTONOMOUS_ISSUES.md](./AUTONOMOUS_ISSUES.md) | 未解决问题与验证边界 |
-| [PROJECT_STATUS.md](./PROJECT_STATUS.md) | 2026-11-21 项目状态快照（历史档案） |
+| [PROJECT_STATUS.md](./PROJECT_STATUS.md) | 2026-11-24 项目状态快照 |
 | [SECURITY_AUDIT.md](./SECURITY_AUDIT.md) | 2026-11-21 定向安全审查记录 |
-| [RELEASE_HISTORY.md](./RELEASE_HISTORY.md) | v0.6.10–v0.6.12 正式发行核验记录 |
+| [RELEASE_HISTORY.md](./RELEASE_HISTORY.md) | v0.6.10–v0.17.0 正式发行核验记录 |
 
 约定：
 

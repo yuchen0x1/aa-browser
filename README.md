@@ -32,11 +32,9 @@
 
 <!-- github-release:start -->
 
-**[v0.16.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.16.0)** · 2026-11-24 · 最新正式版（Windows x64、Linux x86_64）
+**[v0.17.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.17.0)** · 2026-11-24 · 最新正式版（Windows x64、Linux x86_64）
 
-v0.17.0 候选增加 GitHub Release 下载智能切换、断点续传与可信摘要校验；等待 PR、双平台 CI 和发行门禁完成。Windows 安装包仍未 Authenticode 签名。
-
-**候选说明：[v0.17.0](./release-notes-v0.17.0.md)** · 尚未发布
+GitHub Release 更新支持官方线路优先、代理回退、断点续传和可信摘要/大小校验；尚未在中国大陆网络或完整 Release 大包上实测。Windows 安装包仍未 Authenticode 签名。
 
 [全部发行记录](https://github.com/yuchen0x1/aa-browser/releases)
 
@@ -247,11 +245,11 @@ npm run dist -- --publish never  # 产出 release/aa-browser-setup-<版本>.exe
 
 ### Linux AppImage
 
-v0.16.0 恢复 Linux AppImage 发行，Ubuntu 24.04 的 Xvfb 桌面、打包、AppImage 启动和 MCP 桥连接由标签 CI 验证；其他发行版和桌面环境仍需实机确认。下载 `aa-browser-0.16.0-linux-x86_64.AppImage`，赋予执行权限后从当前桌面会话启动。需要 GTK 3、NSS、GBM、音频库以及可用的 Chromium 沙箱；MCP 接入需要系统 Node.js 22.12 或更高版本。
+v0.17.0 提供 Linux AppImage；Ubuntu 24.04 的 Xvfb 桌面、打包、AppImage 启动和 MCP 桥连接由标签 CI 验证，其他发行版和桌面环境仍需实机确认。下载 `aa-browser-0.17.0-linux-x86_64.AppImage`，赋予执行权限后从当前桌面会话启动。需要 GTK 3、NSS、GBM、音频库以及可用的 Chromium 沙箱；MCP 接入需要系统 Node.js 22.12 或更高版本。
 
 ```bash
 mkdir -p ~/Applications
-mv aa-browser-0.16.0-linux-x86_64.AppImage ~/Applications/AaBrowser.AppImage
+mv aa-browser-0.17.0-linux-x86_64.AppImage ~/Applications/AaBrowser.AppImage
 chmod u+x ~/Applications/AaBrowser.AppImage
 ~/Applications/AaBrowser.AppImage
 ```
@@ -529,7 +527,7 @@ Aa Browser 不提供 Chrome 的原生 `chrome://extensions` 页面；在地址�
 | --- | --- | --- |
 | Windows 11 x64 | NSIS 安装包 | 直接维护，CI 与本机回归覆盖 |
 | Windows 10 x64 | 同一安装包 | 与 Windows 11 共享安装包，仍需 Windows 10 实机升级验收 |
-| Linux x86_64（Ubuntu 桌面） | v0.16.0 恢复 AppImage | v0.16.0 的 Linux 验证范围是 Ubuntu 24.04 CI/Xvfb、AppImage 启动和 MCP 桥连接；其他发行版仍需实机确认 |
+| Linux x86_64（Ubuntu 桌面） | v0.17.0 AppImage | Linux 验证范围是 Ubuntu 24.04 CI/Xvfb、AppImage 启动和 MCP 桥连接；其他发行版仍需实机确认 |
 | Windows ARM64 / macOS / Android / iOS | 暂无 | 安装器会明确拒绝，不会假装安装 |
 
 正式发行附 `SHA256SUMS.txt`、CycloneDX `sbom.cdx.json` 和 GitHub 不可变发行证明。更完整的可行性评估、系统依赖与恢复步骤见[平台指南](./docs/PLATFORMS.md)。
@@ -537,7 +535,7 @@ Aa Browser 不提供 Chrome 的原生 `chrome://extensions` 页面；在地址�
 ## 已知限制
 
 - **未做代码签名**：Windows SmartScreen 会提示，需要手动选择「更多信息 → 仍要运行」。
-- **v0.16.0 官方安装包覆盖 Windows x64 和 Linux x86_64**：Linux 证据仅限 Ubuntu 24.04 CI/Xvfb；macOS、Windows ARM64 和移动端没有官方安装包；从源码自行构建不属于官方验证过的分发渠道。
+- **v0.17.0 官方安装包覆盖 Windows x64 和 Linux x86_64**：Linux 证据仅限 Ubuntu 24.04 CI/Xvfb；macOS、Windows ARM64 和移动端没有官方安装包；从源码自行构建不属于官方验证过的分发渠道。
 - **Linux AppImage 的 MCP 接入依赖系统 Node.js 22.12+**：Windows 未安装系统 Node 时使用应用自带的运行时。
 - **不是 Chrome 的替代品**：没有扩展商店、账号同步和多设备同步；可加载本地已解压扩展，定位仍是「浏览器内核 + Agent 接入」。
 - **Agent 权限很大**：能看到页面内容、Cookie、Storage 与网络流量；白名单、会话隔离、脱敏和审批是缓解措施，不是通用 DLP。

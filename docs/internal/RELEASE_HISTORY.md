@@ -2,11 +2,14 @@
 
 历史发布正文见 [归档索引](../releases/release-notes.md)。本表只记录已核实的正式版本；候选不占用正式版本记录。
 
-## v0.17.0 候选（待发行）
+## v0.17.0 正式发行（2026-11-24）
 
-- 分支 `codex/github-release-download-acceleration` 基于已发布 `v0.16.0`；版本号已升至 `0.17.0`。
-- 候选包含 GitHub 官方优先的 Release 下载、经验证的公开代理回退、限速/超时切换、Range 续传、线路退避，以及官方 SHA-256 清单、更新元数据大小和 SHA-512 校验。
-- PR、合并提交、标签 CI、安装包、更新元数据、摘要和不可变 Release 尚未产生；中国大陆网络速度与完整大包下载也未验证。完成发行后以实际提交、run ID、Tag 和 Release URL 替换候选记录。
+- PR [#20](https://github.com/yuchen0x1/aa-browser/pull/20) 于 `2026-11-24 15:04:06 UTC` 合并；标签 `v0.17.0` 指向合并提交 `cdea12dfa52567babb614be43f304ff6f268a614`。功能分支最后提交为 `4ff07c565332a62995d047b7068c243f6bae7dc1`。
+- 标签 CI run `45421349555` 的 Windows x64、Linux x86_64 和「Publish tested release」作业全部成功；PR 的 CI、CodeQL 与依赖审查也通过。
+- GitHub Release 于 `2026-11-24 15:12:22 UTC` 发布为 Latest、非草稿、非预发布且不可变。7 项资产（Windows NSIS 安装包与 blockmap、Linux AppImage、两平台更新元数据、SBOM、`SHA256SUMS.txt`）均已上传。
+- `gh release verify v0.17.0` 与 `node scripts/verify-public-release.mjs yuchen0x1/aa-browser` 通过；GitHub 证明、公开下载、资产 digest、SHA-256 清单、SBOM 和 `latest*.yml` 版本均核对成功。
+- 自动化模拟覆盖官方线路、超时/低速/中断回退、Range 续传、摘要/大小拒绝及更新失败保护。没有中国大陆网络或完整 Release 大包下载实测，不据此宣称大陆速度提升。
+- GitHub 上的 Release 正文已逐字比对并归档为 [`../releases/bodies/v0.17.0.md`](../releases/bodies/v0.17.0.md)；`npm run check:release-bodies:remote` 通过，32 个版本的正文与线上一致。
 
 ## v0.16.0 正式发行（2026-11-24）
 
@@ -20,7 +23,7 @@
 - 公开资产共 5 项：`aa-browser-setup-0.15.0.exe`、`aa-browser-setup-0.15.0.exe.blockmap`、`latest.yml`、`sbom.cdx.json`、`SHA256SUMS.txt`。没有 Linux AppImage 或 `latest-linux.yml`。
 - 该版本引入有界渲染器恢复和严格任务状态机；Linux 桌面回归未通过，v0.15.0 只发布 Windows x64。真实渲染进程崩溃注入恢复与 Windows Authenticode 签名仍未验证，安装包未签名。
 - 发布正文归档已与 GitHub 公开正文对齐，`node scripts/check-release-bodies.mjs --remote` 通过 30 个版本。
-- v0.14.0 仍是最后一个包含 Windows 与 Linux 双平台资产的正式版本。
+- 当时 v0.14.0 是最后一个包含 Windows 与 Linux 双平台资产的正式版本；v0.16.0 起恢复双平台发行。
 ## v0.13.0 正式发行（2026-11-23）
 
 - 标签 `v0.13.0` 指向已确认的 `main` 提交 `ea6905c64abc624347515681744c85e2a0ca9326`；标签 CI `45099078476` 的 Linux x64、Windows x64 重跑与「Publish tested release」作业全部成功。首次标签运行因两个旧生产工具夹具未 mock 新增 `./cloudflare` 依赖而失败，补齐夹具后同一标签重跑通过。
@@ -63,8 +66,8 @@
 
 | 正式版本 | 状态与证据 |
 | --- | --- |
-| v0.17.0 | 候选，尚未合并或发布；最终提交、CI run、Tag、Release 和资产核验待补。 |
-| [v0.16.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.16.0) | 已发布（2026-11-24），Latest；Windows x64 与 Linux x86_64，共 7 项资产。 |
+| [v0.17.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.17.0) | 已发布（2026-11-24），Latest、不可变；提交 `cdea12d`，标签 CI `45421349555` 双平台与发布作业成功，7 项资产经证明和摘要核验。 |
+| [v0.16.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.16.0) | 已发布（2026-11-24），v0.17.0 发布前的正式版本；Windows x64 与 Linux x86_64，共 7 项资产。 |
 | [v0.15.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.15.0) | 已发布（2026-11-23），仅 Windows x64 资产，Linux 因 CI 回归暂缓。 |
 | [v0.14.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.14.0) | 已发布（2026-11-23），双平台最终版本。 |
 | [v0.13.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.13.0) | 已发布（2026-11-23）。标签 CI `45099078476` 双平台与发布作业成功；7 项资产、SHA-256 清单、SBOM、更新元数据与远程正文归档校验通过。首次运行的夹具失败已在同标签重跑前修复。 |

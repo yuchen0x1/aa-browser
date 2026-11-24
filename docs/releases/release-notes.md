@@ -6,6 +6,7 @@
 
 | 版本 | 完整 Release 正文 |
 | --- | --- |
+| v0.17.0 | [bodies/v0.17.0.md](./bodies/v0.17.0.md) |
 | v0.16.0 | [bodies/v0.16.0.md](./bodies/v0.16.0.md) |
 | v0.15.0 | [bodies/v0.15.0.md](./bodies/v0.15.0.md) |
 | v0.14.0 | [bodies/v0.14.0.md](./bodies/v0.14.0.md) |
@@ -37,6 +38,12 @@
 | v0.0.3 | [bodies/v0.0.3.md](./bodies/v0.0.3.md) |
 | v0.0.2 | [bodies/v0.0.2.md](./bodies/v0.0.2.md) |
 | v0.0.1 | [bodies/v0.0.1.md](./bodies/v0.0.1.md) |
+
+## v0.17.0 — 2026-11-24
+
+- 公开 Release 更新优先走 GitHub 官方线路，遇到超时、持续低速或中断时尝试代理线路，并支持有界重试与 Range 续传。
+- SHA-256、SHA-512 与文件大小校验在安装前完成；代理不接收 GitHub Token、Cookie 或身份请求头，校验失败时保留当前版本。
+- 自动化模拟、Windows 安装包和 Ubuntu 24.04 CI 验收通过；没有中国大陆网络环境或完整 Release 大包下载实测。
 
 ## v0.14.0 — 2026-11-23
 
