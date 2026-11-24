@@ -17,7 +17,7 @@
   <a href="./README.hi.md">हिन्दी</a>
 </p>
 
-![License](https://img.shields.io/badge/license-MIT-blue) ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey) ![MCP](https://img.shields.io/badge/protocol-MCP-purple)
+![License](https://img.shields.io/badge/license-MIT-blue) ![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey) ![MCP](https://img.shields.io/badge/protocol-MCP-purple)
 
 > Ein Browser, den du wie ein Mensch benutzt und den ein Agent wie ein Ingenieur steuert.
 

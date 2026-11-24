@@ -2,6 +2,13 @@
 
 历史发布正文见 [归档索引](../releases/release-notes.md)。本表只记录已核实的正式版本；候选不占用正式版本记录。
 
+## v0.15.0 正式发行（2026-11-24）
+
+- 最新正式版本为 v0.15.0，标签指向发布提交 `c3368bf`；GitHub Release 为 Latest、非草稿、非预发布、不可变。
+- 公开资产共 5 项：`aa-browser-setup-0.15.0.exe`、`aa-browser-setup-0.15.0.exe.blockmap`、`latest.yml`、`sbom.cdx.json`、`SHA256SUMS.txt`。没有 Linux AppImage 或 `latest-linux.yml`。
+- 该版本引入有界渲染器恢复和严格任务状态机；Linux 桌面回归未通过，v0.15.0 只发布 Windows x64。真实渲染进程崩溃注入恢复与 Windows Authenticode 签名仍未验证，安装包未签名。
+- 发布正文归档已与 GitHub 公开正文对齐，`node scripts/check-release-bodies.mjs --remote` 通过 30 个版本。
+- v0.14.0 仍是最后一个包含 Windows 与 Linux 双平台资产的正式版本。
 ## v0.13.0 正式发行（2026-11-23）
 
 - 标签 `v0.13.0` 指向已确认的 `main` 提交 `ea6905c64abc624347515681744c85e2a0ca9326`；标签 CI `45099078476` 的 Linux x64、Windows x64 重跑与「Publish tested release」作业全部成功。首次标签运行因两个旧生产工具夹具未 mock 新增 `./cloudflare` 依赖而失败，补齐夹具后同一标签重跑通过。
@@ -44,9 +51,11 @@
 
 | 正式版本 | 状态与证据 |
 | --- | --- |
-| [v0.13.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.13.0) | 已发布（2026-11-23），Latest。标签 CI `45099078476` 双平台与发布作业成功；7 项资产、SHA-256 清单、SBOM、更新元数据与远程正文归档校验通过。首次运行的夹具失败已在同标签重跑前修复。 |
-| [v0.12.1](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.12.1) | 已发布（2026-11-23），Latest。标签 CI `45094994167` 双平台与发布作业成功；7 项资产、SHA-256 清单、SBOM、更新元数据与远程正文归档校验通过。 |
-| [v0.6.12](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.6.12) | 已发布（2026-11-21），Latest。标签 CI `44865353450` 双平台与发布作业成功；7 项不可变资产、GitHub Release 证明、SHA-256 清单、SBOM 与更新元数据校验通过。 |
+| [v0.15.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.15.0) | 已发布（2026-11-24），Latest；仅 Windows x64 资产，Linux 因 CI 回归暂缓。 |
+| [v0.14.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.14.0) | 已发布（2026-11-23），双平台最终版本。 |
+| [v0.13.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.13.0) | 已发布（2026-11-23）。标签 CI `45099078476` 双平台与发布作业成功；7 项资产、SHA-256 清单、SBOM、更新元数据与远程正文归档校验通过。首次运行的夹具失败已在同标签重跑前修复。 |
+| [v0.12.1](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.12.1) | 已发布（2026-11-23）。标签 CI `45094994167` 双平台与发布作业成功；7 项资产、SHA-256 清单、SBOM、更新元数据与远程正文归档校验通过。 |
+| [v0.6.12](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.6.12) | 已发布（2026-11-21）。标签 CI `44865353450` 双平台与发布作业成功；7 项不可变资产、GitHub Release 证明、SHA-256 清单、SBOM 与更新元数据校验通过。 |
 | [v0.6.11](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.6.11) | 已发布（2026-11-21）。标签 CI `44852624681` 双平台与发布作业成功；7 项资产与版本元数据一致；CodeQL 通过、依赖审计 0 漏洞；正文归档通过 `check:release-bodies:remote`。 |
 | [v0.6.10](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.6.10) | 已发布（2026-11-21）。标签 CI 双平台与发布作业成功；7 项资产与版本元数据一致；正文归档通过 `check:release-bodies:remote`。含 v0.6.9 未发行修复。 |
 | [v0.6.8](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.6.8) | 已发布（2026-11-21）。标签 CI `44796723617` 双平台测试与发布作业全部成功；7 项资产均含 sha256 摘要，`latest.yml` / `latest-linux.yml` 版本 0.6.8 与 tag、package.json 一致；发布正文归档通过 `check:release-bodies:remote`。 |

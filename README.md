@@ -2,7 +2,7 @@
 
 **为 AI Agent 而生的开源桌面浏览器。**
 
-![License](https://img.shields.io/badge/license-MIT-blue) ![CI](https://github.com/yuchen0x1/aa-browser/actions/workflows/ci.yml/badge.svg) ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey) ![MCP](https://img.shields.io/badge/protocol-MCP-purple) [![M8ven Score](https://m8ven.ai/badge/mcp/yuchen0x1-aa-browser-135ffo?v=5eaaa577bc85b8b59b5e327efd51d38c)](https://m8ven.ai/mcp/yuchen0x1-aa-browser-135ffo?s=readme)
+![License](https://img.shields.io/badge/license-MIT-blue) ![CI](https://github.com/yuchen0x1/aa-browser/actions/workflows/ci.yml/badge.svg) ![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey) ![MCP](https://img.shields.io/badge/protocol-MCP-purple) [![M8ven Score](https://m8ven.ai/badge/mcp/yuchen0x1-aa-browser-135ffo?v=5eaaa577bc85b8b59b5e327efd51d38c)](https://m8ven.ai/mcp/yuchen0x1-aa-browser-135ffo?s=readme)
 
 > 人像人一样浏览网页，Agent 像工程师一样驱动它。
 > **The Agent-Native Browser** — snapshots, actions, and packet capture over MCP.
@@ -32,11 +32,11 @@
 
 <!-- github-release:start -->
 
-**[v0.14.0](./release-notes-v0.14.0.md)** · 2026-11-23 · 最新正式版
+**[v0.15.0](./release-notes-v0.15.0.md)** · 2026-11-24 · 最新正式版（仅 Windows x64）
 
-本版把最小化后台控制扩展为统一的后台浏览层：五种真实窗口模式、只捕获指定标签的实时预览、人工接管锁和多客户端任务中心。最小化时可继续导航、点击、输入、滚动、原生拖放和截图；拖拽使用 Chromium 返回的真实 DataTransfer 数据，不伪造网页状态或绕过站点安全检查。
+v0.15.0 增加有界渲染器恢复和可审计任务状态机：崩溃或无响应标签会暴露恢复状态、执行有限次恢复，并在失败时明确报告。发布包仅包含 Windows x64 资产；Linux 因 CI 桌面回归暂缓，真实崩溃恢复与 Authenticode 签名仍未验证。
 
-**上一版：[v0.13.0](./release-notes-v0.13.0.md)** · 2026-11-23
+**上一版：[v0.14.0](./release-notes-v0.14.0.md)** · 2026-11-23
 
 [全部发行记录](https://github.com/yuchen0x1/aa-browser/releases)
 
@@ -59,7 +59,7 @@
 - [快速开始](#快速开始)
   - [一键接入（推荐）](#一键接入推荐)
   - [Windows 安装包](#windows-安装包)
-  - [Linux AppImage](#linux-appimage)
+  - [Linux AppImage（历史版本）](#linux-appimage历史版本)
   - [源码运行](#源码运行)
   - [自动更新](#自动更新)
 - [接入你的 Agent](#接入你的-agent)
@@ -98,7 +98,7 @@
 - 🖱️ **下载与权限可控**：下载可取消 / 重试（重试重新校验站点白名单）；摄像头 / 麦克风 / 定位 / 通知请求进入人工审批，允许后仅在该会话内生效；原生右键菜单跟随语言设置，并带图片另存与打印
 - 🔒 **本地安全**：WebSocket 仅监听 `127.0.0.1`，每次启动随机 token，拒绝非本机来源；另有站点白名单、隔离会话与网络数据脱敏
 - 🔌 **一段接入**：把新标签页或 [PROMPT.md](./PROMPT.md) 里的通用提示词发给任意具备本机执行能力的 AI，自动完成下载、安装、MCP 配置和 `browser_tabs` 验证；配置指向稳定桥路径，随应用升级
-- 📦 **可验证发行**：Windows NSIS 与 Linux AppImage 同版本发布，附 `SHA256SUMS.txt`、GitHub 不可变发行证明和 CycloneDX `sbom.cdx.json`
+- 📦 **可验证发行**：当前正式版提供 Windows NSIS 安装包，附 `SHA256SUMS.txt`、GitHub 不可变发行证明和 CycloneDX `sbom.cdx.json`；Linux AppImage 仅见于 v0.14.0 及更早版本
 
 ## 演示
 
@@ -190,7 +190,7 @@ title: Aa Browser - 搜索
 | 你的情况 | 建议路径 |
 | --- | --- |
 | 想最快接上 AI，且有一个能执行本机命令的 AI | [一键接入（推荐）](#一键接入推荐) |
-| 想自己手动安装 | [Windows 安装包](#windows-安装包) / [Linux AppImage](#linux-appimage) |
+| 想自己手动安装 | [Windows 安装包](#windows-安装包) / [Linux AppImage（历史版本）](#linux-appimage历史版本) |
 | 想改代码或自行构建 | [源码运行](#源码运行) |
 
 ### 一键接入（推荐）
@@ -245,13 +245,13 @@ WorkBuddy 会写入用户级 `~/.workbuddy/mcp.json` 并生成本地 Connector�
 npm run dist -- --publish never  # 产出 release/aa-browser-setup-<版本>.exe
 ```
 
-### Linux AppImage
+### Linux AppImage（历史版本）
 
-从 [GitHub Releases](https://github.com/yuchen0x1/aa-browser/releases/latest) 下载 `aa-browser-<版本>-linux-x86_64.AppImage`，赋予执行权限后从当前桌面会话启动。需要 GTK 3、NSS、GBM、音频库以及可用的 Chromium 沙箱；MCP 接入需要系统 Node.js 22.12 或更高版本。
+v0.15.0 因 Linux 桌面回归未通过而暂缓发行，最新 Release 不包含 AppImage。需要 Linux 包时，请从 [v0.14.0 Release](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.14.0) 下载当时的 `aa-browser-0.14.0-linux-x86_64.AppImage`，赋予执行权限后从当前桌面会话启动。需要 GTK 3、NSS、GBM、音频库以及可用的 Chromium 沙箱；MCP 接入需要系统 Node.js 22.12 或更高版本。
 
 ```bash
 mkdir -p ~/Applications
-mv aa-browser-<版本>-linux-x86_64.AppImage ~/Applications/AaBrowser.AppImage
+mv aa-browser-0.14.0-linux-x86_64.AppImage ~/Applications/AaBrowser.AppImage
 chmod u+x ~/Applications/AaBrowser.AppImage
 ~/Applications/AaBrowser.AppImage
 ```
@@ -281,7 +281,7 @@ npm run dev
 
 ### 自动更新
 
-Windows NSIS 安装版与 Linux AppImage 从 GitHub Releases 检查更新。打开「设置 → 软件更新」可以检查、查看下载状态并确认重启安装；下载完成后只有用户确认才会交给安装器。默认稳定版通道，也可切换到 Beta；网络失败会按 1 / 5 / 15 分钟退避重试，也可手动重试。AI 正在操作浏览器时会先提示重启会中断当前步骤。更新后桥会自动重连，只读且幂等的在途调用会重发；写操作不会重放，标签 id 会随会话恢复保留。安装流程、SHA-512 校验与回滚方法见[自动更新](./docs/AUTO_UPDATE.md)。
+Windows NSIS 安装版从 GitHub Releases 检查更新；v0.15.0 没有 Linux AppImage，因此该版本不提供 Linux 应用内更新。打开「设置 → 软件更新」可以检查、查看下载状态并确认重启安装；下载完成后只有用户确认才会交给安装器。默认稳定版通道，也可切换到 Beta；网络失败会按 1 / 5 / 15 分钟退避重试，也可手动重试。AI 正在操作浏览器时会先提示重启会中断当前步骤。更新后桥会自动重连，只读且幂等的在途调用会重发；写操作不会重放，标签 id 会随会话恢复保留。安装流程、SHA-512 校验与回滚方法见[自动更新](./docs/AUTO_UPDATE.md)。
 
 ## 接入你的 Agent
 
@@ -529,7 +529,7 @@ Aa Browser 不提供 Chrome 的原生 `chrome://extensions` 页面；在地址�
 | --- | --- | --- |
 | Windows 11 x64 | NSIS 安装包 | 直接维护，CI 与本机回归覆盖 |
 | Windows 10 x64 | 同一安装包 | 与 Windows 11 共享安装包，仍需 Windows 10 实机升级验收 |
-| Linux x86_64（Ubuntu 桌面） | AppImage | 需要系统 Node.js 22.12+；其他发行版需实机验证 |
+| Linux x86_64（Ubuntu 桌面） | v0.14.0 及更早版本有 AppImage | v0.15.0 因 CI 桌面回归暂缓 Linux 发行，回归修复前最新包仅覆盖 Windows x64 |
 | Windows ARM64 / macOS / Android / iOS | 暂无 | 安装器会明确拒绝，不会假装安装 |
 
 正式发行附 `SHA256SUMS.txt`、CycloneDX `sbom.cdx.json` 和 GitHub 不可变发行证明。更完整的可行性评估、系统依赖与恢复步骤见[平台指南](./docs/PLATFORMS.md)。
@@ -537,13 +537,13 @@ Aa Browser 不提供 Chrome 的原生 `chrome://extensions` 页面；在地址�
 ## 已知限制
 
 - **未做代码签名**：Windows SmartScreen 会提示，需要手动选择「更多信息 → 仍要运行」。
-- **官方安装包只覆盖 Windows x64 与 Linux x86_64**：macOS、Windows ARM64 和移动端没有官方安装包；从源码自行构建不属于官方验证过的分发渠道。
-- **Linux 的 MCP 接入依赖系统 Node.js 22.12+**：Windows 未安装系统 Node 时使用应用自带的运行时。
+- **v0.15.0 官方安装包只覆盖 Windows x64**：Linux 发行暂缓；macOS、Windows ARM64 和移动端没有官方安装包；从源码自行构建不属于官方验证过的分发渠道。
+- **历史 Linux AppImage 的 MCP 接入依赖系统 Node.js 22.12+**：Windows 未安装系统 Node 时使用应用自带的运行时。
 - **不是 Chrome 的替代品**：没有扩展商店、账号同步和多设备同步；可加载本地已解压扩展，定位仍是「浏览器内核 + Agent 接入」。
 - **Agent 权限很大**：能看到页面内容、Cookie、Storage 与网络流量；白名单、会话隔离、脱敏和审批是缓解措施，不是通用 DLP。
 - **会话恢复有范围**：只恢复普通网页标签，不恢复隔离标签、内部页与非 HTTP(S) 地址，最多 20 条。
 - **同一用户数据目录只运行一个实例**：重复启动会聚焦已有窗口；开发版使用独立目录，可与安装版并存。
-- **安装与更新依赖 GitHub Releases**：访问受限时需要手动下载安装包；AppImage 原地更新要求当前文件目录可写。
+- **安装与更新依赖 GitHub Releases**：访问受限时需要手动下载安装包；旧版 AppImage 原地更新要求当前文件目录可写。
 - **不伪造页面可见性**：后台模式下页面拿到的 `document.visibilityState` 仍是真实值。少数站点会在不可见时暂停视频、轮询或渲染，这类站点请显式选择 `visible` 或 `background`；Aa Browser 不会用伪造状态绕过站点的安全检查。
 - **后台拖放有平台差异**：原生 HTML5 拖放在窗口最小化或完全隐藏时，部分平台（实测 Linux/X11）不会建立系统级拖放会话。此时 `browser_drag` 会改用页面内 DataTransfer 事件序列完成拖放，并在返回结果中标注「DOM 事件回退」；这条路径的事件不是 `isTrusted`，对强制校验可信输入的站点可能无效。
 
@@ -561,7 +561,7 @@ Aa Browser 不提供 Chrome 的原生 `chrome://extensions` 页面；在地址�
 | 截图 / PDF 存到哪 | 截图在 `~/.aabrowser/screenshots/`；PDF 默认在 `~/.aabrowser/downloads/` |
 | 站点打不开、提示不在白名单 | 清空或补充「站点白名单」；白名单只允许匹配的 HTTP/HTTPS 站点 |
 | Windows SmartScreen 提示 | 安装包未做代码签名；确认来源为官方 Release 后选「更多信息 → 仍要运行」 |
-| Linux 启动失败（FUSE / 沙箱） | 用 `APPIMAGE_EXTRACT_AND_RUN=1` 启动；检查 GTK3 / NSS / GBM / 音频库与用户命名空间策略 |
+| 旧版 Linux AppImage 启动失败（FUSE / 沙箱） | 用 `APPIMAGE_EXTRACT_AND_RUN=1` 启动；检查 GTK3 / NSS / GBM / 音频库与用户命名空间策略 |
 | 更新下载失败 | 检查 GitHub 访问；失败会按 1 / 5 / 15 分钟退避重试，也可在设置里手动重试 |
 | 想回到旧版本 | AppImage：复制用户数据 `previous-versions/<版本>.AppImage` 回安装目录；Windows：重装旧版安装包 |
 
@@ -619,7 +619,7 @@ npm run sbom           # 生成 CycloneDX SBOM
 node scripts/live-test.mjs   # 实战示例：MCP 驱动必应搜索全流程
 ```
 
-CI 在 Windows x64 与 Linux x64 上执行 `check`、工具与客户端接入校验、构建、SBOM、Electron 桌面回归、安装 / 卸载和打包产物连接验证。贡献流程见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
+CI 在 Windows x64 上执行 `check`、工具与客户端接入校验、构建、SBOM、Electron 桌面回归、安装 / 卸载和打包产物连接验证；Linux 桌面回归在修复前暂不纳入正式发行门禁。贡献流程见 [CONTRIBUTING.md](./CONTRIBUTING.md)。
 
 ## 文档
 
@@ -677,7 +677,7 @@ MIT 开源、免费。没有账号体系，也没有云端中转。浏览器本�
 
 **怎么升级或回滚？**
 
-Windows 安装版与 Linux AppImage 都可以在「设置 → 软件更新」检查升级；AppImage 的旧版本会保留在用户数据的 `previous-versions/` 下。细节见[自动更新](./docs/AUTO_UPDATE.md)与[平台指南](./docs/PLATFORMS.md)。
+Windows 安装版可以在「设置 → 软件更新」检查升级；旧版 AppImage 会保留在用户数据的 `previous-versions/` 下，但 v0.15.0 不发布新的 AppImage。细节见[自动更新](./docs/AUTO_UPDATE.md)与[平台指南](./docs/PLATFORMS.md)。
 
 ## 贡献
 

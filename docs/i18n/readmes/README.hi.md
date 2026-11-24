@@ -17,7 +17,7 @@
   <b>हिन्दी</b>
 </p>
 
-![License](https://img.shields.io/badge/license-MIT-blue) ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-lightgrey) ![MCP](https://img.shields.io/badge/protocol-MCP-purple)
+![License](https://img.shields.io/badge/license-MIT-blue) ![Platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey) ![MCP](https://img.shields.io/badge/protocol-MCP-purple)
 
 > ऐसा ब्राउज़र जिसे आप इंसान की तरह इस्तेमाल करते हैं, और एजेंट उसे इंजीनियर की तरह चलाता है।
 
