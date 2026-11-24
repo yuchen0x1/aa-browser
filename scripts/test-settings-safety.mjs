@@ -155,7 +155,7 @@ async function testRenderer() {
     function record(name) { report.checks.push(name); console.log(`PASS: ${name}`) }
     async function captureEvidence(name) {
       await delay(400)
-      const image = await win.webContents.capturePage(undefined, { stayHidden: true })
+      const image = await win.webContents.capturePage()
       assert.ok(!image.isEmpty(), `${name}: compositor returned an empty screenshot`)
       fs.writeFileSync(path.join(directory, name), image.toPNG())
     }

@@ -1,10 +1,11 @@
-import { WebContentsView, WebContents, session } from 'electron'
+import { WebContentsView, WebContents, app, session } from 'electron'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { Session } from 'electron'
 import type { TabInfo, TabRecoveryInfo } from '@shared/types'
 import { NetworkCapture } from './network'
 import { installDialogGuard } from './dialogs'
 import { installClosedShadowCapture } from './closed-shadow'
+import { noteNavigation, noteRendererRestart } from './ref-context'
 
 export interface Tab {
   id: string
@@ -183,6 +184,7 @@ export class TabManager {
 
   onChange: () => void = () => {}
   onRecovery: ((tab: Tab) => void) | null = null
+  onRecoveryDetails: ((tabId: string, reason: 'crash' | 'unresponsive', attempts: number) => void) | null = null
   /** 由主进程注入：为页面 WebContents 注册右键菜单（需访问 owner window） */
   onContextMenu: ((wc: WebContents) => void) | null = null
   /** 由主进程注入：页面完成导航时记录历史（url, title） */
@@ -217,7 +219,15 @@ export class TabManager {
   constructor(
     private newtabUrl: string,
     private searchUrl: string
-  ) {}
+  ) {
+    // Use Electron's app-level event as the single Renderer-exit source. Some
+    // platform/Electron combinations omit the WebContents event, and listening
+    // to both channels risks counting one exit twice or suppressing a real one.
+    app.on('render-process-gone', (_event, wc, details) => {
+      const tab = this.tabs.find((entry) => entry.view.webContents === wc)
+      if (tab) this.handleRendererGone(tab, details)
+    })
+  }
 
   isUrlAllowed(url: string): boolean {
     return isUrlAllowed(url, this.getAllowedSites(), this.newtabUrl)
@@ -596,7 +606,11 @@ export class TabManager {
 
   private recoverTab(tab: Tab, reason: 'crash' | 'unresponsive'): void {
     const wc = tab.view.webContents
-    if (tab.recovery.status === 'recovering' || tab.recovery.status === 'failed') return
+    if (tab.recovery.status === 'failed') return
+    // 渲染进程在恢复加载期间再次崩溃时必须计入下一次尝试；否则会一直卡在
+    // recovering，直到 15 秒超时才失败。unresponsive 在恢复中出现仍忽略，
+    // 避免同一页面连续忙等把恢复次数瞬间耗尽。
+    if (tab.recovery.status === 'recovering' && reason !== 'crash') return
     if (tab.recovery.attempts >= MAX_RECOVERY_ATTEMPTS || wc.isDestroyed()) {
       this.clearRecoveryTimer(tab)
       tab.recovery = {
@@ -618,6 +632,7 @@ export class TabManager {
     }, RECOVERY_TIMEOUT_MS)
     tab.recoveryTimer.unref?.()
     this.notifyRecovery(tab)
+    this.onRecoveryDetails?.(tab.id, reason, tab.recovery.attempts)
     try {
       wc.reload()
     } catch (error) {
@@ -625,6 +640,18 @@ export class TabManager {
       tab.recovery = { ...tab.recovery, status: 'failed', error: error instanceof Error ? error.message : String(error) }
       this.notifyRecovery(tab)
     }
+  }
+
+  private handleRendererGone(tab: Tab, details?: Electron.RenderProcessGoneDetails): void {
+    // 新渲染进程没有旧的 window.__aaRefs；先递增 epoch，任何旧 ref 都会在操作前被拒绝。
+    noteRendererRestart(tab.view.webContents)
+    tab.title = '页面已崩溃'
+    // 崩溃的渲染进程不再持有任何租约；立即清空计数，避免 keepRendering 永久阻止
+    // 后续标签恢复 backgroundThrottling，并让监控/视觉工具下次重新持有。
+    this.renderUsers.delete(tab.view.webContents)
+    this.syncRendering(tab.view.webContents)
+    this.recoverTab(tab, 'crash')
+    this.onChange()
   }
 
   private attachEvents(tab: Tab): void {
@@ -666,24 +693,21 @@ export class TabManager {
       this.onChange()
     })
     wc.on('did-navigate', (_e, url) => {
+      noteNavigation(wc)
       tab.url = url
       this.onChange()
       if (!tab.isolated) this.onNavigate?.(url, tab.title)
     })
+    wc.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
+      // 在提交前就使旧 ref 失效，避免导航进行中仍向旧文档派发操作。
+      if (isMainFrame && !isInPlace) noteNavigation(wc)
+    })
     wc.on('did-navigate-in-page', (_e, url, isMainFrame) => {
       if (!isMainFrame) return
+      noteNavigation(wc)
       if (url) tab.url = url
       this.onChange()
       if (!tab.isolated) this.onNavigate?.(url, tab.title)
-    })
-    wc.on('render-process-gone', () => {
-      tab.title = '页面已崩溃'
-      // 崩溃的渲染进程不再持有任何租约；立即清空计数，避免 keepRendering 永久阻止
-      // 后续标签恢复 backgroundThrottling，并让监控/视觉工具下次重新持有。
-      this.renderUsers.delete(wc)
-      this.syncRendering(wc)
-      this.recoverTab(tab, 'crash')
-      this.onChange()
     })
     wc.on('unresponsive', () => {
       this.recoverTab(tab, 'unresponsive')

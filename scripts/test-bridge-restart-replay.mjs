@@ -127,6 +127,8 @@ await test('read-only call is replayed against the restarted app instance', asyn
     await pair.restart()
     const replayed = await pair.waitFor(pair.receivedBySecond, (message) => message.tool === 'browser_snapshot', 'replayed call')
     assert.notEqual(replayed.id, firstCall.id, 'replay must use an id valid on the new instance')
+    assert.equal(replayed.args?.__aaRetryCount, 1, 'replayed read-only call carries a retry counter')
+    assert.notEqual(replayed.args, firstCall.args, 'replay args are copied so retry metadata never mutates the original call')
     pair.replySecond(replayed.id, 'snapshot after restart')
     const message = await response
     assert.equal(message.result?.isError, false)

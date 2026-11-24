@@ -9,16 +9,27 @@ import { releaseFileNames } from './release-assets.mjs'
 
 const tag = 'v0.2.0'
 const windowsOnlyTag = 'v0.15.0'
+const dualPlatformTag = 'v0.16.0'
 const names = releaseFileNames(tag)
 assert.ok(names.includes('sbom.cdx.json'), 'v0.2.0 releases must include the SBOM')
 const windowsOnlyNames = releaseFileNames(windowsOnlyTag)
-assert.equal(windowsOnlyNames.length, 5, 'v0.15.0 must contain only the Windows release set')
-assert.ok(windowsOnlyNames.includes('aa-browser-setup-0.15.0.exe'))
-assert.ok(windowsOnlyNames.includes('aa-browser-setup-0.15.0.exe.blockmap'))
-assert.ok(windowsOnlyNames.includes('latest.yml'))
-assert.ok(windowsOnlyNames.includes('sbom.cdx.json'))
-assert.ok(windowsOnlyNames.includes('SHA256SUMS.txt'))
-assert.ok(!windowsOnlyNames.some((name) => name.includes('AppImage') || name === 'latest-linux.yml'))
+assert.deepEqual(windowsOnlyNames, [
+  'SHA256SUMS.txt',
+  'aa-browser-setup-0.15.0.exe',
+  'aa-browser-setup-0.15.0.exe.blockmap',
+  'latest.yml',
+  'sbom.cdx.json'
+].sort(), 'v0.15.0 must contain exactly the historical Windows release set')
+const dualPlatformNames = releaseFileNames(dualPlatformTag)
+assert.deepEqual(dualPlatformNames, [
+  'SHA256SUMS.txt',
+  'aa-browser-0.16.0-linux-x86_64.AppImage',
+  'aa-browser-setup-0.16.0.exe',
+  'aa-browser-setup-0.16.0.exe.blockmap',
+  'latest-linux.yml',
+  'latest.yml',
+  'sbom.cdx.json'
+].sort(), 'v0.16.0 must contain exactly the dual-platform release set')
 const repo = { owner: 'fixture', repo: 'fixture' }
 const sha = 'a'.repeat(40)
 const digest = (data) => 'sha256:' + createHash('sha256').update(data).digest('hex')

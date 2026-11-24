@@ -11,9 +11,9 @@
  * Agent 通过 ref 调用 browser_click / browser_type 等工具。
  *
  * v2 增量特性（降 token）：
- *   1. ref 跨快照复用：仍连接的元素直接沿用旧 ref；React 重渲染重建的节点
- *      通过"内容签名"（tag|role|name|href）匹配旧 ref，只有新元素才分配新 ref。
- *      → 旧快照里的 ref 持续有效，动作更稳。
+ *   1. ref 跨快照复用：只在同一个文档中复用同一个 DOM Node 的旧 ref。
+ *      节点被替换、文档导航、刷新或 Renderer 重启后，即使内容相同也分配新 ref。
+ *      → 旧 ref 不会被静默映射到另一个相似元素。
  *   2. 增量 diff：新旧树做前缀/后缀裁剪 + LCS：
  *      - 完全一致 → 「无变化」一行（≈50 token）
  *      - 小变化   → 只返回变更区块 ± 上下文
@@ -63,13 +63,91 @@ export function __aaSnapshot() {
   try {
     seqFloor = Math.max(0, Math.floor(Number(window.__aaRefSeq) || 0))
   } catch (e) {}
+  // 主进程按 WebContents 维护单调 ref 底线；新文档/新 Renderer 只能从这里之后
+  // 继续编号，绝不把旧 eN 名称复用到新的节点。
+  try {
+    seqFloor = Math.max(seqFloor, Math.floor(Number(opts.refFloor) || 0))
+  } catch (e) {}
   seq = seqFloor
   var refs = {} // ref -> Element（动作定位）
   var refOf = null // Map Element -> ref（活元素复用）
-  var sigPool = {} // sig -> [ref]（失连元素的签名池）
   var elements = [] // 可序列化的元素信息
   var lines = []
   var topDoc = document
+
+  /**
+   * 一个节点所属 Document 仍然连接在当前顶层文档的 frame 树上吗？
+   * 同源 iframe 的 document.open()/导航会换掉 contentDocument；旧节点可能仍
+   * 报告 isConnected=true，但它已经不在当前页面上下文中，必须视为失效。
+   */
+  function isCurrentDocument(doc) {
+    var cur = doc
+    var guard = 0
+    while (cur && cur !== document) {
+      if (++guard > 32) return false
+      var frame = null
+      try {
+        frame = cur.defaultView && cur.defaultView.frameElement
+      } catch (e) {
+        return false
+      }
+      if (!frame) return false
+      try {
+        if (!frame.isConnected) return false
+      } catch (e) {
+        return false
+      }
+      try {
+        if (frame.contentDocument !== cur) return false
+      } catch (e) {
+        return false
+      }
+      cur = frame.ownerDocument
+      if (!cur) return false
+    }
+    return cur === document
+  }
+
+  function isCurrentFrameContext(el) {
+    try {
+      return !!(el && el.nodeType === 1 && isCurrentDocument(el.ownerDocument))
+    } catch (e) {
+      return false
+    }
+  }
+
+  function isCurrentElement(el) {
+    try {
+      return !!(el && el.nodeType === 1 && el.isConnected && isCurrentFrameContext(el))
+    } catch (e) {
+      return false
+    }
+  }
+
+  var knownRefs = null
+  try {
+    knownRefs = window.__aaRefs && typeof window.__aaRefs === 'object' ? window.__aaRefs : null
+  } catch (e) {}
+
+  // refOf 只接受同一文档中的精确 Node。不能按 tag/name/href 等内容签名匹配：
+  // React/Vue 重建出的新 Node 即使看起来一样，也不等于用户快照中的目标。
+  try {
+    refOf = new Map()
+  } catch (e) {
+    refOf = null
+  }
+  if (refOf && knownRefs) {
+    for (var kr in knownRefs) {
+      if (!/^e\d+$/.test(kr)) continue
+      var knownEl = knownRefs[kr]
+      if (!knownEl || typeof knownEl !== 'object') continue
+      try {
+        if (!isCurrentFrameContext(knownEl)) continue
+        refOf.set(knownEl, kr)
+        seq = Math.max(seq, Math.floor(Number(kr.slice(1)) || 0))
+      } catch (e) {}
+    }
+  }
 
   /* ── 恢复上次快照状态（同 URL 且未强制 full 时） ── */
   var prevState = null
@@ -87,21 +165,13 @@ export function __aaSnapshot() {
     prevState = null
   }
   if (prevState) {
-    try {
-      refOf = new Map()
-    } catch (e) {
-      refOf = null
-    }
     seq = Math.max(seqFloor, prevState.nextSeq || 0)
     var oldRefs = prevState.refs
-    var infoByRef = {}
-    var prevEls = prevState.elements || []
-    for (var pe = 0; pe < prevEls.length; pe++) infoByRef[prevEls[pe].ref] = prevEls[pe]
     for (var r0 in oldRefs) {
       var el0 = oldRefs[r0]
       var conn = false
       try {
-        conn = !!(el0 && el0.isConnected)
+        conn = isCurrentElement(el0)
       } catch (e) {}
       if (conn) {
         refs[r0] = el0
@@ -109,13 +179,6 @@ export function __aaSnapshot() {
           try {
             refOf.set(el0, r0)
           } catch (e) {}
-        }
-      } else {
-        var inf = infoByRef[r0]
-        if (inf) {
-          var sg = [inf.tag, inf.role, inf.name, inf.href || ''].join('|')
-          if (!sigPool[sg]) sigPool[sg] = []
-          sigPool[sg].push(r0)
         }
       }
     }
@@ -305,8 +368,8 @@ export function __aaSnapshot() {
     }
   }
 
-  /** ref 分配：活元素复用 > 签名匹配失连元素 > 新 ref */
-  function assignRef(el, sig) {
+  /** ref 分配：同一 Document 的精确 Node 复用；其余一律分配新 ref。 */
+  function assignRef(el) {
     var ref = null
     if (refOf) {
       try {
@@ -314,24 +377,18 @@ export function __aaSnapshot() {
       } catch (e) {}
     }
     if (!ref) {
-      var pool = sigPool[sig]
-      // 按分配顺序取最早的失连 ref：列表重渲染后同一位置的元素仍拿到同一个编号，
-      // 而不是 LIFO 地把编号整体反转。
-      if (pool && pool.length) ref = pool.shift()
-      else {
-        seq++
-        ref = 'e' + seq
+      seq++
+      ref = 'e' + seq
+      try {
+        window.__aaRefSeq = seq
+      } catch (e) {}
+      if (refOf) {
         try {
-          window.__aaRefSeq = seq
+          refOf.set(el, ref)
         } catch (e) {}
       }
     }
     refs[ref] = el
-    if (refOf) {
-      try {
-        refOf.set(el, ref)
-      } catch (e) {}
-    }
     return ref
   }
 
@@ -423,8 +480,7 @@ export function __aaSnapshot() {
       if (optsList.length) info.options = optsList
     }
 
-    var sig = [info.tag, info.role, info.name, info.href || ''].join('|')
-    info.ref = assignRef(el, sig)
+    info.ref = assignRef(el)
     elements.push(info)
 
     // 树行
@@ -802,8 +858,30 @@ export function __aaSnapshot() {
   }
 
   /* ── 持久化状态并返回 ── */
+  var exposedRefs = refs
+  // 旧页面上下文可能保留已脱离当前 frame 树的节点（典型场景：同源 iframe
+  // document.open/导航后旧节点仍报告 isConnected=true）。Proxy 在每次动作定位
+  // 时重新核验 frame 链，让旧 ref 直接变成 no-ref，而不是落到旧文档上。
   try {
-    window.__aaRefs = refs
+    if (typeof Proxy === 'function') {
+      exposedRefs = new Proxy(refs, {
+        get: function (target, key) {
+          if (typeof key === 'string' && /^e\d+$/.test(key)) {
+            var value = target[key]
+            // 只过滤“frame 上下文已经换掉”的节点；普通 DOM 移除仍交给动作脚本
+            // 返回 detached，保留原有错误分类和可操作性提示。
+            if (value && !isCurrentFrameContext(value)) return undefined
+            return value
+          }
+          return target[key]
+        }
+      })
+    }
+  } catch (e) {
+    exposedRefs = refs
+  }
+  try {
+    window.__aaRefs = exposedRefs
     window.__aaRefSeq = seq
     window.__aaSnapState = {
       v: 2,
@@ -829,6 +907,7 @@ export function __aaSnapshot() {
     depthLimitReached: depthLimitReached,
     textClipped: textClipped,
     optionsClipped: optionsClipped,
+    refSeq: seq,
     totalLines: totalLines,
     cursor: cursor,
     nextCursor: nextCursor,

@@ -2,6 +2,17 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
+## v0.16.0 — 2026-11-24
+
+- **持久任务中心**：`TaskCenter` 已接入 `AgentServer`，任务状态、步骤、执行历史、客户端来源、活动标签、Renderer PID、错误和恢复次数写入版本化 `task-center.json`；采用原子写入、损坏备份和有界裁剪。任务 ID 含客户端、调用序号和启动时间，桥或应用重启后复用请求 ID 也不会与旧终态记录撞键；`task-history.json` 丢失时仍可从有效 TaskCenter 重建记录。进程重启后非终态任务统一转为 `interrupted`，绝不自动重放。
+- **副作用幂等账本与会话所有权**：新增独立 `task-idempotency.json`，危险写操作在执行前持久化 key；缺 key、重复 key、账本损坏或不可写均拒绝执行。TaskCenter 损坏不会抹去防重记录；MCP 任务查询按会话身份隔离，避免客户端数字 ID 重用导致越权。
+- **真实崩溃恢复验证**：新增真实 Electron 故障注入套件，覆盖 `forcefullyCrashRenderer()`、系统级强杀、正常标签关闭、页面导航中崩溃、执行中崩溃、多标签隔离、恢复中再次崩溃、旧 Ref 失效和恢复次数耗尽；不再使用普通函数模拟崩溃。
+- **Ref 代际管理**：快照、导航和渲染进程分别计数；导航后、渲染进程重启后或快照过期时旧 Ref 被拒绝，并返回 `NAVIGATION_ERROR` / `RENDERER_CRASH` / `STALE_REF` 等可操作错误。
+- **操作预检**：点击、输入、清空、下拉选择前检查元素存在、DOM 连接、可见性、尺寸、原生/ARIA 禁用、只读和可编辑性；点击前要求连续定位稳定，DOM 兜底失败不再返回假成功。输入前二次核验焦点，inert/模态框或焦点陷阱无法把文本重定向到先前输入框。后台 DOM 兜底与视觉遮挡继续区分处理。
+- **统一错误与恢复**：所有 `ActionError` 携带机器可读分类前缀；页面关闭、导航、网络、超时、Ref 失效、Renderer 崩溃和任务冲突分别归类。任务终态写入幂等，MCP 断线后同一会话可重连并查询原任务；`browser_tasks` 展示来源、标签、恢复次数、当前步骤和持久任务 ID。
+- **原子写入加固**：Windows 杀毒软件或索引器短暂占用目标文件时，JSON 原子替换对 `EPERM`/`EACCES`/`EBUSY` 做有界重试；最终失败仍保留旧文件并清理临时文件。
+- **Linux CI 验证门禁**：桌面矩阵重新纳入 `ubuntu-24.04`，新增崩溃恢复与 Ref 生命周期套件；本版本仍待 PR 双平台 CI 通过后才能合并/发行，Linux 范围限 Ubuntu 24.04 CI/Xvfb，不代表所有桌面发行版。
+
 ## v0.15.0 — 2026-11-24
 
 - **Renderer recovery**: crashed or unresponsive tabs now expose a recovery state, perform bounded reload recovery, and report failure instead of silently remaining unusable.

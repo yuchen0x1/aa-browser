@@ -2,9 +2,15 @@
 
 历史发布正文见 [归档索引](../releases/release-notes.md)。本表只记录已核实的正式版本；候选不占用正式版本记录。
 
+## v0.16.0 候选（待发行）
+
+- 开发分支为 `codex/runtime-reliability`，基于 PR #16 合并后的 `main` / `5e58de4`；版本号已升至 `0.16.0`。
+- 候选包含 TaskCenter 持久化、真实 Renderer 崩溃注入、Ref 代际、操作预检、统一错误分类和 Linux 桌面矩阵恢复。
+- PR、合并提交、标签 CI、7 项资产、更新元数据、摘要和不可变 Release 尚未产生；本节不得作为“已发布”证据。完成发行后以实际提交、run ID、Tag 和 Release URL 替换候选记录。
+
 ## v0.15.0 正式发行（2026-11-24）
 
-- 最新正式版本为 v0.15.0，标签指向发布提交 `c3368bf`；GitHub Release 为 Latest、非草稿、非预发布、不可变。
+- 截至 v0.16.0 候选完成前，最新正式版本为 v0.15.0，标签指向发布提交 `c3368bf`；GitHub Release 为 Latest、非草稿、非预发布、不可变。
 - 公开资产共 5 项：`aa-browser-setup-0.15.0.exe`、`aa-browser-setup-0.15.0.exe.blockmap`、`latest.yml`、`sbom.cdx.json`、`SHA256SUMS.txt`。没有 Linux AppImage 或 `latest-linux.yml`。
 - 该版本引入有界渲染器恢复和严格任务状态机；Linux 桌面回归未通过，v0.15.0 只发布 Windows x64。真实渲染进程崩溃注入恢复与 Windows Authenticode 签名仍未验证，安装包未签名。
 - 发布正文归档已与 GitHub 公开正文对齐，`node scripts/check-release-bodies.mjs --remote` 通过 30 个版本。
@@ -51,6 +57,7 @@
 
 | 正式版本 | 状态与证据 |
 | --- | --- |
+| v0.16.0 | 候选，尚未合并或发布；最终提交、CI run、Tag、Release 和资产核验待补。 |
 | [v0.15.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.15.0) | 已发布（2026-11-24），Latest；仅 Windows x64 资产，Linux 因 CI 回归暂缓。 |
 | [v0.14.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.14.0) | 已发布（2026-11-23），双平台最终版本。 |
 | [v0.13.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.13.0) | 已发布（2026-11-23）。标签 CI `45099078476` 双平台与发布作业成功；7 项资产、SHA-256 清单、SBOM、更新元数据与远程正文归档校验通过。首次运行的夹具失败已在同标签重跑前修复。 |

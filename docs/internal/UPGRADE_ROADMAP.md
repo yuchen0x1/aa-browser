@@ -532,8 +532,8 @@
 ### EV-035 — 崩溃恢复和会话恢复
 
 - **模块**：窗口、标签、持久化。
-- **当前问题**：v0.15.0 已实现有界渲染器恢复与跨会话普通标签恢复；仍缺真实崩溃注入验证，崩溃后的 workspace 级完整恢复未覆盖。
-- **依据**：`tabs.ts` 已实现 `render-process-gone` / `unresponsive` 恢复，`session-store.ts` 已持久化普通 HTTP(S) 标签；真实崩溃路径仍需专项自动化。
+- **当前问题**：v0.16.0 候选已实现有界渲染器恢复、真实崩溃注入和跨会话普通标签恢复；仍缺确定性的 `unresponsive` 故障注入，崩溃后的 workspace 级完整恢复未覆盖。
+- **依据**：`tabs.ts` 已实现 `render-process-gone` / `unresponsive` 恢复，`scripts/test-renderer-crash.mjs` 使用真实 Electron 与系统级强杀验证崩溃路径，`session-store.ts` 已持久化普通 HTTP(S) 标签。
 - **对标参考**：Brave/Zen 的会话恢复；BrowserGym 的可重复环境。
 - **参考实现方式**：安全保存 URL/title/isolated 标志，不保存敏感正文和临时 token。
 - **改进方案**：异常退出后显示恢复提示，由用户选择恢复。
@@ -624,7 +624,7 @@
 | 编号 | 状态 | 实际改动与证据 |
 | --- | --- | --- |
 | EV-019 | 已完成（摘要部分） | 新增只读 `browser_performance`：导航耗时、首绘、资源体积与慢资源、JS 堆、DOM 规模。冒烟测试在真实页面断言字段；工具契约 34 个。导航瀑布与错误聚合仍归 EV-020。 |
-| EV-035 | 部分完成 | 跨会话标签恢复：`session-store.ts` 原子写入、凭据剥离、去重、20 条上限、拒绝损坏/未来版本记录；启动时恢复普通标签与活动标签，跳过隔离标签和内部页；设置可关闭。持久化单测与桌面 E2E 覆盖。渲染进程崩溃现场识别/恢复提示仍未实现。 |
+| EV-035 | 部分完成 | 跨会话标签恢复与真实 Renderer 崩溃注入已覆盖；`session-store.ts` 原子写入、凭据剥离、去重、20 条上限，启动时恢复普通标签与活动标签。`test:renderer-crash` 验证真实进程退出、URL/标签身份、旧 Ref 失效和恢复上限；确定性 `unresponsive` 注入与 workspace 级完整恢复仍未实现。 |
 | EV-037 | 部分完成 | `npm run sbom` 生成 CycloneDX 1.5，覆盖生产与开发依赖并单列 Electron 运行时；SBOM 进入 Release 资产和 `SHA256SUMS.txt`，缺失时发布清单生成失败，公开发行校验解析并核对版本。许可证自动合规检查与安全公告流程仍沿用人工复核。 |
 | EV-040 | 未实施 | 本轮文档为人工同步；工具表仍由 `check-tools.mjs` 三方一致性检查防漂移。 |
 

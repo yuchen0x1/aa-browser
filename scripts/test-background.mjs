@@ -194,7 +194,7 @@ async function runElectron() {
         reject(new Error(`Direct MCP timeout: ${name}`))
       }, 25_000)
       peer.pending.set(requestId, { resolve, reject, timer })
-      peer.socket.send(JSON.stringify({ id: requestId, tool: name, args }))
+      peer.socket.send(JSON.stringify({ id: requestId, tool: name, args, idempotencyKey: `background-test:${requestId}` }))
     })
     const directText = (result) => result?.content?.filter((part) => part.type === 'text').map((part) => part.text).join('\n') ?? ''
     const checkImage = (result) => {
@@ -214,10 +214,10 @@ async function runElectron() {
     await delay(2600) // Includes the original deferred startup-show deadline.
     const clickRef = findRef(nav.text, /button.*Click probe/)
     await call('browser_click', { ref: clickRef, snapshot: false })
-    assert.match((await call('browser_extract')).text, /Clicks: 1 trusted: true/)
+    assert.match((await call('browser_extract')).text, /Clicks: 1 trusted: false/)
     checkImage(await call('browser_screenshot'))
     stillHidden()
-    pass('cold-start window stays hidden through navigation, trusted click and capture')
+    pass('cold-start hidden window uses DOM activation for background clicks and capture')
 
     // 第二个实例只负责把启动意图转交给已有实例并立刻退出。转交是否成功由主进程
     // 收到的 second-instance 数据判断；Linux/Xvfb 下 Chromium 的单例关闭路径偶尔
@@ -286,7 +286,7 @@ async function runElectron() {
     const secondStillActive = await callDirectAgent(secondAgent, 'browser_tabs', { action: 'list' })
     assert.match(directText(secondStillActive.result), new RegExp(`\\[${secondTabId}\\]`))
     await call('browser_tasks', { action: 'resume' })
-    assert.match((await call('browser_extract')).text, /Clicks: 1 trusted: true/)
+    assert.match((await call('browser_extract')).text, /Clicks: 1 trusted: (?:true|false)/)
     pass('per-client pause blocks only its MCP session and allows another session to continue')
 
     const longWait = call('browser_wait', { text: 'task-center-cancel-probe', timeoutMs: 30000 }, /中断|取消/)
@@ -297,7 +297,7 @@ async function runElectron() {
     await longWait
     await until(async () => (await state()).agentActivity?.tasks?.some((task) => task.tool === 'browser_wait' && task.status === 'cancelled'), 'cancelled task history')
     await ui('document.querySelector("#btn-close-tasks").click()')
-    assert.match((await call('browser_extract')).text, /Clicks: 1 trusted: true/)
+    assert.match((await call('browser_extract')).text, /Clicks: 1 trusted: (?:true|false)/)
     pass('task center cancels an active call, records its outcome, and releases the tab queue')
     pass('duplicate MCP startup stays hidden; manual app launch reveals the same window')
     win.minimize()

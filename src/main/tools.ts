@@ -1,4 +1,4 @@
-import type { ToolContent, BackgroundMode, MonitorState, AgentActivityState } from '@shared/types'
+import type { ToolContent, BackgroundMode, MonitorState, AgentActivityState, AgentTaskRecord } from '@shared/types'
 import { TOOL_DEFS, TOOL_ANNOTATIONS } from '@shared/tool-defs.mjs'
 export { TOOL_ANNOTATIONS }
 import { checkedStateScript, fingerprintScript, jsLiteral, refLiteral, tagNameScript } from '@snapshot/scripts'
@@ -51,6 +51,8 @@ import {
   doConsoleLogs,
   raceAbort,
   resolveWebContents,
+  assertRefContext,
+  assertTabUsable,
   throwIfAborted,
   withTabLock
 } from './actions'
@@ -188,7 +190,8 @@ export interface WindowControl {
   takeover?: () => MonitorState
   releaseToAi?: () => MonitorState
   assertAiControl?: () => void
-  taskState?: (clientId?: number) => AgentActivityState
+  taskState?: (clientId?: number, sessionId?: string) => AgentActivityState
+  taskDetail?: (taskId: string, clientId?: number, sessionId?: string) => AgentTaskRecord | null
   cancelTask?: (id: number, client?: number) => boolean
   pauseTasks?: (clientId?: number, exceptCallId?: number) => void
   resumeTasks?: (clientId?: number) => void
@@ -238,6 +241,7 @@ export function buildTools(
     const sig = signal instanceof AbortSignal ? signal : undefined
     return withTabLock(tab, sig, async () => {
       assertToolRunning(sig)
+      assertTabUsable(tab)
       windowCtl.assertAiControl?.()
       return run()
     })
@@ -978,7 +982,7 @@ export function buildTools(
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const wc = tab.view.webContents
-      if (wc.isDestroyed()) throw new ActionError('页面已关闭')
+      if (wc.isDestroyed()) throw new ActionError('reason=target_closed 页面已关闭', 'TARGET_CLOSED')
       const limit = Math.min(20, Math.max(1, Math.floor(Number(args['slowest'] ?? 5)) || 5))
       const summary = (await onTab(tab, callSignal(args), () => wc.executeJavaScript(PERFORMANCE_SCRIPT, true))) as PerformanceSummary
       const lines: string[] = ['页面性能摘要', `url: ${String(summary?.url ?? tab.url)}`]
@@ -1366,20 +1370,71 @@ export function buildTools(
     handler: async (args) => {
       const action = String(args['action'] ?? 'list')
       const clientId = Number.isSafeInteger(args['__aaClientId']) ? Number(args['__aaClientId']) : tabs.currentAgentClientId()
+      const sessionId = typeof args['__aaClientSession'] === 'string' ? args['__aaClientSession'] : undefined
+      const formatTask = (task: AgentTaskRecord): string => {
+        const progress = typeof task.progress === 'number'
+          ? ` · 进度 ${task.progress}${typeof task.total === 'number' ? `/${task.total}` : ''}`
+          : ''
+        const detail = task.error ? ` · 失败原因: ${task.error}` : task.message ? ` · ${task.message}` : ''
+        const recovery = task.recovery
+          ? ` · 恢复 ${task.recovery.resumable ? '可显式恢复' : '不可自动恢复'}${task.recovery.requiresConfirmation ? '（需确认）' : ''} [${task.recovery.reason}]`
+          : typeof task.retryCount === 'number' && task.retryCount > 0
+            ? ` · 恢复 ${task.retryCount} 次`
+            : ''
+        const source = task.source ? ` · 来源 ${task.source}` : ''
+        const tab = task.tabId ? ` · 标签 ${task.tabId}` : ''
+        const taskId = task.taskId ? ` · 任务 ${task.taskId}` : ''
+        const sideEffect = task.sideEffect && task.sideEffect.risk !== 'none'
+          ? ` · 副作用 ${task.sideEffect.risk}${task.sideEffect.destructive ? '(高危)' : ''}`
+          : ''
+        const lastStep = task.steps?.at(-1)
+        const step = lastStep ? ` · 当前步骤 ${lastStep.label}${lastStep.status ? ` (${lastStep.status})` : ''}` : ''
+        return `#${task.id} · 客户端 ${task.client} · ${task.tool} · ${task.status}${progress}${recovery}${source}${tab}${step}${sideEffect}${taskId}${detail}`
+      }
+      const formatDetail = (task: AgentTaskRecord): string => {
+        const timestamp = (value?: number): string => value ? new Date(value).toISOString() : '—'
+        const steps = (task.steps ?? []).slice(-50).map((step) => {
+          const status = step.status ? ` [${step.status}]` : ''
+          const detail = step.detail ? ` — ${step.detail}` : ''
+          return `${timestamp(step.at)}${status} ${step.label}${detail}`
+        })
+        const recovery = task.recovery
+          ? JSON.stringify({ ...task.recovery })
+          : `{"automaticReplay":false,"resumable":false,"reason":"not_recorded"}`
+        return [
+          `任务 ${task.taskId ?? `#${task.id}`}`,
+          `工具: ${task.tool}`,
+          `状态: ${task.status}`,
+          `客户端: ${task.client}${task.clientSession ? ` · 会话 ${task.clientSession}` : ''}`,
+          `来源: ${task.source ?? 'unknown'}`,
+          `标签: ${task.tabId ?? '—'}`,
+          `开始: ${timestamp(task.startedAt)}`,
+          `更新: ${timestamp(task.updatedAt)}`,
+          `完成: ${timestamp(task.finishedAt)}`,
+          `恢复次数: ${task.retryCount ?? 0}`,
+          `恢复策略: ${recovery}`,
+          `副作用: ${task.sideEffect ? JSON.stringify(task.sideEffect) : 'not_recorded'}`,
+          `当前步骤: ${task.steps?.at(-1)?.label ?? '—'}`,
+          ...(task.error ? [`错误: ${task.error}`] : []),
+          `步骤 (${steps.length}):`,
+          ...(steps.length ? steps : ['（无）'])
+        ].join('\n')
+      }
       if (action === 'list') {
-        const activity = windowCtl.taskState?.(clientId) ?? { active: false, paused: false, calls: [] }
+        const activity = windowCtl.taskState?.(clientId, sessionId) ?? { active: false, paused: false, calls: [] }
         const limit = Math.max(1, Math.min(50, Math.floor(Number(args['limit']) || 20)))
         const tasks = activity.tasks?.slice(0, limit) ?? []
         const lines = tasks.length
-          ? tasks.map((task) => {
-              const progress = typeof task.progress === 'number'
-                ? ` · 进度 ${task.progress}${typeof task.total === 'number' ? `/${task.total}` : ''}`
-                : ''
-              const detail = task.error ? ` · 失败原因: ${task.error}` : task.message ? ` · ${task.message}` : ''
-              return `#${task.id} · 客户端 ${task.client} · ${task.tool} · ${task.status}${progress}${detail}`
-            }).join('\n')
+          ? tasks.map(formatTask).join('\n')
           : (activity.calls ?? []).map((call) => `#${call.id} · 客户端 ${call.client} · ${call.tool} · running`).join('\n') || '（暂无任务记录）'
         return { content: [text(`任务状态: ${activity.paused ? '已暂停' : activity.active ? '运行中' : '空闲'}\n${lines}`)] }
+      }
+      if (action === 'get') {
+        const taskId = String(args['taskId'] ?? '').trim()
+        if (!taskId) throw new ActionError('get 需要提供 taskId；可先调用 browser_tasks action=list。')
+        const task = windowCtl.taskDetail?.(taskId, clientId, sessionId)
+        if (!task) throw new ActionError('任务不存在，或不属于当前 MCP 会话。')
+        return { content: [text(formatDetail(task))] }
       }
       if (action === 'cancel') {
         const id = Number(args['id'])
@@ -1393,13 +1448,13 @@ export function buildTools(
       }
       if (action === 'pause') {
         windowCtl.pauseTasks?.(clientId, Number.isSafeInteger(args['__aaCallId']) ? Number(args['__aaCallId']) : undefined)
-        return { content: [text('当前 MCP 客户端的后台任务已暂停；其它客户端不受影响。')] }
+        return { content: [text('当前 MCP 客户端的后台任务已暂停；在途任务已安全中断且不会自动重放，其它客户端不受影响。')] }
       }
       if (action === 'resume') {
         windowCtl.resumeTasks?.(clientId)
         return { content: [text('当前 MCP 客户端的后台任务已恢复。')] }
       }
-      throw new ActionError(`未知 action: ${action}。可用 action：list、cancel、pause、resume。`)
+      throw new ActionError(`未知 action: ${action}。可用 action：list、get、cancel、pause、resume。`)
     }
   })
 
@@ -1412,6 +1467,7 @@ export function buildTools(
       if (!fields.length) throw new ActionError('fields 不能为空')
       // 整张表单在一次标签页锁内完成：并发客户端不能在逐字段填写之间穿插其他操作。
       return onTab(tab, signal, async (): Promise<{ content: ToolContent[] }> => {
+        assertRefContext(tab.view.webContents)
         const done: string[] = []
         for (const field of fields) {
           assertToolRunning(signal)
@@ -1549,6 +1605,7 @@ export function buildTools(
       const expression = String(args['expression'] ?? '')
       if (!expression.trim()) throw new ActionError('expression 不能为空')
       return onTab(tab, args['__aaSignal'], async (): Promise<{ content: ToolContent[] }> => {
+        if (args['ref']) assertRefContext(tab.view.webContents)
         await opGate(
           {
             site: siteOf(tab),
@@ -1873,7 +1930,7 @@ export function buildTools(
   // Individual handlers retain their own checks around multi-step actions.
   const canControlPaused = (toolName: string, args: Record<string, unknown>): boolean =>
     (toolName === 'browser_window' && args['action'] === 'release') ||
-    (toolName === 'browser_tasks' && ['list', 'cancel', 'resume'].includes(String(args['action'] ?? 'list')))
+    (toolName === 'browser_tasks' && ['list', 'get', 'cancel', 'resume'].includes(String(args['action'] ?? 'list')))
   return tools.map((tool) => {
     const annotations = TOOL_ANNOTATIONS[tool.name]
     if (!annotations) throw new Error(`工具缺少 MCP annotations：${tool.name}`)

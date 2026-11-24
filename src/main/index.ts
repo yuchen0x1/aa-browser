@@ -1122,6 +1122,7 @@ app.whenReady().then(async () => {
   finder = new PageFinder(tabManager, pushState)
   tabManager.onChange = onTabChange
   tabManager.onRecovery = () => pushState()
+  tabManager.onRecoveryDetails = (tabId, reason, attempts) => agentServer?.noteTabRecovery(tabId, reason, attempts)
   tabManager.isWindowForeground = () => !!win && win.isVisible() && !win.isMinimized() && win.isFocused()
   tabManager.isWindowMinimized = () => !!win && win.isMinimized()
   tabManager.isViewAttached = (view) => !!win && !win.isDestroyed() && win.contentView.children.includes(view)
@@ -1283,10 +1284,11 @@ app.whenReady().then(async () => {
       assertAiControl: () => {
         if (monitor?.getState().control === 'human') throw new Error('当前处于人工接管，AI 操作已锁定；请先调用 browser_window action=release。')
       },
-      taskState: (clientId) => {
+      taskState: (clientId, sessionId) => {
         const activity = agentServer?.activity() ?? { active: false, paused: false, calls: [] }
         if (clientId === undefined) return activity
         const calls = (activity.calls ?? []).filter((call) => call.client === clientId)
+        const tasks = agentServer?.tasksFor(clientId, sessionId) ?? []
         return {
           ...activity,
           active: calls.length > 0,
@@ -1294,9 +1296,10 @@ app.whenReady().then(async () => {
           tool: calls[0]?.tool,
           startedAt: calls[0]?.startedAt,
           calls,
-          tasks: activity.tasks?.filter((task) => task.client === clientId)
+          tasks
         }
       },
+      taskDetail: (taskId, clientId, sessionId) => agentServer?.taskDetail(taskId, clientId, sessionId) ?? null,
       cancelTask: (id, client) => agentServer?.cancelCall(id, client) ?? false,
       pauseTasks: (clientId, exceptCallId) => {
         if (clientId !== undefined) {
@@ -1364,6 +1367,21 @@ app.whenReady().then(async () => {
         tabManager?.releaseAgentClient(clientId)
         pushState()
       }, 60_000).unref()
+    },
+    (tabId) => {
+      const tab = tabManager ? (tabId ? tabManager.get(tabId) : tabManager.active()) : null
+      if (!tab) return null
+      try {
+        const rendererPid = tab.view.webContents.getOSProcessId()
+        return {
+          id: tab.id,
+          url: tab.url,
+          title: tab.title,
+          ...(rendererPid > 0 ? { rendererPid } : {})
+        }
+      } catch {
+        return { id: tab.id, url: tab.url, title: tab.title }
+      }
     }
   )
   void agentServer.start().then(() => {

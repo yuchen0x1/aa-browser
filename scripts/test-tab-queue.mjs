@@ -17,7 +17,7 @@ const require = createRequire(import.meta.url)
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-tab-queue-'))
 const out = path.join(tmp, 'compiled')
 const cancelled = { message: /已被用户中断/ }
-const closed = { message: '页面已关闭' }
+const closed = { name: 'ActionError', code: 'TARGET_CLOSED', message: /页面已关闭/ }
 const options = { timeout: 3000 } // Deadlock guard only; ordering uses explicit gates.
 
 function deferred() {
@@ -61,7 +61,8 @@ try {
     '@snapshot/engine': { __aaSnapshot() {} },
     'node:async_hooks': require('node:async_hooks'),
     './progress': { reportProgress() {} },
-    './evidence': {}
+    './evidence': {},
+    './ref-context': { checkRefContext: () => null, noteSnapshot() {}, noteNavigation() {}, noteRendererRestart() {} }
   }
   compileFunction(fs.readFileSync(filename, 'utf8'), ['require', 'module', 'exports'], { filename })((name) => {
     assert.ok(Object.hasOwn(deps, name), `Unexpected production dependency: ${name}`)
@@ -384,7 +385,14 @@ try {
   await test('navigation timeout stops and drains raw loadURL before releasing the tab', options, async () => {
     let timeoutCallback
     const tabsModule = { exports: {} }
-    const tabDeps = { electron: {}, 'node:async_hooks': require('node:async_hooks'), './network': {}, './dialogs': {}, './closed-shadow': {} }
+    const tabDeps = {
+      electron: { app: { on() {} } },
+      'node:async_hooks': require('node:async_hooks'),
+      './network': {},
+      './dialogs': {},
+      './closed-shadow': {},
+      './ref-context': { noteNavigation() {}, noteRendererRestart() {} }
+    }
     const tabsFile = path.join(out, 'main/tabs.js')
     compileFunction(fs.readFileSync(tabsFile, 'utf8'), ['require', 'module', 'exports', 'setTimeout', 'clearTimeout'], { filename: tabsFile })(
       (name) => { assert.ok(Object.hasOwn(tabDeps, name), `Unexpected tabs dependency: ${name}`); return tabDeps[name] },

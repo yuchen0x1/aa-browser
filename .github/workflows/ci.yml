@@ -61,7 +61,8 @@ jobs:
             test:security test:updater test:update-restart test:release \
             test:installer test:bridge test:bridge-connection-race \
             test:bridge-lifecycle test:bridge-restart-replay \
-            test:agent-cancellation test:task-center test:session-permissions test:approval-parity
+            test:agent-cancellation test:atomic-json test:task-center test:ref-lifecycle \
+            test:session-permissions test:approval-parity
           do
             echo "::group::$suite"
             if npm run "$suite"; then echo "::endgroup::"; else echo "::error::$suite failed"; failed+=("$suite"); echo "::endgroup::"; fi
@@ -104,6 +105,7 @@ jobs:
       matrix:
         include:
           - { platform: windows-x64, runner: windows-latest }
+          - { platform: linux-x64, runner: ubuntu-24.04 }
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     steps:
@@ -134,16 +136,8 @@ jobs:
           display=()
           if [ "$RUNNER_OS" = Linux ]; then display=(xvfb-run -a); fi
           failed=()
-          run_suite() {
-            local name=$1; shift
-            echo "::group::$name"
-            if "$@"; then echo "::endgroup::"; else echo "::error::$name failed"; failed+=("$name"); echo "::endgroup::"; fi
-          }
-          run_suite smoke "${display[@]}" npm run smoke
-          run_suite test:desktop "${display[@]}" npm run test:desktop
-          # 真实最小化/恢复需要窗口管理器，仅有 X server 不够。
-          if [ "$RUNNER_OS" = Linux ]; then
-            run_suite test:background xvfb-run -a bash -c '
+          run_with_window_manager() {
+            xvfb-run -a bash -c '
               openbox >/dev/null 2>&1 &
               wm=$!
               trap "kill $wm 2>/dev/null || true" EXIT
@@ -152,8 +146,24 @@ jobs:
                 sleep 0.1
               done
               xprop -root _NET_SUPPORTING_WM_CHECK | grep -q "window id" || exit 1
-              npm run test:background
-            '
+              "$@"
+            ' -- "$@"
+          }
+          run_suite() {
+            local name=$1; shift
+            echo "::group::$name"
+            if "$@"; then echo "::endgroup::"; else echo "::error::$name failed"; failed+=("$name"); echo "::endgroup::"; fi
+          }
+          if [ "$RUNNER_OS" = Linux ]; then
+            run_suite smoke run_with_window_manager npm run smoke
+          else
+            run_suite smoke npm run smoke
+          fi
+          run_suite test:renderer-crash "${display[@]}" npm run test:renderer-crash
+          run_suite test:desktop "${display[@]}" npm run test:desktop
+          # 真实最小化/恢复需要窗口管理器，仅有 X server 不够。
+          if [ "$RUNNER_OS" = Linux ]; then
+            run_suite test:background run_with_window_manager npm run test:background
           else
             run_suite test:background npm run test:background
           fi
