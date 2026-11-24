@@ -870,7 +870,9 @@ export async function doClick(
   const clickCount = Math.max(1, Math.min(3, opts?.clickCount ?? 1))
   const actName = clickCount === 2 ? '双击' : button === 'right' ? '右键' : '点击'
   let clicked = `${loc.tag}${loc.type ? `[type=${loc.type}]` : ''} (${actName})`
-  if (loc.shadow && button === 'left') {
+  if (!tab.canUseWindowInput() && button === 'left' || loc.shadow && button === 'left') {
+    // 后台/未合成标签采用明确的 DOM 激活模式；它不是屏幕坐标点击，视觉遮挡不等同于 DOM 不可操作。
+    // 上面的定位预检仍拒绝 detached、hidden、disabled 等不可操作目标。
     const result = await wc.executeJavaScript(clickScript(ref), false)
     if (result !== true) throw refFailure(ref, 'detached')
     throwIfAborted(signal)

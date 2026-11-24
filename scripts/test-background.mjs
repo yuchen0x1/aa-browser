@@ -194,7 +194,7 @@ async function runElectron() {
         reject(new Error(`Direct MCP timeout: ${name}`))
       }, 25_000)
       peer.pending.set(requestId, { resolve, reject, timer })
-      peer.socket.send(JSON.stringify({ id: requestId, tool: name, args }))
+      peer.socket.send(JSON.stringify({ id: requestId, tool: name, args, idempotencyKey: `background-test:${requestId}` }))
     })
     const directText = (result) => result?.content?.filter((part) => part.type === 'text').map((part) => part.text).join('\n') ?? ''
     const checkImage = (result) => {

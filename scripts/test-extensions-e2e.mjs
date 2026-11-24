@@ -150,7 +150,7 @@ void (async () => {
           else reject(new Error(message.error))
         }
         ws.on('message', onMessage)
-        ws.send(JSON.stringify({ id, tool: 'browser_extensions', args: { action: 'load', path: extDir } }))
+        ws.send(JSON.stringify({ id, tool: 'browser_extensions', args: { action: 'load', path: extDir }, idempotencyKey: `extensions-e2e:${id}` }))
       })
       const mcpText = (mcpLoad?.content ?? []).map((item) => item?.text ?? '').join('\n')
       assert.match(mcpText, /AA Fixture Extension/, 'MCP extension load should report the loaded extension')
