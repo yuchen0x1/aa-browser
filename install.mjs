@@ -27,7 +27,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { Readable } from 'node:stream'
-import { pipeline } from 'node:stream/promises'
+import { finished, pipeline } from 'node:stream/promises'
 import process from 'node:process'
 import { pathToFileURL } from 'node:url'
 
@@ -187,6 +187,224 @@ async function downloadTo(url, dest, log) {
   log(`✅ 下载完成: ${dest} (${Math.round(got / 1048576)}MB)`)
 }
 
+function publicAaBrowserReleaseAsset(input) {
+  try {
+    const url = new URL(input)
+    if (url.protocol !== 'https:' || url.hostname !== 'github.com' || (url.port && url.port !== '443') || url.username || url.password || url.search || url.hash) return null
+    const pathname = decodeURIComponent(url.pathname)
+    const match = /^\/yuchen0x1\/aa-browser\/releases\/download\/(v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\/(aa-browser-setup-\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?\.exe|aa-browser-\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?-linux-x86_64\.AppImage)$/.exec(pathname)
+    return match ? { url, tag: match[1], name: match[2] } : null
+  } catch {
+    return null
+  }
+}
+
+const SAFE_RELEASE_REDIRECT_HOSTS = new Set([
+  'github.com',
+  'release-assets.githubusercontent.com',
+  'objects.githubusercontent.com',
+  'gh-proxy.org',
+  'gh-proxy.com',
+  'ghproxy.net'
+])
+
+async function streamReleaseBody(body, destination, offset, size, controller, onProgress) {
+  const output = fs.createWriteStream(destination, { flags: offset ? 'a' : 'w', mode: 0o600 })
+  const completion = finished(output)
+  completion.catch(() => {})
+  const reader = body.getReader()
+  let received = 0
+  let transferError = null
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+      const chunk = Buffer.from(value)
+      received += chunk.length
+      if (offset + received > size) throw new Error('下载文件超过 GitHub Release 声明大小，已中止。')
+      onProgress(chunk.length, received)
+      if (!output.write(chunk)) {
+        await Promise.race([
+          new Promise((resolve) => output.once('drain', resolve)),
+          completion.then(() => { throw new Error('安装包临时文件提前关闭') })
+        ])
+      }
+    }
+  } catch (error) {
+    transferError = error
+    controller.abort(error)
+    await reader.cancel().catch(() => {})
+  }
+  output.end()
+  try {
+    await completion
+  } catch (error) {
+    transferError ??= error
+  }
+  if (transferError) throw transferError
+  return received
+}
+
+async function fetchReleaseRoute(input, headers, signal, allowedHosts = SAFE_RELEASE_REDIRECT_HOSTS) {
+  let current = new URL(input)
+  for (let redirects = 0; redirects <= 8; redirects++) {
+    const response = await fetch(current, {
+      headers,
+      signal,
+      redirect: 'manual',
+      credentials: 'omit',
+      cache: 'no-store'
+    })
+    if (response.status < 300 || response.status >= 400) return response
+    const location = response.headers.get('location')
+    await response.body?.cancel()
+    if (!location || redirects === 8) throw new Error('Release server returned too many redirects')
+    const next = new URL(location, current)
+    if (
+      next.protocol !== 'https:' ||
+      (next.port && next.port !== '443') ||
+      next.username ||
+      next.password ||
+      !allowedHosts.has(next.hostname.toLowerCase())
+    ) throw new Error('Release server returned an unsafe redirect')
+    current = next
+  }
+  throw new Error('Release server returned too many redirects')
+}
+
+async function fetchReleaseRouteWithTimeout(input, headers, controller, allowedHosts = SAFE_RELEASE_REDIRECT_HOSTS) {
+  const connectTimer = setTimeout(
+    () => controller.abort(new Error('Release connection timed out')),
+    20_000
+  )
+  try {
+    return await fetchReleaseRoute(input, headers, controller.signal, allowedHosts)
+  } finally {
+    clearTimeout(connectTimer)
+  }
+}
+
+export async function downloadPublicReleaseAsset(resolved, dest, log, platform) {
+  const asset = publicAaBrowserReleaseAsset(resolved.url)
+  if (!asset || resolved.name !== asset.name || resolved.tag !== asset.tag) {
+    await downloadTo(resolved.url, dest, log)
+    return
+  }
+  if (!Number.isSafeInteger(resolved.size) || resolved.size <= 0 || resolved.size > 1024 * 1024 * 1024) {
+    throw new Error('GitHub Release 未提供有效的安装包大小，已中止下载。')
+  }
+  if (!/^sha256:[a-f0-9]{64}$/i.test(resolved.digest || '')) {
+    throw new Error('GitHub Release 未提供可信 SHA-256 digest，已中止下载。')
+  }
+
+  const routes = [
+    { id: 'GitHub', url: asset.url.href },
+    { id: 'GH-Proxy', url: `https://gh-proxy.org/${asset.url.href}` },
+    { id: 'GH-Proxy backup', url: `https://gh-proxy.com/${asset.url.href}` },
+    { id: 'ghproxy.net backup', url: `https://ghproxy.net/${asset.url.href}` }
+  ]
+  const failures = []
+  for (const route of routes) {
+    let controller = null
+    let watchdog = null
+    try {
+      log(`⬇️  正在尝试 ${route.id} 下载 ${asset.name}`)
+      let offset = fs.existsSync(dest) ? fs.statSync(dest).size : 0
+      if (offset > resolved.size) {
+        fs.rmSync(dest, { force: true })
+        offset = 0
+      }
+
+      controller = new AbortController()
+      let response = await fetchReleaseRouteWithTimeout(
+        route.url,
+        offset ? { Range: `bytes=${offset}-` } : {},
+        controller
+      )
+
+      if (response.status === 416 && offset > 0) {
+        await response.body?.cancel()
+        fs.rmSync(dest, { force: true })
+        offset = 0
+        controller = new AbortController()
+        response = await fetchReleaseRouteWithTimeout(route.url, {}, controller)
+      }
+      if (response.status !== 200 && response.status !== 206) {
+        await response.body?.cancel()
+        throw new Error(`HTTP ${response.status}`)
+      }
+      if (response.status === 200) offset = 0
+      else {
+        const range = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('content-range') || '')
+        if (!range || Number(range[1]) !== offset || Number(range[3]) !== resolved.size) {
+          await response.body?.cancel()
+          throw new Error('Content-Range does not match the trusted Release size')
+        }
+      }
+      const contentLength = response.headers.get('content-length')
+      if (contentLength != null && (!/^\d+$/.test(contentLength) || Number(contentLength) > resolved.size - offset)) {
+        await response.body?.cancel()
+        throw new Error('Content-Length does not match the trusted Release size')
+      }
+      if (response.status === 206 && contentLength != null) {
+        const range = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(response.headers.get('content-range') || '')
+        if (range && Number(contentLength) !== Number(range[2]) - offset + 1) {
+          await response.body?.cancel()
+          throw new Error('Content-Length does not match the returned byte range')
+        }
+      }
+      if (!response.body) throw new Error('Release server returned an empty response')
+
+      let received = 0
+      let windowReceived = 0
+      let startedAt = Date.now()
+      let windowStartedAt = startedAt
+      let slowWindows = 0
+      let lastPct = -1
+      watchdog = setInterval(() => {
+        if (Date.now() - startedAt > 45 * 60_000 || Date.now() - windowStartedAt > 20_000 && windowReceived === 0) {
+          controller.abort(new Error('Release transfer timed out'))
+        }
+      }, 1000)
+      received = await streamReleaseBody(response.body, dest, offset, resolved.size, controller, (chunkSize, transferred) => {
+        windowReceived += chunkSize
+        const percent = Math.floor(((offset + transferred) / resolved.size) * 100)
+        if (percent >= lastPct + 20) {
+          lastPct = percent
+          log(`   ${percent}% (${Math.round((offset + transferred) / 1048576)}MB)`)
+        }
+        const now = Date.now()
+        if (now - startedAt >= 10_000 && now - windowStartedAt >= 4_000) {
+          const speed = windowReceived / Math.max(0.001, (now - windowStartedAt) / 1000)
+          slowWindows = speed < 48 * 1024 ? slowWindows + 1 : 0
+          if (slowWindows >= 2) throw new Error('下载速度持续低于 48 KiB/s')
+          windowReceived = 0
+          windowStartedAt = now
+        }
+      })
+      clearInterval(watchdog)
+      watchdog = null
+      const downloadedSize = fs.statSync(dest).size
+      if (downloadedSize < resolved.size) throw new Error('Release transfer ended before the trusted asset size')
+      if (downloadedSize > resolved.size) {
+        fs.rmSync(dest, { force: true })
+        throw new Error('Release asset is larger than the trusted size')
+      }
+      await verifyArtifact(dest, resolved.digest, asset.name, { requireDigest: true, platform })
+      log(`✅ 下载完成: ${dest} (${Math.round(downloadedSize / 1048576)}MB)`)
+      return
+    } catch (error) {
+      if (watchdog) clearInterval(watchdog)
+      controller?.abort()
+      if (fs.existsSync(dest) && fs.statSync(dest).size > resolved.size) fs.rmSync(dest, { force: true })
+      const message = error instanceof Error ? error.message : String(error)
+      failures.push(`${route.id}: ${message.slice(0, 180)}`)
+      log(`   ${route.id} 失败，正在切换备用线路`)
+    }
+  }
+  throw new Error(`所有 GitHub Release 下载线路均失败：${failures.join('；')}`)
+}
+
 async function resolveFromRepo(repo, platform) {
   const api = `https://api.github.com/repos/${repo}/releases/latest`
   const res = await fetch(api, {
@@ -196,7 +414,7 @@ async function resolveFromRepo(repo, platform) {
   const data = await res.json()
   const asset = pickReleaseAsset(data.assets, platform)
   if (!asset) throw new Error(`Release ${data.tag_name ?? ''} 中没有适用于 ${platform} 的安装包`)
-  return { url: asset['browser_download_url'], digest: asset.digest, name: asset.name, tag: data.tag_name }
+  return { url: asset['browser_download_url'], digest: asset.digest, name: asset.name, tag: data.tag_name, size: asset.size }
 }
 
 function appExeFor(installDir) {
@@ -500,7 +718,7 @@ async function main(argv) {
         expectedDigest = resolved.digest ?? null
         const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-browser-'))
         artifact = path.join(tmp, resolved.name || (platform === 'linux' ? 'aa-browser.AppImage' : 'aa-browser-setup.exe'))
-        await downloadTo(resolved.url, artifact, log)
+        await downloadPublicReleaseAsset(resolved, artifact, log, platform)
         report.version = resolved.tag ?? null
       } else {
         die(new Error('请提供 --repo / --connect-only / --url / --from 之一（--help 查看用法）'))

@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { UpdateState, UpdateStatus } from '../shared/types'
+import { installGithubReleaseDownloadAcceleration } from './github-release-updater'
 export type { UpdateState, UpdateStatus } from '../shared/types'
 
 export const UPDATE_STARTUP_DELAY_MS = 5_000
@@ -37,7 +38,9 @@ export class UpdateManager {
   private listeners: { event: UpdateEvent; handler: (...args: any[]) => void }[] = []
   private initialized = false
   private installing = false
+  private updaterSetupError: string | null = null
   private onChange: () => void = () => {}
+  private setTrustedUpdateInfo: (info: UpdateInfo | null) => void = () => {}
 
   constructor(
     private readonly currentVersion: string,
@@ -56,13 +59,36 @@ export class UpdateManager {
     // development (`electron .` / electron-vite) it must stay fully inert:
     // no timer and no checkForUpdates call against a non-existent app-update.yml.
     if (this.enabled) {
+      try {
+        this.setTrustedUpdateInfo = installGithubReleaseDownloadAcceleration(autoUpdater)
+      } catch (error) {
+        this.updaterSetupError = error instanceof Error ? error.message : String(error)
+        this.state = {
+          status: 'error',
+          currentVersion: this.currentVersion,
+          error: this.updaterSetupError,
+          failedOperation: 'check',
+          checkedAt: Date.now()
+        }
+        this.emit()
+        return
+      }
       autoUpdater.autoDownload = this.getSettings().autoUpdate
       autoUpdater.autoInstallOnAppQuit = false
       autoUpdater.allowDowngrade = false
+      // The verified full-file downloader below handles Range resume and route
+      // failover; differential block-map requests cannot use those safeguards.
+      autoUpdater.disableDifferentialDownload = true
       autoUpdater.fullChangelog = true
       this.listen('checking-for-update', () => this.patch({ status: 'checking', error: undefined, checkedAt: Date.now() }))
-      this.listen('update-not-available', (info: UpdateInfo) => this.applyInfo('up-to-date', info))
-      this.listen('update-available', (info: UpdateInfo) => this.applyInfo(autoUpdater.autoDownload ? 'downloading' : 'available', info))
+      this.listen('update-not-available', (info: UpdateInfo) => {
+        this.setTrustedUpdateInfo(null)
+        this.applyInfo('up-to-date', info)
+      })
+      this.listen('update-available', (info: UpdateInfo) => {
+        this.setTrustedUpdateInfo(info)
+        this.applyInfo(autoUpdater.autoDownload ? 'downloading' : 'available', info)
+      })
       this.listen('download-progress', (progress: ProgressInfo) => this.applyProgress(progress))
       this.listen('update-downloaded', (info: UpdateInfo) => this.applyInfo('downloaded', info))
       this.listen('update-cancelled', (info: UpdateInfo) => this.applyInfo('available', info))
@@ -93,7 +119,7 @@ export class UpdateManager {
   }
 
   async check(): Promise<UpdateState> {
-    if (this.stopped || this.installing || this.state.failedOperation === 'install' || ['disabled', 'checking', 'downloading', 'downloaded'].includes(this.state.status)) return this.getState()
+    if (this.stopped || this.updaterSetupError || this.installing || this.state.failedOperation === 'install' || ['disabled', 'checking', 'downloading', 'downloaded'].includes(this.state.status)) return this.getState()
     this.clearRetry()
     autoUpdater.autoDownload = this.getSettings().autoUpdate
     autoUpdater.allowPrerelease = this.getSettings().updateChannel === 'beta'
@@ -107,7 +133,7 @@ export class UpdateManager {
   }
 
   async download(): Promise<UpdateState> {
-    if (this.stopped || !(this.state.status === 'available' || this.state.status === 'error' && this.state.failedOperation === 'download')) return this.getState()
+    if (this.stopped || this.updaterSetupError || !(this.state.status === 'available' || this.state.status === 'error' && this.state.failedOperation === 'download')) return this.getState()
     this.clearRetry()
     try { this.patch({ status: 'downloading', error: undefined, failedOperation: undefined }); await autoUpdater.downloadUpdate() }
     catch (error) { this.fail(error, 'download') }
@@ -149,6 +175,7 @@ export class UpdateManager {
   }
 
   async checkIfDue(): Promise<UpdateState> {
+    if (this.updaterSetupError) return this.getState()
     if (!this.getSettings().autoUpdate) return this.getState()
     if (this.state.failedOperation === 'install') return this.getState()
     if (this.state.status !== 'error' && this.state.checkedAt && Date.now() - this.state.checkedAt < UPDATE_WAKE_COOLDOWN_MS) return this.getState()
@@ -156,7 +183,7 @@ export class UpdateManager {
   }
 
   refreshSettings(): void {
-    if (!this.initialized || this.state.status === 'disabled') return
+    if (!this.initialized || this.updaterSetupError || this.state.status === 'disabled') return
     autoUpdater.allowPrerelease = this.getSettings().updateChannel === 'beta'
     autoUpdater.autoDownload = this.getSettings().autoUpdate
     this.schedule()
@@ -164,7 +191,7 @@ export class UpdateManager {
 
   private schedule(): void {
     this.clearTimers()
-    if (!this.getSettings().autoUpdate) return
+    if (this.updaterSetupError || !this.getSettings().autoUpdate) return
     this.startupTimer = setTimeout(() => {
       this.startupTimer = null
       if (this.getSettings().autoUpdate) this.runQuietly(() => this.check())
@@ -182,6 +209,7 @@ export class UpdateManager {
 
   dispose(): void {
     this.stopped = true
+    this.setTrustedUpdateInfo(null)
     this.clearTimers()
     for (const { event, handler } of this.listeners) autoUpdater.removeListener(event, handler)
     this.listeners = []

@@ -18,7 +18,11 @@ v0.16.0 的 Windows NSIS 和 Linux AppImage 都使用 [GitHub Releases](https://
 - **标签 id 稳定**：会话记录 v2 保存标签 id，恢复时复用，Agent 缓存的 `tabId` 在更新后仍然有效。隔离标签按设计不恢复；关闭「重启后恢复上次标签页」时也不会保留标签。MCP 服务会等恢复页面完成首次加载后再写入 `connection.json`，避免重放的快照落在 `about:blank`。
 - V1 会话记录仍可读取；保存时会升级为 v2。可用 `AA_BROWSER_RETRY_ON_RECONNECT=0` 关闭只读调用重发，或用 `AA_BROWSER_RESTART_TIMEOUT_MS` 调整更新等待上限。
 
-更新从官方仓库通过 HTTPS 获取。electron-updater 在交付安装前按平台更新描述验证 SHA-512。每个 Release 也附 `SHA256SUMS.txt` 与 CycloneDX `sbom.cdx.json`；SBOM 覆盖应用组件和 npm 依赖树，并同样计入 SHA-256 清单。从 v0.1.0 起，GitHub 不可变 Release 会对标签、提交及资产生成密码学发行证明，可以独立验证任意下载文件。
+更新包仍由 `electron-updater` 检查、报告进度并交给原有安装/回滚流程。Aa Browser 的公开 GitHub Release 安装包下载先从该版本的 GitHub 官方地址读取 `SHA256SUMS.txt`，只接受清单中与精确文件名唯一匹配的 SHA-256；更新元数据中的可信文件大小与 SHA-512 也必须匹配。下载先尝试 GitHub 官方线路，超时、持续低速或传输中断后才尝试 GH-Proxy 和备用线路。所有请求仅允许 HTTPS 和受限主机重定向，不向代理发送 Token、Cookie 或身份请求头；下载按可信大小与 SHA-256/SHA-512 校验后才交回安装器。不同线路可用 HTTP Range 续传，进度仍由现有更新界面显示。
+
+为确保分块续传、线路切换与最终校验都经过同一安全下载路径，应用内更新关闭了 electron-updater 的 blockmap 差分下载；更新将下载完整安装包，可能比旧版增量更新消耗更多流量和时间。代理是尽力而为的公开第三方服务，没有可依赖的 SLA；当官方及所有备用线路均失败时，当前安装版本保持不变，界面显示失败并按既有策略重试。`install.mjs --repo yuchen0x1/aa-browser` 使用 GitHub API 提供的 Release digest 和大小验证同一组公开线路；手动 `--url` / `--from` 路径保持原行为。
+
+每个 Release 也附 CycloneDX `sbom.cdx.json`，并计入 SHA-256 清单。从 v0.1.0 起，GitHub 不可变 Release 会对标签、提交及资产生成密码学发行证明，可以独立验证任意下载文件。
 
 ```sh
 gh release verify v0.1.0 --repo yuchen0x1/aa-browser

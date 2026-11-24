@@ -87,6 +87,16 @@ if (!process.versions.electron) {
     updateProvider = new EventEmitter()
     updateProvider.downloads = 0
     updateProvider.installs = 0
+    updateProvider.httpExecutor = {
+      async download(_url, destination) { return destination },
+      createRequest() {
+        const request = new EventEmitter()
+        request.end = () => {}
+        request.abort = () => {}
+        request.followRedirect = () => {}
+        return request
+      }
+    }
     const info = { version: '0.0.4', releaseDate: '2026-11-13', releaseNotes: [{ version: '0.0.4', note: 'Fixture publisher release note' }], files: [{ size: 100 }] }
     updateProvider.checkForUpdates = async () => {
       updateProvider.emit('checking-for-update')

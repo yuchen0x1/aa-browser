@@ -32,11 +32,11 @@
 
 <!-- github-release:start -->
 
-**[v0.15.0](./release-notes-v0.15.0.md)** · 2026-11-24 · 最新正式版（Windows x64）
+**[v0.16.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.16.0)** · 2026-11-24 · 最新正式版（Windows x64、Linux x86_64）
 
-v0.16.0 核心运行时升级正在 PR #17 验证中，尚未正式发行。候选变更包括任务持久化、真实 Electron Renderer 故障注入、Ref 代际和操作预检；Linux 资产须等待 Ubuntu 24.04 CI/Xvfb 与 AppImage 门禁通过。Windows 安装包仍未 Authenticode 签名。
+v0.17.0 候选增加 GitHub Release 下载智能切换、断点续传与可信摘要校验；等待 PR、双平台 CI 和发行门禁完成。Windows 安装包仍未 Authenticode 签名。
 
-**候选说明：[v0.16.0](./release-notes-v0.16.0.md)** · 尚未发布
+**候选说明：[v0.17.0](./release-notes-v0.17.0.md)** · 尚未发布
 
 [全部发行记录](https://github.com/yuchen0x1/aa-browser/releases)
 

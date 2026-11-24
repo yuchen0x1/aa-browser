@@ -2,6 +2,13 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
+## v0.17.0
+
+- **GitHub Release 智能下载**：公开更新先走 GitHub 官方线路；连接失败、持续低速或传输中断后，按线路评分尝试 GH-Proxy 和备用线路。支持有界重试、退避、冷却和 HTTP Range 断点续传，继续使用现有更新进度界面。
+- **可信完整性校验**：更新包只接受从 GitHub 官方主机取得的 `SHA256SUMS.txt`，并同时核对更新元数据的文件大小与 SHA-512；安装器通过 GitHub Release API 核对公开资产摘要和大小。TLS、受限主机重定向、临时文件及校验失败禁止安装均保持 fail closed，凭据和身份请求头不会发送给代理。
+- **完整包下载**：为让线路切换、续传和最终校验经过同一下载路径，应用内更新关闭 blockmap 差分下载；更新会下载完整安装包，可能增加流量和等待时间。
+- **验证范围**：自动化覆盖的是模拟线路和 Electron 请求适配器；没有中国大陆网络环境或完整 Release 大包下载实测，不据此宣称大陆速度提升。
+
 ## v0.16.0 — 2026-11-24
 
 - **持久任务中心**：`TaskCenter` 已接入 `AgentServer`，任务状态、步骤、执行历史、客户端来源、活动标签、Renderer PID、错误和恢复次数写入版本化 `task-center.json`；采用原子写入、损坏备份和有界裁剪。任务 ID 含客户端、调用序号和启动时间，桥或应用重启后复用请求 ID 也不会与旧终态记录撞键；`task-history.json` 丢失时仍可从有效 TaskCenter 重建记录。进程重启后非终态任务统一转为 `interrupted`，绝不自动重放。
@@ -11,7 +18,7 @@
 - **操作预检**：点击、输入、清空、下拉选择前检查元素存在、DOM 连接、可见性、尺寸、原生/ARIA 禁用、只读和可编辑性；点击前要求连续定位稳定，DOM 兜底失败不再返回假成功。输入前二次核验焦点，inert/模态框或焦点陷阱无法把文本重定向到先前输入框。后台 DOM 兜底与视觉遮挡继续区分处理。
 - **统一错误与恢复**：所有 `ActionError` 携带机器可读分类前缀；页面关闭、导航、网络、超时、Ref 失效、Renderer 崩溃和任务冲突分别归类。任务终态写入幂等，MCP 断线后同一会话可重连并查询原任务；`browser_tasks` 展示来源、标签、恢复次数、当前步骤和持久任务 ID。
 - **原子写入加固**：Windows 杀毒软件或索引器短暂占用目标文件时，JSON 原子替换对 `EPERM`/`EACCES`/`EBUSY` 做有界重试；最终失败仍保留旧文件并清理临时文件。
-- **Linux CI 验证门禁**：桌面矩阵重新纳入 `ubuntu-24.04`，新增崩溃恢复与 Ref 生命周期套件；本版本仍待 PR 双平台 CI 通过后才能合并/发行，Linux 范围限 Ubuntu 24.04 CI/Xvfb，不代表所有桌面发行版。
+- **Linux CI 验证门禁**：桌面矩阵重新纳入 `ubuntu-24.04`，新增崩溃恢复与 Ref 生命周期套件；v0.16.0 正式版提供 Windows x64 与 Linux x86_64 资产，Linux 范围限 Ubuntu 24.04 CI/Xvfb，不代表所有桌面发行版。
 
 ## v0.15.0 — 2026-11-24
 

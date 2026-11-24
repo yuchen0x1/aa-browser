@@ -6,11 +6,11 @@
 - v0.14.0 已发布；新增五种真实窗口模式、独立实时预览、人工接管和多客户端任务中心。后台拖拽使用 Chromium 原生 `dragIntercepted` 数据，最小化导航、点击、输入、滚动、拖放和截图有真实 Electron/MCP 回归证据；Windows 30 分钟 soak 与 DPI 100%–200% 已通过。
 - v0.13.0 新增 `browser_cloudflare`：识别 `challenges.cloudflare.com` 跨域挑战 iframe、在显式 `confirm:true` 后发送一次真实复选框点击，并等待挑战完成；不绕过滑块、图片或 Turnstile，也不处理 challenge token。
 - v0.12.1 正式收紧网络响应体：`browser_network_detail` 在主进程侧限制 1 MiB，文本/二进制结果结构化，JSON、表单和常见授权凭据默认内容级脱敏；EV-014 的捕获阶段内存分级仍待后续。
-- 最新已发布基线：[v0.15.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.15.0)（2026-11-24，Windows x64 only）；包含有界渲染器恢复与严格任务状态机。v0.16.0 候选已加入版本化 TaskCenter、真实 Renderer 崩溃注入、Ref 代际和操作预检，并计划恢复 Linux AppImage；PR、双平台标签 CI 与 Release 校验完成前不能写成已发布或已全平台验证。
+- 最新已发布基线：[v0.16.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.16.0)（2026-11-24，Windows x64 与 Linux x86_64）；包含版本化 TaskCenter、真实 Renderer 崩溃注入、Ref 代际、操作预检和恢复后的 Linux AppImage。v0.17.0 候选加入 GitHub Release 下载加速、断点续传和可信摘要校验；在 PR、双平台标签 CI 与 Release 校验完成前不列为正式版本，也不宣称中国大陆速度已验证。
 - v0.6.10 修复：MCP 桥并发握手单飞与 socket 所有权、iframe 敏感值描述回显和冷启动回归 profile 清理竞态。
 - v0.6.11 修复：设置面板代次隔离与输入法保护、一键接入客户端配置 JSONC/TOML 安全写入（新依赖 jsonc-parser、smol-toml）、discovery 文件权限加固、同毫秒下载 ID 冲突；无数据迁移或 MCP schema 变更。
 - 发行链补全：v0.6.9 标签 CI 失败且未发布，其修复随 v0.6.10 一并发行；孤儿标签已于 2026-11-21 核验后删除（记录在 [问题](AUTONOMOUS_ISSUES.md)）。
-- 新增延迟握手并发、连接生命周期和 frameElements 敏感值三项专项回归，并改进现有冷启动清理回归；均纳入 CI。v0.16.0 候选把 Linux x64 重新纳入桌面矩阵与发行计划，但最终证据必须来自该候选的 PR/标签 CI 和 AppImage 冒烟；其他 Linux 发行版仍不宣称已覆盖。正式版本状态见 [发行记录](RELEASE_HISTORY.md)。
+- 新增延迟握手并发、连接生命周期和 frameElements 敏感值三项专项回归，并改进现有冷启动清理回归；均纳入 CI。v0.16.0 的 Linux x64 正式发行证据限 Ubuntu 24.04 CI/Xvfb、AppImage 启动和桥冒烟；其他 Linux 发行版仍不宣称已覆盖。正式版本状态见 [发行记录](RELEASE_HISTORY.md)。
 - v0.6.12 修复：取消后副作用边界、App/CLI 备份保留与范围保护、JSONC 字节保真和 TOML EOF 幂等、自有目录收权；配置主诊断 159/159、取消 20/20（17 项真中途取消）和独立复审通过。
 - [能力盘点、七项目对照与路线](../project-review-20261121.md) 已更新。快照分页全量元数据和历史同步写盘已量化；复杂配置编辑、权限策略迁移、性能优化和证据管理目录分离仍按问题表推进，不把本轮当作全项目完结。
 - 原用户工作树仍保留未提交截图；代码、fixture、profile、证据和安装验证在隔离 worktree 内执行。

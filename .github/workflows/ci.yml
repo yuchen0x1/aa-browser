@@ -50,7 +50,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
-      # 每个套件都跑完再统一失败：一个套件出错不再掩盖后面的 15 个套件。
+      # 每个套件都跑完再统一失败：一个套件出错不再掩盖后续套件。
       - name: Node-only regression suites
         shell: bash
         run: |
@@ -59,7 +59,8 @@ jobs:
           for suite in \
             test:stores test:main-diagnostics test:client-config test:printing \
             test:security test:updater test:update-restart test:release \
-            test:installer test:bridge test:bridge-connection-race \
+            test:installer test:github-release-download test:github-release-updater \
+            test:bridge test:bridge-connection-race \
             test:bridge-lifecycle test:bridge-restart-replay \
             test:agent-cancellation test:atomic-json test:task-center test:ref-lifecycle \
             test:session-permissions test:approval-parity

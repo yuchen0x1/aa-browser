@@ -2,7 +2,7 @@
 /** Unit tests for the platform-neutral installer helpers (no network, no install). */
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
@@ -10,6 +10,7 @@ import {
   appImagePathFor,
   bridgePathFor,
   defaultInstallDirFor,
+  downloadPublicReleaseAsset,
   linuxUserDataDirFor,
   parseArgs,
   pickReleaseAsset,
@@ -77,6 +78,100 @@ test('verifyArtifact enforces file magic and optional SHA-256', async () => {
     await assert.doesNotReject(verifyArtifact(appImage, undefined, appImage, { platform: 'linux' }))
     await assert.rejects(verifyArtifact(exe, undefined, exe, { platform: 'linux' }), /不是有效的 Linux ELF\/AppImage/)
   } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('public repo installer download falls back from GitHub to GH-Proxy and verifies the API digest', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'aa-installer-routes-'))
+  const dest = path.join(dir, 'aa-browser-setup-1.2.3.exe')
+  const payload = Buffer.from('MZ\0\0installer-route-fixture', 'latin1')
+  const digest = createHash('sha256').update(payload).digest('hex')
+  const oldFetch = globalThis.fetch
+  const requests = []
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(input)
+    requests.push({ host: url.hostname, headers: new Headers(init.headers), credentials: init.credentials })
+    if (url.hostname === 'github.com') throw new Error('simulated official timeout')
+    return new Response(payload, { status: 200, headers: { 'content-length': String(payload.length) } })
+  }
+  try {
+    await downloadPublicReleaseAsset({
+      url: 'https://github.com/yuchen0x1/aa-browser/releases/download/v1.2.3/aa-browser-setup-1.2.3.exe',
+      name: 'aa-browser-setup-1.2.3.exe',
+      tag: 'v1.2.3',
+      digest: `sha256:${digest}`,
+      size: payload.length
+    }, dest, () => {}, 'win32')
+    assert.deepEqual(await readFile(dest), payload)
+    assert.deepEqual(requests.map(({ host }) => host), ['github.com', 'gh-proxy.org'])
+    assert.ok(requests.every(({ credentials }) => credentials === 'omit'))
+    assert.deepEqual([...requests[1].headers.keys()], [])
+  } finally {
+    globalThis.fetch = oldFetch
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test('public repo installer resumes an interrupted transfer over Range without sending identity headers', async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), 'aa-installer-resume-'))
+  const dest = path.join(dir, 'aa-browser-setup-1.2.3.exe')
+  const payload = Buffer.alloc(4 * 1024 * 1024, 0x41)
+  payload.write('MZ\0\0resumable-installer-fixture', 0, 'latin1')
+  const split = Math.floor(payload.length / 2)
+  const digest = createHash('sha256').update(payload).digest('hex')
+  const oldFetch = globalThis.fetch
+  let proxyRange
+  const proxyRequests = []
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(input)
+    if (url.hostname === 'github.com') {
+      let reads = 0
+      const body = {
+        getReader() {
+          return {
+            async read() {
+              if (reads++ === 0) return { done: false, value: payload.subarray(0, split) }
+              throw new Error('simulated mid-transfer disconnect')
+            },
+            async cancel() {}
+          }
+        }
+      }
+      return {
+        status: 200,
+        headers: new Headers({ 'content-length': String(payload.length) }),
+        body
+      }
+    }
+    proxyRange = new Headers(init.headers).get('range')
+    proxyRequests.push({
+      host: url.hostname,
+      range: proxyRange,
+      currentSize: await stat(dest).then((file) => file.size, () => 0)
+    })
+    const offset = Number(/^bytes=(\d+)-$/.exec(proxyRange || '')?.[1] ?? -1)
+    return new Response(payload.subarray(offset), {
+      status: 206,
+      headers: {
+        'content-length': String(payload.length - offset),
+        'content-range': `bytes ${offset}-${payload.length - 1}/${payload.length}`
+      }
+    })
+  }
+  try {
+    await downloadPublicReleaseAsset({
+      url: 'https://github.com/yuchen0x1/aa-browser/releases/download/v1.2.3/aa-browser-setup-1.2.3.exe',
+      name: 'aa-browser-setup-1.2.3.exe',
+      tag: 'v1.2.3',
+      digest: `sha256:${digest}`,
+      size: payload.length
+    }, dest, () => {}, 'win32')
+    assert.ok(proxyRange?.startsWith('bytes='))
+    assert.ok(Number(/^bytes=(\d+)-$/.exec(proxyRange)?.[1]) > 0, JSON.stringify(proxyRequests))
+    assert.deepEqual(await readFile(dest), payload)
+  } finally {
+    globalThis.fetch = oldFetch
     await rm(dir, { recursive: true, force: true })
   }
 })
