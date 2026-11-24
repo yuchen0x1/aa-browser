@@ -162,7 +162,8 @@ try {
   if (process.platform !== 'win32') {
     const managedHome = path.join(tmp, 'managed-home')
     const { AgentServer: ManagedAgentServer } = loadMain('agent-server', {
-      './progress': progress, './atomic-json': atomic, 'node:os': { ...os, homedir: () => managedHome }
+      './progress': progress, './atomic-json': atomic, './task-center': taskCenterModule,
+      'node:os': { ...os, homedir: () => managedHome }
     })
     const legacyDir = path.join(managedHome, '.aabrowser')
     const legacyFile = path.join(legacyDir, 'connection.json')
@@ -202,7 +203,8 @@ try {
     fs.mkdirSync(linkedHome)
     fs.symlinkSync(customDir, path.join(linkedHome, '.aabrowser'), 'dir')
     const { AgentServer: LinkedAgentServer } = loadMain('agent-server', {
-      './progress': progress, './atomic-json': atomic, 'node:os': { ...os, homedir: () => linkedHome }
+      './progress': progress, './atomic-json': atomic, './task-center': taskCenterModule,
+      'node:os': { ...os, homedir: () => linkedHome }
     })
     for (const suffix of ['/connection.json', '/./connection.json', '//connection.json']) {
       const linked = new LinkedAgentServer([], () => {}, 'test')
