@@ -9,6 +9,7 @@ import type { McpToolDef } from './tools'
 import type { ApprovalManager } from './approvals'
 import { runWithProgress } from './progress'
 import { writeJsonAtomic } from './atomic-json'
+import { TaskCenter, type TaskRecord } from './task-center'
 
 const CONNECT_DIR = path.join(os.homedir(), '.aabrowser')
 const DEFAULT_CONNECT_FILE = path.join(CONNECT_DIR, 'connection.json')
@@ -27,6 +28,16 @@ function redactTaskText(value: unknown): string {
     .replace(/\b(Bearer|Basic)\s+[^\s,;]+/gi, '$1 [redacted]')
     .replace(/\b(password|passwd|token|secret|api[_-]?key|authorization|cookie)\b\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]')
     .slice(0, 240)
+}
+
+function finiteRetryCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : 0
+}
+
+function terminalTaskStatus(state: string): AgentTaskRecord['status'] | null {
+  return state === 'completed' || state === 'failed' || state === 'cancelled' || state === 'interrupted'
+    ? state
+    : null
 }
 
 function cloneActivity(state: AgentActivityState): AgentActivityState {
@@ -56,11 +67,13 @@ export class AgentServer {
   private taskHistory: AgentTaskRecord[] = []
   private taskHistoryFile = ''
   private taskPersistTimer: ReturnType<typeof setTimeout> | null = null
+  private taskCenter = new TaskCenter()
   private activeTools = new Map<WebSocket, Map<number, ActiveTool>>()
   private active = new Map<WebSocket, Map<number, AbortController>>()
   private clientIds = new Map<WebSocket, number>()
   private pausedClients = new Set<number>()
   private clientSessions = new Map<string, { id: number; lastSeen: number }>()
+  private clientLabels = new Map<number, { name?: string; session?: string }>()
   private clientSeq = 0
   private lastActivityPushAt = 0
 
@@ -71,10 +84,32 @@ export class AgentServer {
     private approvals?: ApprovalManager,
     private onActivityChange: (state: AgentActivityState) => void = () => {},
     private runWithClientScope: <T>(clientId: number, operation: () => Promise<T>) => Promise<T> = (_clientId, operation) => operation(),
-    private onClientDisconnected: (clientId: number) => void = () => {}
+    private onClientDisconnected: (clientId: number) => void = () => {},
+    private taskTabInfo: (tabId?: string) => { id: string; rendererPid?: number } | null = () => null
   ) {
     this.wss = new WebSocketServer({ server: this.server })
     this.wss.on('connection', (ws, req) => this.onConnection(ws, req))
+  }
+
+  noteTabRecovery(tabId: string, reason: 'crash' | 'unresponsive', attempts: number): void {
+    for (const task of this.taskHistory) {
+      if (task.status !== 'running' && task.status !== 'cancelling') continue
+      if (task.tabId !== tabId) continue
+      const detail = `标签 ${tabId} 渲染进程${reason === 'crash' ? '崩溃' : '无响应'}，第 ${attempts} 次恢复`
+      task.steps ??= []
+      task.steps.push({ at: Date.now(), label: 'renderer_recovery', status: reason, detail: detail.slice(0, 200) })
+      if (task.steps.length > 20) task.steps.splice(0, task.steps.length - 20)
+      task.updatedAt = Date.now()
+      this.recordTaskStep(task.taskId, { at: Date.now(), label: 'renderer_recovery', status: reason, detail: `attempts=${attempts}` })
+      if (task.taskId) {
+        try {
+          this.taskCenter.updateContext(task.taskId, {
+            rendererRecovery: { reason, attempts, at: Date.now() }
+          })
+        } catch { /* historical task without a center record */ }
+      }
+      this.persistTaskHistory()
+    }
   }
 
   /** 供 MCP 工具展示的运行时身份；不包含令牌和端口。 */
@@ -84,7 +119,12 @@ export class AgentServer {
 
   async start(): Promise<void> {
     this.taskHistoryFile = path.join(path.dirname(connectionFile()), 'task-history.json')
+    // 任务中心默认与发现文件放在同一数据目录；显式环境变量仍可覆盖。
+    this.taskCenter = new TaskCenter(process.env['AA_BROWSER_TASK_CENTER_FILE'] || path.join(path.dirname(this.taskHistoryFile), 'task-center.json'))
+    // 先载入 TaskCenter，避免 loadTaskHistory 的首次持久化用空内存覆盖已有记录。
+    this.taskCenter.load()
     this.loadTaskHistory()
+    this.reconcileTaskCenter()
     this.token = crypto.randomBytes(24).toString('hex')
     await new Promise<void>((resolve, reject) => {
       this.server.once('error', reject)
@@ -140,23 +180,93 @@ export class AgentServer {
       this.taskHistory = value.tasks.filter((raw): raw is AgentTaskRecord => {
         if (!raw || typeof raw !== 'object') return false
         const task = raw as Partial<AgentTaskRecord>
-        return Number.isSafeInteger(task.id) && Number.isSafeInteger(task.client) && task.client! > 0 &&
+        return Number.isSafeInteger(task.id) && Number.isSafeInteger(task.client) &&
+          (task.client! > 0 || typeof task.taskId === 'string') &&
           typeof task.tool === 'string' && typeof task.startedAt === 'number' &&
           ['running', 'cancelling', 'completed', 'failed', 'cancelled', 'interrupted'].includes(String(task.status))
       }).slice(-MAX_TASK_HISTORY).map((raw) => ({ ...raw }))
-      let recovered = false
-      for (const task of this.taskHistory) {
-        if (task.status !== 'running' && task.status !== 'cancelling') continue
-        task.status = 'interrupted'
-        task.finishedAt = Date.now()
-        task.error = '上次进程未完成；任务未自动重放。'
-        recovered = true
-      }
-      if (recovered) this.persistTaskHistory(true)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
       try { fs.copyFileSync(this.taskHistoryFile, `${this.taskHistoryFile}.corrupt-${Date.now()}.bak`, fs.constants.COPYFILE_EXCL) } catch { /* preserve failure as a startup diagnostic */ }
       console.warn(`[aa-browser] 任务历史无法读取，原文件已保留: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  private reconcileTaskCenter(): void {
+    const records = new Map(this.taskCenter.list().map((task) => [task.id, task]))
+    let changed = false
+    for (const task of this.taskHistory) {
+      // 新记录自带跨进程唯一的 taskId；旧版历史没有该字段时退回 legacy 键。
+      const taskId = typeof task.taskId === 'string' && task.taskId ? task.taskId : `${task.client}:${task.id}`
+      const record = records.get(taskId)
+      task.taskId = taskId
+      if (!record) {
+        if (task.status === 'running' || task.status === 'cancelling') {
+          task.status = 'interrupted'
+          task.finishedAt = Date.now()
+          task.updatedAt = task.finishedAt
+          task.error = '上次进程未完成；任务未自动重放。'
+          changed = true
+        }
+        continue
+      }
+      task.updatedAt = record.updatedAt
+      task.retryCount = record.retryCount
+      task.steps = record.steps?.slice(-20)
+      if (record.error) task.error = record.error
+      const terminal = terminalTaskStatus(record.state)
+      if (terminal) {
+        task.status = terminal
+        task.finishedAt = record.updatedAt
+        task.updatedAt = record.updatedAt
+      }
+      changed = true
+      records.delete(taskId)
+    }
+    // task-history.json 丢失或损坏时，仍从有效的 TaskCenter 恢复任务记录。
+    for (const record of records.values()) {
+      const task = this.taskFromRecord(record)
+      if (!task) continue
+      this.taskHistory.push(task)
+      changed = true
+    }
+    if (this.taskHistory.length > MAX_TASK_HISTORY) {
+      this.taskHistory = this.taskHistory
+        .sort((left, right) => left.startedAt - right.startedAt)
+        .slice(-MAX_TASK_HISTORY)
+    }
+    if (changed) this.persistTaskHistory(true)
+  }
+
+  private taskFromRecord(record: TaskRecord): AgentTaskRecord | null {
+    const context = record.context ?? {}
+    const clientValue = Number(context['client'])
+    const callValue = Number(context['callId'])
+    const startedValue = Number(context['startedAt'])
+    const tool = typeof context['tool'] === 'string' ? context['tool'] : ''
+    if (!tool) return null
+    const status = terminalTaskStatus(record.state) ?? 'interrupted'
+    const client = Number.isSafeInteger(clientValue) && clientValue > 0 ? clientValue : 0
+    const id = Number.isSafeInteger(callValue) && callValue >= 0 ? callValue : record.createdAt
+    const startedAt = Number.isFinite(startedValue) ? startedValue : record.createdAt
+    const text = (value: unknown): string | undefined =>
+      typeof value === 'string' && value ? value : undefined
+    return {
+      id,
+      tool,
+      startedAt,
+      client,
+      status,
+      taskId: record.id,
+      updatedAt: record.updatedAt,
+      retryCount: record.retryCount,
+      ...(status === 'completed' || status === 'failed' || status === 'cancelled' || status === 'interrupted'
+        ? { finishedAt: record.updatedAt }
+        : {}),
+      ...(record.error ? { error: record.error } : {}),
+      ...(record.steps?.length ? { steps: record.steps.slice(-20) } : {}),
+      ...(text(context['source']) ? { source: text(context['source']) } : {}),
+      ...(text(context['tabId']) ? { tabId: text(context['tabId']) } : {})
     }
   }
 
@@ -177,13 +287,46 @@ export class AgentServer {
       writeJsonAtomic(this.taskHistoryFile, { version: 1, tasks: this.taskHistory.slice(-MAX_TASK_HISTORY) })
     } catch (error) {
       console.warn(`[aa-browser] 任务历史保存失败: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      this.taskCenter.persist(immediate)
     }
   }
 
   private finishTask(task: AgentTaskRecord, status: AgentTaskRecord['status'], error?: unknown): void {
-    if (task.status !== 'running' && task.status !== 'cancelling') return
+    // 连接断开/暂停会先把任务标记为 terminal；随后被中止的工具在 catch/finally
+    // 里还会再走一次 finishTask。终态必须一次性确定，不能被迟到的 abort 覆盖成
+    // cancelled，否则持久化历史与 TaskCenter 会分叉。
+    if (task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled' || task.status === 'interrupted') return
+    if (task.taskId) {
+      const current = this.taskCenter.get(task.taskId)
+      if (current) {
+        const terminal = terminalTaskStatus(current.state)
+        if (terminal) {
+          // 只可能发生在旧版 client:callId 记录与当前调用撞键时。核验为终态后
+          // 必须同步内存记录，绝不能把当前任务永久留在 running/cancelling。
+          console.warn(`[aa-browser] 任务 ID 已存在且处于终态，按已落库结果收敛: ${task.taskId}`)
+          task.status = terminal
+          task.finishedAt = current.updatedAt
+          task.updatedAt = current.updatedAt
+          if (current.error) task.error = current.error
+          this.persistTaskHistory(true)
+          return
+        }
+        try {
+          if (error !== undefined) this.taskCenter.recordError(task.taskId, redactTaskText(error))
+          const state = status === 'interrupted' ? 'interrupted' : status === 'cancelled' ? 'cancelled' : status === 'failed' ? 'failed' : 'completed'
+          this.taskCenter.transition(task.taskId, state, status, { callId: task.id, tool: task.tool })
+        } catch (persistError) {
+          // 状态机拒绝（例如 waiting -> completed）不能让工具响应丢失或内存记录悬空。
+          console.warn(`[aa-browser] 任务中心状态更新失败: ${persistError instanceof Error ? persistError.message : String(persistError)}`)
+        }
+      } else {
+        console.warn(`[aa-browser] 任务中心记录缺失，仅更新内存任务: ${task.taskId}`)
+      }
+    }
     task.status = status
     task.finishedAt = Date.now()
+    task.updatedAt = task.finishedAt
     if (error !== undefined) task.error = redactTaskText(error)
     this.persistTaskHistory(true)
   }
@@ -204,9 +347,7 @@ export class AgentServer {
     }
     for (const task of this.taskHistory) {
       if (task.status !== 'running' && task.status !== 'cancelling') continue
-      task.status = 'interrupted'
-      task.finishedAt = Date.now()
-      task.error = '任务已暂停；不会自动重放。'
+      this.finishTask(task, 'interrupted', '任务已暂停；不会自动重放。')
     }
     this.persistTaskHistory(true)
     const changed = this.activityState.active !== next.active ||
@@ -238,9 +379,7 @@ export class AgentServer {
         if (id === exceptCallId) continue
         const task = this.activeTools.get(ws)?.get(id)
         if (task && (task.status === 'running' || task.status === 'cancelling')) {
-          task.status = 'interrupted'
-          task.finishedAt = Date.now()
-          task.error = '此 MCP 客户端已暂停；任务未自动重放。'
+          this.finishTask(task, 'interrupted', '此 MCP 客户端已暂停；任务未自动重放。')
         }
         controller.abort()
       }
@@ -292,9 +431,29 @@ export class AgentServer {
       ...(message !== undefined ? { message: redactTaskText(message).slice(0, 200) } : {})
     }
     this.reply(ws, event)
+    const step = {
+      at: Date.now(),
+      label: redactTaskText(message ?? 'progress').slice(0, 200),
+      status: 'progress',
+      detail: `${progress}/${total ?? '?'}`
+    }
+    call.steps ??= []
+    call.steps.push(step)
+    if (call.steps.length > 20) call.steps.splice(0, call.steps.length - 20)
+    this.recordTaskStep(call.taskId, step)
+    call.updatedAt = Date.now()
     this.persistTaskHistory()
     // 进度可能非常密集（等待轮询每 100ms 一次），限流到 ~6fps，完成/取消时再强制推送。
     this.refreshActivity(Date.now() - this.lastActivityPushAt >= 150)
+  }
+
+  private recordTaskStep(taskId: string | undefined, step: { at: number; label: string; status?: string; detail?: string }): void {
+    if (!taskId) return
+    try {
+      this.taskCenter.addStep(taskId, step)
+    } catch {
+      // 创建失败已在 handleMessage 记录诊断；进度更新是尽力而为，不能反向中断工具。
+    }
   }
 
   /** 按 (client, id) 中断一个调用；旧版仅传 id 时必须唯一，否则拒绝猜测。 */
@@ -355,6 +514,11 @@ export class AgentServer {
     } else {
       clientId = ++this.clientSeq
     }
+    const label = this.clientLabels.get(clientId) ?? {}
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(sessionKey)) label.session = sessionKey
+    const requestedName = (url.searchParams.get('name') ?? '').trim().slice(0, 80)
+    if (requestedName) label.name = requestedName
+    this.clientLabels.set(clientId, label)
     this.clientIds.set(ws, clientId)
     this.onStatusChange(this.clients.size, this.verifiedClients.size)
 
@@ -433,16 +597,56 @@ export class AgentServer {
     calls.set(req.id, controller)
     let activityCalls = this.activeTools.get(ws)
     if (!activityCalls) { activityCalls = new Map(); this.activeTools.set(ws, activityCalls) }
+    const label = this.clientLabels.get(clientId)
+    const explicitSource = typeof req.args?.['__aaClientSession'] === 'string' ? req.args['__aaClientSession'] : ''
+    const source = explicitSource || (label?.name
+      ? `mcp:${label.name}`
+      : label?.session
+        ? `mcp:${label.session.slice(0, 8)}`
+        : `client-${clientId}`)
+    const startedAt = Date.now()
+    const requestedTabId = typeof req.args?.['tabId'] === 'string' ? req.args['tabId'] : undefined
+    const tabInfo = this.taskTabInfo(requestedTabId)
+    const tabId = requestedTabId || tabInfo?.id
+    // MCP 请求 ID 会在桥或应用重启后从 1 重新计数，不能单独作为持久化主键。
+    const taskId = `${clientId}:${req.id}:${startedAt.toString(36)}`
     const task: AgentTaskRecord = {
       id: req.id,
       tool: req.tool,
-      startedAt: Date.now(),
+      startedAt,
       client: clientId,
-      status: 'running'
+      status: 'running',
+      taskId,
+      updatedAt: startedAt,
+      retryCount: Math.max(0, Math.trunc(finiteRetryCount(req.args?.['__aaRetryCount']))),
+      steps: [],
+      ...(tabId ? { tabId } : {}),
+      source
     }
     activityCalls.set(req.id, task)
     this.taskHistory.push(task)
     if (this.taskHistory.length > MAX_TASK_HISTORY) this.taskHistory.splice(0, this.taskHistory.length - MAX_TASK_HISTORY)
+    try {
+      const record = this.taskCenter.create({
+        id: task.taskId,
+        retryCount: task.retryCount,
+        context: {
+          client: clientId,
+          callId: req.id,
+          tool: req.tool,
+          instanceId: this.instanceId,
+          browserPid: process.pid,
+          source: task.source,
+          clientSession: label?.session,
+          clientName: label?.name,
+          startedAt: task.startedAt,
+          ...(tabId ? { tabId, rendererPid: tabInfo?.rendererPid } : {})
+        }
+      })
+      this.taskCenter.transition(record.id, 'running', 'tool_started')
+    } catch (error) {
+      console.warn(`[aa-browser] 任务中心未能登记 ${taskId}: ${error instanceof Error ? error.message : String(error)}`)
+    }
     this.persistTaskHistory(true)
     this.refreshActivity()
     console.log(`[aa-browser] tool request: ${req.tool} (${req.id})`)

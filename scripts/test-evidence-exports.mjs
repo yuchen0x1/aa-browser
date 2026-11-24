@@ -63,7 +63,8 @@ try {
   const manager = new EvidenceManager()
   const evidence = { getEvidenceManager: () => manager }
   const actions = load('actions', {
-    electron: {}, '@snapshot/engine': { __aaSnapshot() {} }, '@snapshot/scripts': {}, './progress': {}, './evidence': evidence
+    electron: {}, '@snapshot/engine': { __aaSnapshot() {} }, '@snapshot/scripts': {}, './progress': {}, './evidence': evidence,
+    './ref-context': { checkRefContext: () => null, noteSnapshot() {}, noteNavigation() {}, noteRendererRestart() {} }
   })
   const { ExtensionManager } = load('extensions', { 'node:fs': fs, 'node:os': os, 'node:path': path, './atomic-json': atomic })
   const extensions = { getExtensionManager: () => new ExtensionManager() }

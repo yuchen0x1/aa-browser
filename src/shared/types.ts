@@ -90,6 +90,13 @@ export interface AgentTaskRecord extends AgentCallInfo {
   status: 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
   finishedAt?: number
   error?: string
+  /** 跨进程唯一的任务标识，格式 client:callId:startedAt；旧客户端可以忽略。 */
+  taskId?: string
+  tabId?: string
+  source?: string
+  updatedAt?: number
+  retryCount?: number
+  steps?: Array<{ at: number; label: string; status?: string; detail?: string }>
 }
 
 export interface UiState {

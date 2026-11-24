@@ -78,6 +78,7 @@ try {
       '@snapshot/engine': { __aaSnapshot() {} },
       './progress': {},
       './evidence': evidence,
+      './ref-context': { checkRefContext: () => null, noteSnapshot() {}, noteNavigation() {}, noteRendererRestart() {} },
       electron: {}
     })
     const loc = { ok: true, x: 10, y: 10, hitOk, tag: 'INPUT', type: 'checkbox' }

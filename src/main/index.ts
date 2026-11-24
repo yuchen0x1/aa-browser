@@ -1122,6 +1122,7 @@ app.whenReady().then(async () => {
   finder = new PageFinder(tabManager, pushState)
   tabManager.onChange = onTabChange
   tabManager.onRecovery = () => pushState()
+  tabManager.onRecoveryDetails = (tabId, reason, attempts) => agentServer?.noteTabRecovery(tabId, reason, attempts)
   tabManager.isWindowForeground = () => !!win && win.isVisible() && !win.isMinimized() && win.isFocused()
   tabManager.isWindowMinimized = () => !!win && win.isMinimized()
   tabManager.isViewAttached = (view) => !!win && !win.isDestroyed() && win.contentView.children.includes(view)
@@ -1364,6 +1365,16 @@ app.whenReady().then(async () => {
         tabManager?.releaseAgentClient(clientId)
         pushState()
       }, 60_000).unref()
+    },
+    (tabId) => {
+      const tab = tabManager ? (tabId ? tabManager.get(tabId) : tabManager.active()) : null
+      if (!tab) return null
+      try {
+        const rendererPid = tab.view.webContents.getOSProcessId()
+        return { id: tab.id, ...(rendererPid > 0 ? { rendererPid } : {}) }
+      } catch {
+        return { id: tab.id }
+      }
     }
   )
   void agentServer.start().then(() => {

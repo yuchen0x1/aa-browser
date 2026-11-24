@@ -52,6 +52,7 @@ function readVersion() {
 
 const VERSION = readVersion()
 const CLIENT_SESSION_ID = randomUUID()
+let CLIENT_NAME = ''
 const CONNECT_FILE = process.env['AA_BROWSER_CONNECTION_FILE'] || path.join(os.homedir(), '.aabrowser', 'connection.json')
 /**
  * 必须大于主进程的审批等待窗口（ApprovalManager 默认 120s），
@@ -309,11 +310,16 @@ function sendPending(p, socket) {
   suspended.delete(p)
   const id = nextCallId++
   p.id = id
+  p.retryCount = (p.retryCount ?? 0) + 1
   p.socket = socket
   pending.set(id, p)
   if (p.mcpId !== undefined) mcpToBridge.set(p.mcpId, id)
   if (p.progressToken !== undefined) bridgeToProgressToken.set(id, p.progressToken)
-  const request = { id, tool: p.name, args: p.args }
+  const request = {
+    id,
+    tool: p.name,
+    args: { ...p.args, ...(p.retryCount > 1 ? { __aaRetryCount: p.retryCount - 1 } : {}) }
+  }
   if (p.progressToken !== undefined) request.progressToken = p.progressToken
   const failSend = (error) => {
     if (!error || pending.get(id) !== p) return
@@ -383,6 +389,7 @@ function connectWs() {
     const endpoint = new URL(`ws://127.0.0.1:${info.port}/`)
     endpoint.searchParams.set('token', info.token)
     endpoint.searchParams.set('client', CLIENT_SESSION_ID)
+    if (CLIENT_NAME) endpoint.searchParams.set('name', CLIENT_NAME)
     const socket = new WebSocket(endpoint)
     let settled = false
     const timer = setTimeout(() => {
@@ -645,6 +652,7 @@ function handleStdioLine(line) {
 
   switch (method) {
     case 'initialize':
+      if (typeof params?.clientInfo?.name === 'string') CLIENT_NAME = params.clientInfo.name.slice(0, 80)
       rpcResult(id, {
         protocolVersion: params?.protocolVersion || '2025-06-18',
         capabilities: { tools: {} },

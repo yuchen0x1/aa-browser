@@ -41,7 +41,8 @@ function createFixture({ requireOperationApproval = false } = {}) {
   // Keep the actual queue/abort contract as it evolves; only page I/O is stubbed.
   const { ActionError, withTabLock, raceAbort, throwIfAborted } = loadMain('actions', {
     electron: {}, '@snapshot/scripts': {}, '@snapshot/engine': { __aaSnapshot() {} },
-    './progress': {}, './evidence': {}
+    './progress': {}, './evidence': {},
+    './ref-context': { checkRefContext: () => null, noteSnapshot() {}, noteNavigation() {}, noteRendererRestart() {} }
   })
   const calls = { type: [], frameType: [], frameEvaluate: [], pageEvaluate: [], sensitive: [], operation: [], actions: [], cookies: [] }
   const pending = []
@@ -90,7 +91,7 @@ function createFixture({ requireOperationApproval = false } = {}) {
     './tabs': { TabManager: class {}, normalizeUrl: (url) => url },
     './network': { clipBody: (x) => x, safeNetworkHeaders: (x) => x, safeNetworkUrl: (x) => x },
     './actions': {
-      ActionError, withTabLock, throwIfAborted,
+      ActionError, withTabLock, throwIfAborted, assertTabUsable: () => {}, assertRefContext: () => {},
       captureSnapshot: async () => ({ tree: 'snapshot', elements: [], url: 'https://merchant.example/page', title: 'Fixture page' }),
       snapshotText: (snap) => snap.tree,
       doNavigate: forbidden, doReload: forbidden, doClick: forbidden, doDrag: forbidden,

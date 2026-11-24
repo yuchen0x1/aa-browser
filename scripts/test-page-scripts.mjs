@@ -69,6 +69,10 @@ function compileScriptsModule() {
 }
 
 function makeEl(over = {}) {
+  const defaultDocument = {
+    defaultView: { getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' }) }
+  }
+  defaultDocument.body = defaultDocument.documentElement = defaultDocument
   return {
     tagName: 'INPUT',
     type: 'checkbox',
@@ -82,6 +86,7 @@ function makeEl(over = {}) {
     value: '',
     textContent: '',
     innerText: '',
+    ownerDocument: defaultDocument,
     clicks: 0,
     focusCount: 0,
     click() {
@@ -90,6 +95,10 @@ function makeEl(over = {}) {
     },
     focus() {
       this.focusCount++
+      this.ownerDocument.activeElement = this
+    },
+    getRootNode() {
+      return this.ownerDocument
     },
     getBoundingClientRect() {
       return { x: 10, y: 20, width: 30, height: 40 }
@@ -433,6 +442,49 @@ try {
     assert.deepEqual(plain(run(makeSandbox({}), S.locateScript('e404'))), { ok: false, reason: 'no-ref' })
   }
   pass('locateScript rejects hidden / collapsed / detached refs before dispatch')
+
+  console.log('[7] 操作预检：禁用/只读/不可见/不可编辑目标不得被写入或聚焦')
+  {
+    const runFocus = (over) => plain(run(makeSandbox({ e6: makeEl(over) }), S.focusScript('e6')))
+    const editable = runFocus({ tagName: 'TEXTAREA', type: '', value: '' })
+    assert.equal(editable.ok, true)
+    assert.equal(editable.tag, 'textarea')
+    assert.deepEqual(runFocus({ disabled: true }), { ok: false, reason: 'disabled', tag: 'input', type: 'checkbox' })
+    assert.deepEqual(runFocus({ getAttribute: () => 'true' }), { ok: false, reason: 'disabled', tag: 'input', type: 'checkbox' })
+    assert.deepEqual(runFocus({ readOnly: true }), { ok: false, reason: 'readonly', tag: 'input', type: 'checkbox' })
+    assert.deepEqual(runFocus({ tagName: 'BUTTON', type: '' }), { ok: false, reason: 'not-editable', tag: 'button', type: '' })
+    const hiddenDocument = { defaultView: { getComputedStyle: () => ({ display: 'none', visibility: 'visible', opacity: '1' }) } }
+    hiddenDocument.body = hiddenDocument.documentElement = hiddenDocument
+    assert.deepEqual(runFocus({ ownerDocument: hiddenDocument }), { ok: false, reason: 'hidden', tag: 'input', type: 'checkbox' })
+    assert.deepEqual(runFocus({ getBoundingClientRect: () => ({ x: 0, y: 0, width: 0, height: 0 }) }), { ok: false, reason: 'not-visible', tag: 'input', type: 'checkbox' })
+
+    const clear = (over) => plain(run(makeSandbox({ e7: makeEl(over) }), S.clearScript('e7')))
+    assert.equal(clear({ tagName: 'TEXTAREA', type: '', value: 'x' }).ok, true)
+    assert.deepEqual(clear({ disabled: true }), { ok: false, reason: 'disabled' })
+    assert.deepEqual(clear({ getAttribute: () => 'true' }), { ok: false, reason: 'disabled' })
+    assert.deepEqual(clear({ readOnly: true }), { ok: false, reason: 'readonly' })
+    assert.deepEqual(clear({ tagName: 'BUTTON', type: '' }), { ok: false, reason: 'not-editable' })
+
+    const write = (over) => plain(run(makeSandbox({ e8: makeEl(over) }), S.setValueScript('e8', 'x')))
+    assert.equal(write({ tagName: 'TEXTAREA', type: '' }).ok, true)
+    assert.deepEqual(write({ disabled: true }), { ok: false, reason: 'disabled' })
+    assert.deepEqual(write({ getAttribute: () => 'true' }), { ok: false, reason: 'disabled' })
+    assert.deepEqual(write({ readOnly: true }), { ok: false, reason: 'readonly' })
+
+    const select = (over) => plain(run(makeSandbox({ e9: makeEl({ tagName: 'SELECT', type: 'select-one', options: [{ value: 'a', label: 'A' }], ...over }) }), S.selectOptionScript('e9', 'a')))
+    assert.equal(select({}).ok, true)
+    assert.deepEqual(select({ disabled: true }), { ok: false, reason: 'disabled' })
+    assert.deepEqual(select({ getAttribute: () => 'true' }), { ok: false, reason: 'disabled' })
+    assert.deepEqual(select({ options: [{ value: 'a', label: 'A', disabled: true }] }), { ok: false, reason: 'option-disabled' })
+
+    const focusTarget = makeEl({ tagName: 'TEXTAREA', type: '' })
+    const focusSandbox = makeSandbox({ e10: focusTarget })
+    assert.equal(plain(run(focusSandbox, S.focusScript('e10'))).ok, true)
+    assert.deepEqual(plain(run(focusSandbox, S.focusStateScript('e10'))), { ok: true })
+    focusTarget.ownerDocument.activeElement = null
+    assert.deepEqual(plain(run(focusSandbox, S.focusStateScript('e10'))), { ok: false, reason: 'not-focusable' })
+  }
+  pass('focus / clear / setValue / selectOption reject disabled, readonly, hidden and non-editable targets')
 
   console.log(`\n🎉 页面脚本字面量回归：${passed} 组断言全部通过`)
 } finally {

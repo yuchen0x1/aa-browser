@@ -60,6 +60,16 @@ export const locateScript = (ref: string): string => {
     return { ok: false, reason: 'hidden' }
   }
   if (r.width < 1 || r.height < 1) return { ok: false, reason: 'not-visible' }
+  let tag = 'unknown', type = '', editable = false, checked = false, disabled = false
+  try {
+    tag = el.tagName.toLowerCase()
+    type = (el.type || '').toLowerCase()
+    editable = !!el.isContentEditable
+    checked = !!el.checked
+    disabled = el.disabled === true || el.getAttribute('aria-disabled') === 'true'
+  } catch (e) {}
+  // 禁用元素不能接收点击；浏览器原生点击会被静默忽略，返回成功只会误导调用方。
+  if (disabled) return { ok: false, reason: 'disabled', tag, type }
   const x = Math.round(ox + r.x + r.width / 2)
   const y = Math.round(oy + r.y + r.height / 2)
   let hitOk = false
@@ -67,13 +77,6 @@ export const locateScript = (ref: string): string => {
     const hit = document.elementFromPoint(x, y)
     hitOk = !!hit && (hit === el || hit.contains(el) || el.contains(hit) ||
       (hit.tagName === 'IFRAME' && hit.contentDocument && hit.contentDocument.contains(el)))
-  } catch (e) {}
-  let tag = 'unknown', type = '', editable = false, checked = false
-  try {
-    tag = el.tagName.toLowerCase()
-    type = (el.type || '').toLowerCase()
-    editable = !!el.isContentEditable
-    checked = !!el.checked
   } catch (e) {}
   return { ok: true, x, y, hitOk, tag, type, editable, checked }
 })()`
@@ -159,14 +162,47 @@ export const focusScript = (ref: string): string => {
   const el = (window.__aaRefs || {})['${ref}']
   if (!el) return { ok: false, reason: 'no-ref' }
   if (!el.isConnected) return { ok: false, reason: 'detached' }
-  try { el.focus() } catch (e) {}
   let tag = 'unknown', type = '', editable = false
   try {
     tag = el.tagName.toLowerCase()
     type = (el.type || '').toLowerCase()
     editable = !!el.isContentEditable
   } catch (e) {}
+  let cs = null
+  try { cs = el.ownerDocument.defaultView ? el.ownerDocument.defaultView.getComputedStyle(el) : null } catch (e) {}
+  if (!cs || cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity || '1') === 0) {
+    return { ok: false, reason: 'hidden', tag, type }
+  }
+  let r = null
+  try { r = el.getBoundingClientRect() } catch (e) { return { ok: false, reason: 'detached', tag, type } }
+  if (!r || r.width < 1 || r.height < 1) return { ok: false, reason: 'not-visible', tag, type }
+  if (el.disabled === true || el.getAttribute('aria-disabled') === 'true') return { ok: false, reason: 'disabled', tag, type }
+  if (el.readOnly === true) return { ok: false, reason: 'readonly', tag, type }
+  if (!editable && tag !== 'input' && tag !== 'textarea') return { ok: false, reason: 'not-editable', tag, type }
+  try { el.focus() } catch (e) {}
+  let active = null
+  try {
+    const root = typeof el.getRootNode === 'function' ? el.getRootNode() : el.ownerDocument
+    active = root && 'activeElement' in root ? root.activeElement : el.ownerDocument.activeElement
+  } catch (e) {}
+  if (active !== el) return { ok: false, reason: 'not-focusable', tag, type }
   return { ok: true, tag, type, editable }
+})()`
+}
+
+/** 输入前再次确认焦点仍在目标上，避免 inert/模态框或页面抢焦点导致文本写错元素。 */
+export const focusStateScript = (ref: string): string => {
+  REF_GUARD(ref)
+  return `(() => {
+  const el = (window.__aaRefs || {})['${ref}']
+  if (!el) return { ok: false, reason: 'no-ref' }
+  if (!el.isConnected) return { ok: false, reason: 'detached' }
+  let active = null
+  try {
+    const root = typeof el.getRootNode === 'function' ? el.getRootNode() : el.ownerDocument
+    active = root && 'activeElement' in root ? root.activeElement : el.ownerDocument.activeElement
+  } catch (e) {}
+  return active === el ? { ok: true } : { ok: false, reason: 'not-focusable' }
 })()`
 }
 
@@ -176,6 +212,18 @@ export const clearScript = (ref: string): string => {
   return `(() => {
   const el = (window.__aaRefs || {})['${ref}']
   if (!el) return { ok: false, reason: 'no-ref' }
+  if (!el.isConnected) return { ok: false, reason: 'detached' }
+  let tag = 'unknown'
+  try { tag = el.tagName.toLowerCase() } catch (e) {}
+  let cs = null
+  try { cs = el.ownerDocument.defaultView ? el.ownerDocument.defaultView.getComputedStyle(el) : null } catch (e) {}
+  if (!cs || cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity || '1') === 0) return { ok: false, reason: 'hidden' }
+  let r = null
+  try { r = el.getBoundingClientRect() } catch (e) { return { ok: false, reason: 'detached' } }
+  if (!r || r.width < 1 || r.height < 1) return { ok: false, reason: 'not-visible' }
+  if (el.disabled === true || el.getAttribute('aria-disabled') === 'true') return { ok: false, reason: 'disabled' }
+  if (el.readOnly === true) return { ok: false, reason: 'readonly' }
+  if (!el.isContentEditable && tag !== 'input' && tag !== 'textarea') return { ok: false, reason: 'not-editable' }
   try {
     if (el.isContentEditable) { el.textContent = '' }
     else {
@@ -200,6 +248,18 @@ export const setValueScript = (ref: string, text: string): string => {
   return `(() => {
   const el = (window.__aaRefs || {})['${ref}']
   if (!el) return { ok: false, reason: 'no-ref' }
+  if (!el.isConnected) return { ok: false, reason: 'detached' }
+  let tag = 'unknown'
+  try { tag = el.tagName.toLowerCase() } catch (e) {}
+  let cs = null
+  try { cs = el.ownerDocument.defaultView ? el.ownerDocument.defaultView.getComputedStyle(el) : null } catch (e) {}
+  if (!cs || cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity || '1') === 0) return { ok: false, reason: 'hidden' }
+  let r = null
+  try { r = el.getBoundingClientRect() } catch (e) { return { ok: false, reason: 'detached' } }
+  if (!r || r.width < 1 || r.height < 1) return { ok: false, reason: 'not-visible' }
+  if (el.disabled === true || el.getAttribute('aria-disabled') === 'true') return { ok: false, reason: 'disabled' }
+  if (el.readOnly === true) return { ok: false, reason: 'readonly' }
+  if (!el.isContentEditable && tag !== 'input' && tag !== 'textarea') return { ok: false, reason: 'not-editable' }
   try {
     if (el.isContentEditable) { el.textContent = ${lit} }
     else {
@@ -222,7 +282,15 @@ export const selectOptionScript = (ref: string, value?: string, label?: string):
   return `(() => {
   const el = (window.__aaRefs || {})['${ref}']
   if (!el) return { ok: false, reason: 'no-ref' }
+  if (!el.isConnected) return { ok: false, reason: 'detached' }
   if (el.tagName !== 'SELECT') return { ok: false, reason: 'not-select', tag: el.tagName.toLowerCase() }
+  let cs = null
+  try { cs = el.ownerDocument.defaultView ? el.ownerDocument.defaultView.getComputedStyle(el) : null } catch (e) {}
+  if (!cs || cs.display === 'none' || cs.visibility === 'hidden' || parseFloat(cs.opacity || '1') === 0) return { ok: false, reason: 'hidden' }
+  let rect = null
+  try { rect = el.getBoundingClientRect() } catch (e) { return { ok: false, reason: 'detached' } }
+  if (!rect || rect.width < 1 || rect.height < 1) return { ok: false, reason: 'not-visible' }
+  if (el.disabled === true || el.getAttribute('aria-disabled') === 'true') return { ok: false, reason: 'disabled' }
   const opts = Array.from(el.options || [])
   const wantV = ${vLit}, wantL = ${lLit}
   let m = null
@@ -230,6 +298,7 @@ export const selectOptionScript = (ref: string, value?: string, label?: string):
   if (!m && wantL != null) m = opts.find(o => (o.label || '').trim() === wantL.trim())
   if (!m && wantL != null) m = opts.find(o => (o.label || '').includes(wantL))
   if (!m) return { ok: false, reason: 'no-option', options: opts.slice(0, 30).map(o => ({ value: o.value, label: (o.label || o.value || '') })) }
+  if (m.disabled) return { ok: false, reason: 'option-disabled' }
   try {
     el.value = m.value
     el.dispatchEvent(new Event('input', { bubbles: true }))

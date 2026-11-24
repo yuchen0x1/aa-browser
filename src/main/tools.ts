@@ -51,6 +51,8 @@ import {
   doConsoleLogs,
   raceAbort,
   resolveWebContents,
+  assertRefContext,
+  assertTabUsable,
   throwIfAborted,
   withTabLock
 } from './actions'
@@ -238,6 +240,7 @@ export function buildTools(
     const sig = signal instanceof AbortSignal ? signal : undefined
     return withTabLock(tab, sig, async () => {
       assertToolRunning(sig)
+      assertTabUsable(tab)
       windowCtl.assertAiControl?.()
       return run()
     })
@@ -1376,7 +1379,15 @@ export function buildTools(
                 ? ` · 进度 ${task.progress}${typeof task.total === 'number' ? `/${task.total}` : ''}`
                 : ''
               const detail = task.error ? ` · 失败原因: ${task.error}` : task.message ? ` · ${task.message}` : ''
-              return `#${task.id} · 客户端 ${task.client} · ${task.tool} · ${task.status}${progress}${detail}`
+              const recovery = typeof task.retryCount === 'number' && task.retryCount > 0
+                ? ` · 恢复 ${task.retryCount} 次`
+                : ''
+              const source = task.source ? ` · 来源 ${task.source}` : ''
+              const tab = task.tabId ? ` · 标签 ${task.tabId}` : ''
+              const taskId = task.taskId ? ` · 任务 ${task.taskId}` : ''
+              const lastStep = task.steps?.at(-1)
+              const step = lastStep ? ` · 当前步骤 ${lastStep.label}${lastStep.status ? ` (${lastStep.status})` : ''}` : ''
+              return `#${task.id} · 客户端 ${task.client} · ${task.tool} · ${task.status}${progress}${recovery}${source}${tab}${step}${taskId}${detail}`
             }).join('\n')
           : (activity.calls ?? []).map((call) => `#${call.id} · 客户端 ${call.client} · ${call.tool} · running`).join('\n') || '（暂无任务记录）'
         return { content: [text(`任务状态: ${activity.paused ? '已暂停' : activity.active ? '运行中' : '空闲'}\n${lines}`)] }
@@ -1412,6 +1423,7 @@ export function buildTools(
       if (!fields.length) throw new ActionError('fields 不能为空')
       // 整张表单在一次标签页锁内完成：并发客户端不能在逐字段填写之间穿插其他操作。
       return onTab(tab, signal, async (): Promise<{ content: ToolContent[] }> => {
+        assertRefContext(tab.view.webContents)
         const done: string[] = []
         for (const field of fields) {
           assertToolRunning(signal)
@@ -1549,6 +1561,7 @@ export function buildTools(
       const expression = String(args['expression'] ?? '')
       if (!expression.trim()) throw new ActionError('expression 不能为空')
       return onTab(tab, args['__aaSignal'], async (): Promise<{ content: ToolContent[] }> => {
+        if (args['ref']) assertRefContext(tab.view.webContents)
         await opGate(
           {
             site: siteOf(tab),
