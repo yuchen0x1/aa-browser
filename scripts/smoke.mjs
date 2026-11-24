@@ -24,6 +24,7 @@ const require = createRequire(import.meta.url)
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const pkgVersion = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf-8')).version
 const packagedApp = process.argv[2] && path.resolve(process.argv[2])
+const backgroundClickSmoke = process.platform === 'linux' || process.env.AA_BROWSER_SMOKE_BACKGROUND === '1'
 const SMOKE_DIR = path.join(ROOT, '.local-verification', `smoke-${process.pid}-${Date.now()}`)
 const SMOKE_CONNECT_FILE = path.join(SMOKE_DIR, 'connection.json')
 const SMOKE_DOWNLOAD_DIR = path.join(SMOKE_DIR, 'downloads')
@@ -610,7 +611,22 @@ async function main() {
     check('控制台日志工具成功', !consoleLogs.isError && /共 \d+ 条：|无控制台日志/.test(mcp.text(consoleLogs)), mcp.text(consoleLogs).slice(0, 300))
 
     console.log('\n[5] 点击搜索按钮')
-    const clicked = await mcp.call('browser_click', { ref: buttonRef })
+    if (backgroundClickSmoke) {
+      // Xvfb can report focus without reliably delivering Electron's foreground mouse input.
+      const hidden = await mcp.call('browser_window', { action: 'mode', mode: 'hidden', monitor: false })
+      if (hidden.isError) throw new Error(`Unable to hide the smoke window for DOM click: ${mcp.text(hidden)}`)
+    }
+    let clicked
+    let restoreError = ''
+    try {
+      clicked = await mcp.call('browser_click', { ref: buttonRef })
+    } finally {
+      if (backgroundClickSmoke) {
+        const visible = await mcp.call('browser_window', { action: 'mode', mode: 'visible', monitor: false })
+        if (visible.isError) restoreError = `Unable to restore the smoke window after DOM click: ${mcp.text(visible)}`
+      }
+    }
+    if (restoreError) throw new Error(restoreError)
     check('点击成功', !clicked.isError, mcp.text(clicked).slice(0, 160))
     const clickSnap = mcp.text(clicked)
     check('点击后结果出现（端到端闭环）', clickSnap.includes('已搜索: 你好 Aa'), clickSnap.slice(0, 400))
