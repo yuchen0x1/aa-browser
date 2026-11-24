@@ -248,8 +248,7 @@ try {
         return { status: 200, headers: { 'content-length': String(slowPayload.length) }, body, abort: () => body.destroy() }
       }
     })
-    assert.equal(hosts[0], 'github.com')
-    assert.ok(hosts.includes('gh-proxy.org'))
+    assert.deepEqual(hosts, ['github.com', 'gh-proxy.org'])
     assert.deepEqual(await readFile(destination), slowPayload)
   })
 
