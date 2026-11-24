@@ -21,7 +21,7 @@ MCP 客户端    →  cli/mcp      →  src/main/agent-server →  tools / actio
 
 | 检查 | 基线及证据来源 |
 | --- | --- |
-| v0.17.0 正式状态 | PR #20 合并提交 `cdea12d`；标签 CI run `45421349555` 的 Windows/Linux 与发布作业成功。Latest 不可变 Release 的 7 项资产经 `gh release verify` 和 `verify-public-release.mjs` 核验；没有中国大陆网络或完整大包下载实测。 |
+| v0.17.0 正式状态 | PR #20 合并提交 `cdea12d`；标签 CI run `45421349555` 的 Windows/Linux 与发布作业成功。发布后核验 run `45424988340` 和 `gh release verify` 均通过，Latest 不可变 Release 的 7 项资产已核验；没有中国大陆网络或完整大包下载实测。 |
 | v0.16.0 正式状态 | v0.17.0 发布前的 Latest Release；标签 CI run `45402036248` 成功，Windows/Linux 7 项资产齐全。 |
 | v0.15.0 正式状态 | 标签 `v0.15.0` 指向 `c3368bf`；GitHub Latest Release 为不可变公开版本，5 项资产（Windows 安装包、blockmap、`latest.yml`、SBOM、SHA-256 清单）齐全。Windows 桌面回归与安装包冒烟已在标签 CI 中通过；真实渲染进程崩溃注入恢复与 Windows Authenticode 签名仍未验证。 |
 | v0.14.0 正式状态 | v0.15.0 仅提供 Windows 资产前的双平台版本；Linux AppImage 与 `latest-linux.yml` 可从其 Release 获取，v0.16.0 起恢复双平台发行。 || Windows v0.0.8 本地回归 | 12 项命令通过。包括 check、build、test:tools、test:stores、test:security、test:updater、test:release、validate:workbuddy、validate:codex、smoke、test:desktop、test:update-ui |

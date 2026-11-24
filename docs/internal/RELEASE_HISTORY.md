@@ -8,6 +8,7 @@
 - 标签 CI run `45421349555` 的 Windows x64、Linux x86_64 和「Publish tested release」作业全部成功；PR 的 CI、CodeQL 与依赖审查也通过。
 - GitHub Release 于 `2026-11-24 15:12:22 UTC` 发布为 Latest、非草稿、非预发布且不可变。7 项资产（Windows NSIS 安装包与 blockmap、Linux AppImage、两平台更新元数据、SBOM、`SHA256SUMS.txt`）均已上传。
 - `gh release verify v0.17.0` 与 `node scripts/verify-public-release.mjs yuchen0x1/aa-browser` 通过；GitHub 证明、公开下载、资产 digest、SHA-256 清单、SBOM 和 `latest*.yml` 版本均核对成功。
+- 发布后 Release verification workflow_dispatch run `45424988340` 全部通过，包括公开资产检查及 32 份 Release 正文远程对照。
 - 自动化模拟覆盖官方线路、超时/低速/中断回退、Range 续传、摘要/大小拒绝及更新失败保护。没有中国大陆网络或完整 Release 大包下载实测，不据此宣称大陆速度提升。
 - GitHub 上的 Release 正文已逐字比对并归档为 [`../releases/bodies/v0.17.0.md`](../releases/bodies/v0.17.0.md)；`npm run check:release-bodies:remote` 通过，32 个版本的正文与线上一致。
 
