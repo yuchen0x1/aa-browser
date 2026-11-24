@@ -16,8 +16,26 @@ fs.writeFileSync(config, JSON.stringify({ compilerOptions: { target: 'ES2022', m
 const tsc = path.join(path.dirname(require.resolve('typescript/package.json')), 'bin/tsc')
 const result = spawnSync(process.execPath, [tsc, '--project', config], { cwd: root, stdio: 'inherit' })
 if (result.status !== 0) process.exit(result.status ?? 1)
+fs.mkdirSync(path.join(dir, 'compiled/shared'), { recursive: true })
+fs.copyFileSync(
+  path.join(root, 'src/shared/github-release-download.mjs'),
+  path.join(dir, 'compiled/shared/github-release-download.mjs')
+)
 const provider = new EventEmitter()
 let providerCalls = 0
+function createUpdaterExecutor() {
+  return {
+    async download(_url, destination) { return destination },
+    createRequest() {
+      const request = new EventEmitter()
+      request.end = () => {}
+      request.abort = () => {}
+      request.followRedirect = () => {}
+      return request
+    }
+  }
+}
+provider.httpExecutor = createUpdaterExecutor()
 provider.checkForUpdates = async () => { providerCalls++ }
 const load = Module._load
 let UpdateManager
@@ -38,6 +56,7 @@ async function test(label, fn) {
   timers.clear()
   provider.removeAllListeners()
   providerCalls = 0
+  provider.httpExecutor = createUpdaterExecutor()
   provider.checkForUpdates = async () => { providerCalls++ }
   try { await fn(); checks.push({ label, status: 'PASS' }); console.log(`PASS: ${label}`) }
   catch (error) { failures++; checks.push({ label, status: 'FAIL', error: error.message }); console.error(`FAIL: ${label}: ${error.message}`) }
@@ -91,6 +110,20 @@ try {
     assert.equal(provider.autoInstallOnAppQuit, false)
     assert.equal([...timers.values()].find((timer) => timer.kind === 'timeout').delay, 5000)
     assert.equal([...timers.values()].find((timer) => timer.kind === 'interval').delay, 15 * 60_000)
+  })
+  await test('missing secure download hook is visible and disables updater requests', async () => {
+    provider.httpExecutor = undefined
+    const manager = new UpdateManager('0.0.2', () => ({ autoUpdate: true, updateChannel: 'stable' }), true)
+    manager.init(() => {})
+    assert.equal(manager.getState().status, 'error')
+    assert.equal(manager.getState().failedOperation, 'check')
+    assert.equal(manager.getState().noticeVisible, true)
+    assert.match(manager.getState().error, /download contract is unavailable/)
+    manager.refreshSettings()
+    await manager.check()
+    await manager.checkIfDue()
+    assert.equal(providerCalls, 0)
+    assert.equal(timers.size, 0)
   })
   await test('update and download completion notices remain visible without opening settings', () => {
     const manager = new UpdateManager('0.0.2', () => ({ autoUpdate: true, updateChannel: 'stable' }), true)

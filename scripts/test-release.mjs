@@ -10,6 +10,7 @@ import { releaseFileNames } from './release-assets.mjs'
 const tag = 'v0.2.0'
 const windowsOnlyTag = 'v0.15.0'
 const dualPlatformTag = 'v0.16.0'
+const nextDualPlatformTag = 'v0.17.0'
 const names = releaseFileNames(tag)
 assert.ok(names.includes('sbom.cdx.json'), 'v0.2.0 releases must include the SBOM')
 const windowsOnlyNames = releaseFileNames(windowsOnlyTag)
@@ -30,6 +31,16 @@ assert.deepEqual(dualPlatformNames, [
   'latest.yml',
   'sbom.cdx.json'
 ].sort(), 'v0.16.0 must contain exactly the dual-platform release set')
+const nextDualPlatformNames = releaseFileNames(nextDualPlatformTag)
+assert.deepEqual(nextDualPlatformNames, [
+  'SHA256SUMS.txt',
+  'aa-browser-0.17.0-linux-x86_64.AppImage',
+  'aa-browser-setup-0.17.0.exe',
+  'aa-browser-setup-0.17.0.exe.blockmap',
+  'latest-linux.yml',
+  'latest.yml',
+  'sbom.cdx.json'
+].sort(), 'v0.17.0 must contain exactly the dual-platform release set')
 const repo = { owner: 'fixture', repo: 'fixture' }
 const sha = 'a'.repeat(40)
 const digest = (data) => 'sha256:' + createHash('sha256').update(data).digest('hex')

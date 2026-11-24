@@ -2,15 +2,21 @@
 
 历史发布正文见 [归档索引](../releases/release-notes.md)。本表只记录已核实的正式版本；候选不占用正式版本记录。
 
-## v0.16.0 候选（待发行）
+## v0.17.0 候选（待发行）
 
-- 开发分支为 `codex/runtime-reliability`，基于 PR #16 合并后的 `main` / `5e58de4`；版本号已升至 `0.16.0`。
-- 候选包含 TaskCenter 持久化、真实 Renderer 崩溃注入、Ref 代际、操作预检、统一错误分类和 Linux 桌面矩阵恢复。
-- PR、合并提交、标签 CI、7 项资产、更新元数据、摘要和不可变 Release 尚未产生；本节不得作为“已发布”证据。完成发行后以实际提交、run ID、Tag 和 Release URL 替换候选记录。
+- 分支 `codex/github-release-download-acceleration` 基于已发布 `v0.16.0`；版本号已升至 `0.17.0`。
+- 候选包含 GitHub 官方优先的 Release 下载、经验证的公开代理回退、限速/超时切换、Range 续传、线路退避，以及官方 SHA-256 清单、更新元数据大小和 SHA-512 校验。
+- PR、合并提交、标签 CI、安装包、更新元数据、摘要和不可变 Release 尚未产生；中国大陆网络速度与完整大包下载也未验证。完成发行后以实际提交、run ID、Tag 和 Release URL 替换候选记录。
+
+## v0.16.0 正式发行（2026-11-24）
+
+- 标签 CI run `45402036248` 成功；版本于 `2026-11-24 13:31:35 UTC` 发布为 Latest、非草稿、非预发布和不可变 Release。
+- 公开资产共 7 项：Windows x64 NSIS 安装包与 blockmap、Linux x86_64 AppImage、两平台更新元数据、SBOM 和 `SHA256SUMS.txt`；Linux 验证限 Ubuntu 24.04 CI/Xvfb、AppImage 启动和桥连接冒烟。
+- Release verification 需要以发布后的独立核验结果补充；不得用早于发布时间的 run `45402036587` 作为发布后证据。
 
 ## v0.15.0 正式发行（2026-11-24）
 
-- 截至 v0.16.0 候选完成前，最新正式版本为 v0.15.0，标签指向发布提交 `c3368bf`；GitHub Release 为 Latest、非草稿、非预发布、不可变。
+- v0.16.0 发布前的正式版本，标签指向发布提交 `c3368bf`；GitHub Release 为非草稿、非预发布、不可变。
 - 公开资产共 5 项：`aa-browser-setup-0.15.0.exe`、`aa-browser-setup-0.15.0.exe.blockmap`、`latest.yml`、`sbom.cdx.json`、`SHA256SUMS.txt`。没有 Linux AppImage 或 `latest-linux.yml`。
 - 该版本引入有界渲染器恢复和严格任务状态机；Linux 桌面回归未通过，v0.15.0 只发布 Windows x64。真实渲染进程崩溃注入恢复与 Windows Authenticode 签名仍未验证，安装包未签名。
 - 发布正文归档已与 GitHub 公开正文对齐，`node scripts/check-release-bodies.mjs --remote` 通过 30 个版本。
@@ -57,8 +63,9 @@
 
 | 正式版本 | 状态与证据 |
 | --- | --- |
-| v0.16.0 | 候选，尚未合并或发布；最终提交、CI run、Tag、Release 和资产核验待补。 |
-| [v0.15.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.15.0) | 已发布（2026-11-24），Latest；仅 Windows x64 资产，Linux 因 CI 回归暂缓。 |
+| v0.17.0 | 候选，尚未合并或发布；最终提交、CI run、Tag、Release 和资产核验待补。 |
+| [v0.16.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.16.0) | 已发布（2026-11-24），Latest；Windows x64 与 Linux x86_64，共 7 项资产。 |
+| [v0.15.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.15.0) | 已发布（2026-11-23），仅 Windows x64 资产，Linux 因 CI 回归暂缓。 |
 | [v0.14.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.14.0) | 已发布（2026-11-23），双平台最终版本。 |
 | [v0.13.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.13.0) | 已发布（2026-11-23）。标签 CI `45099078476` 双平台与发布作业成功；7 项资产、SHA-256 清单、SBOM、更新元数据与远程正文归档校验通过。首次运行的夹具失败已在同标签重跑前修复。 |
 | [v0.12.1](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.12.1) | 已发布（2026-11-23）。标签 CI `45094994167` 双平台与发布作业成功；7 项资产、SHA-256 清单、SBOM、更新元数据与远程正文归档校验通过。 |

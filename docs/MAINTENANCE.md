@@ -1,6 +1,6 @@
 # Aa Browser 维护状态
 
-基线审核于 2026-11-19（v0.2.0），当前开发状态更新于 2026-11-24（v0.16.0 候选）。GitHub 的 [CI](https://github.com/yuchen0x1/aa-browser/actions/workflows/ci.yml)、[发行校验](https://github.com/yuchen0x1/aa-browser/actions/workflows/release-verify.yml)、[依赖审计](https://github.com/yuchen0x1/aa-browser/actions/workflows/audit.yml)、[CodeQL](https://github.com/yuchen0x1/aa-browser/actions/workflows/codeql.yml)、[最新发行](https://github.com/yuchen0x1/aa-browser/releases/latest) 提供实时状态。产品目标版本由 `package.json` 和 tag 共同确定；候选分支的本地结果不替代 PR 与标签 CI。
+基线审核于 2026-11-19（v0.2.0），当前开发状态更新于 2026-11-24（v0.17.0 候选）。GitHub 的 [CI](https://github.com/yuchen0x1/aa-browser/actions/workflows/ci.yml)、[发行校验](https://github.com/yuchen0x1/aa-browser/actions/workflows/release-verify.yml)、[依赖审计](https://github.com/yuchen0x1/aa-browser/actions/workflows/audit.yml)、[CodeQL](https://github.com/yuchen0x1/aa-browser/actions/workflows/codeql.yml)、[最新发行](https://github.com/yuchen0x1/aa-browser/releases/latest) 提供实时状态。产品目标版本由 `package.json` 和 tag 共同确定；候选分支的本地结果不替代 PR 与标签 CI。
 
 ## 原项目
 
@@ -15,13 +15,14 @@ MCP 客户端    →  cli/mcp      →  src/main/agent-server →  tools / actio
 
 功能基线含标签与前后退、页面查找、语言和搜索设置、登录态、隔离标签、站点白名单、操作确认、历史、下载、MCP 客户端接入，以及快照和网页交互、文档导出、控制台与网络诊断。没有远程服务端、业务数据库或 schema 迁移。设置和历史用 JSON 容错及原子写入，Chromium 管理站点数据。此次 Linux 适配复用这一结构，MCP 路径独立于 AppImage 临时挂载目录。
 
-基线 `06e2bf9` 对应 v0.0.8。保留历史标签，其中一些历史版本号高于正式发行版本。历史基线 v0.2.0 新增跨会话标签恢复、`browser_performance` 工具和随发行附带的 CycloneDX SBOM。当前开发候选为 v0.16.0，计划恢复 Windows x64 与 Linux x86_64 双平台资产；在 PR、标签 CI 与 Release 校验完成前，最新已发布基线仍是仅含 Windows x64 资产的 v0.15.0。用户升级来源是 GitHub Releases。原流水线只有 Windows，写入 README 与未来分支保护冲突，重跑还可替换同名公开资产。v0.1.0 使用版本文档随 PR 提交和只读周期检查，跨平台构建通过后上传草稿，GitHub 锁定公开资产；v0.2.0 沿用同一流程并把 SBOM 纳入资产集与 SHA-256 清单。
+基线 `06e2bf9` 对应 v0.0.8。保留历史标签，其中一些历史版本号高于正式发行版本。历史基线 v0.2.0 新增跨会话标签恢复、`browser_performance` 工具和随发行附带的 CycloneDX SBOM。当前候选为 v0.17.0；最新已发布版本 v0.16.0 于 2026-11-24 发布，提供 Windows x64 与 Linux x86_64 共 7 项资产。用户升级来源是 GitHub Releases。原流水线只有 Windows，写入 README 与未来分支保护冲突，重跑还可替换同名公开资产。v0.1.0 使用版本文档随 PR 提交和只读周期检查，跨平台构建通过后上传草稿，GitHub 锁定公开资产；v0.2.0 沿用同一流程并把 SBOM 纳入资产集与 SHA-256 清单。
 
 ## 验证与留档
 
 | 检查 | 基线及证据来源 |
 | --- | --- |
-| v0.16.0 候选 | 分支 `codex/runtime-reliability` 实现任务持久化、真实 Renderer 崩溃注入、Ref 代际和操作预检；本地 `check`、构建、冒烟与桌面套件通过。PR CI、Windows/Linux 标签 CI、7 项资产、自动更新元数据与不可变 Release 尚待真实运行结果，不能在发行前写成已通过。 |
+| v0.17.0 候选 | 分支 `codex/github-release-download-acceleration` 实现 GitHub Release 官方优先下载、可信代理回退、Range 续传、SHA-256/SHA-512/大小校验和 Electron 重定向策略回归。PR 与标签门禁待真实运行；没有中国大陆网络或完整大包下载实测。 |
+| v0.16.0 正式状态 | GitHub Latest Release 于 2026-11-24 发布；标签 CI run `45402036248` 成功，Windows/Linux 7 项资产齐全。 |
 | v0.15.0 正式状态 | 标签 `v0.15.0` 指向 `c3368bf`；GitHub Latest Release 为不可变公开版本，5 项资产（Windows 安装包、blockmap、`latest.yml`、SBOM、SHA-256 清单）齐全。Windows 桌面回归与安装包冒烟已在标签 CI 中通过；真实渲染进程崩溃注入恢复与 Windows Authenticode 签名仍未验证。 |
 | v0.14.0 正式状态 | 最后一个包含 Windows 与 Linux x64 双平台资产的正式版本；Linux AppImage 与 `latest-linux.yml` 可从其 Release 获取。 || Windows v0.0.8 本地回归 | 12 项命令通过。包括 check、build、test:tools、test:stores、test:security、test:updater、test:release、validate:workbuddy、validate:codex、smoke、test:desktop、test:update-ui |
 | Windows v0.2.0 本地回归 | check（34 工具 + 提示词一致）、test:tools、test:stores 11/11、test:security、test:updater 13/13、test:release 5/5、test:installer 4/4、test:connect（打包产物 connect-only + browser_tabs 验证）、build、smoke（含性能摘要与会话记录断言）、test:desktop 26/26、test:update-ui 6/6、`npm run dist` 产出 NSIS + blockmap + latest.yml、`release-assets prepare windows-x64` 校验通过、SBOM 生成与发布脚本回归 |
