@@ -197,10 +197,31 @@ class McpClient {
     return res
   }
 
-  async call(name, args) {
+  async callOnce(name, args) {
     const res = await this.request('tools/call', { name, arguments: args ?? {} })
     if (res.error) throw new Error(`工具 ${name} 协议错误: ${res.error.message}`)
     return res.result
+  }
+
+  async call(name, args) {
+    const isolateClick = backgroundClickSmoke && name === 'browser_click'
+    if (isolateClick) {
+      const hidden = await this.callOnce('browser_window', { action: 'mode', mode: 'hidden', monitor: false })
+      if (hidden?.isError) throw new Error(`Unable to hide the smoke window for DOM click: ${this.text(hidden)}`)
+    }
+
+    let result
+    let restoreError = ''
+    try {
+      result = await this.callOnce(name, args)
+    } finally {
+      if (isolateClick) {
+        const visible = await this.callOnce('browser_window', { action: 'mode', mode: 'visible', monitor: false })
+        if (visible?.isError) restoreError = `Unable to restore the smoke window after DOM click: ${this.text(visible)}`
+      }
+    }
+    if (restoreError) throw new Error(restoreError)
+    return result
   }
 
   async callWithProgress(name, args, token) {
@@ -611,22 +632,8 @@ async function main() {
     check('控制台日志工具成功', !consoleLogs.isError && /共 \d+ 条：|无控制台日志/.test(mcp.text(consoleLogs)), mcp.text(consoleLogs).slice(0, 300))
 
     console.log('\n[5] 点击搜索按钮')
-    if (backgroundClickSmoke) {
-      // Xvfb can report focus without reliably delivering Electron's foreground mouse input.
-      const hidden = await mcp.call('browser_window', { action: 'mode', mode: 'hidden', monitor: false })
-      if (hidden.isError) throw new Error(`Unable to hide the smoke window for DOM click: ${mcp.text(hidden)}`)
-    }
-    let clicked
-    let restoreError = ''
-    try {
-      clicked = await mcp.call('browser_click', { ref: buttonRef })
-    } finally {
-      if (backgroundClickSmoke) {
-        const visible = await mcp.call('browser_window', { action: 'mode', mode: 'visible', monitor: false })
-        if (visible.isError) restoreError = `Unable to restore the smoke window after DOM click: ${mcp.text(visible)}`
-      }
-    }
-    if (restoreError) throw new Error(restoreError)
+    // Xvfb can report focus without reliably delivering Electron's foreground mouse input.
+    const clicked = await mcp.call('browser_click', { ref: buttonRef })
     check('点击成功', !clicked.isError, mcp.text(clicked).slice(0, 160))
     const clickSnap = mcp.text(clicked)
     check('点击后结果出现（端到端闭环）', clickSnap.includes('已搜索: 你好 Aa'), clickSnap.slice(0, 400))
