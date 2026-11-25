@@ -230,7 +230,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $uninstaller = Start-Process -Wait -PassThru -WindowStyle Hidden -FilePath (Join-Path $installDir 'Uninstall Aa Browser.exe') -ArgumentList '/S'
           if ($uninstaller.ExitCode -ne 0 -or (Test-Path (Join-Path $installDir 'Aa Browser.exe'))) { throw 'NSIS uninstall failed' }
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         with:
           name: release-${{ matrix.platform }}
