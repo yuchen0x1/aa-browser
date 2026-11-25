@@ -2,6 +2,16 @@
 
 历史发布正文见 [归档索引](../releases/release-notes.md)。本表只记录已核实的正式版本；候选不占用正式版本记录。
 
+## v0.18.0 正式发行（2026-11-25）
+
+- PR [#28](https://github.com/yuchen0x1/aa-browser/pull/28) 于 `2026-11-25 08:03:36 UTC` 合并；标签 `v0.18.0` 指向合并提交 `728cb7c0183b702d4c2f124077a6dcaa30592672`。功能分支最后提交为 `cdeef4d1268d3a456b2b8f0524ea2c8bad1143c2`。
+- 标签 CI run `45573173303` 的静态检查、单元套件、Windows x64、Linux x86_64 和「Publish tested release」作业全部成功；主线 CI `45573022544` 与 CodeQL `45573022534` 也通过。
+- GitHub Release 于 `2026-11-25 08:12:38 UTC` 发布为 Latest、非草稿、非预发布且不可变；7 项资产（Windows NSIS 安装包与 blockmap、Linux AppImage、两平台更新元数据、SBOM、`SHA256SUMS.txt`）均已上传。
+- `gh release verify v0.18.0` 与 `node scripts/verify-public-release.mjs yuchen0x1/aa-browser` 通过；GitHub 证明、公开下载、资产 digest、SHA-256 清单、SBOM 和 `latest*.yml` 版本均核对成功。
+- 发布后 Release verification workflow run `45573173313` 全部通过，包括公开资产检查及 33 份 Release 正文远程对照。
+- 真实旧版升级发现验证通过：保留的 v0.17.0 安装包在隔离环境中运行，`updateCheck()` 发现 v0.18.0，更新提示与操作按钮可见，未下载安装包，旧包摘要未改变。发布后立即首次检查时 GitHub latest 跳转仍短暂返回 v0.17.0，feed 刷新后重跑通过；旧版用户可能遇到短暂发现延迟。
+- 安全检查：发布前 Dependabot 与 CodeQL 开放告警均为 0，`npm audit --audit-level=high` 为 0 漏洞；7 个已被 v0.18.0 覆盖的 Dependabot PR 已关闭，远端分支只保留 `main`。
+
 ## v0.17.0 正式发行（2026-11-24）
 
 - PR [#20](https://github.com/yuchen0x1/aa-browser/pull/20) 于 `2026-11-24 15:04:06 UTC` 合并；标签 `v0.17.0` 指向合并提交 `cdea12dfa52567babb614be43f304ff6f268a614`。功能分支最后提交为 `4ff07c565332a62995d047b7068c243f6bae7dc1`。
@@ -67,6 +77,7 @@
 
 | 正式版本 | 状态与证据 |
 | --- | --- |
+| [v0.18.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.18.0) | 已发布（2026-11-25），Latest、不可变；提交 `728cb7c`，标签 CI `45573173303` 双平台与发布作业成功，7 项资产经证明和摘要核验；真实 v0.17.0 客户端升级发现通过。 |
 | [v0.17.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.17.0) | 已发布（2026-11-24），Latest、不可变；提交 `cdea12d`，标签 CI `45421349555` 双平台与发布作业成功，7 项资产经证明和摘要核验。 |
 | [v0.16.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.16.0) | 已发布（2026-11-24），v0.17.0 发布前的正式版本；Windows x64 与 Linux x86_64，共 7 项资产。 |
 | [v0.15.0](https://github.com/yuchen0x1/aa-browser/releases/tag/v0.15.0) | 已发布（2026-11-23），仅 Windows x64 资产，Linux 因 CI 回归暂缓。 |
