@@ -27,6 +27,8 @@ import {
 import type { Tab, TabManager } from './tabs'
 import { reportProgress } from './progress'
 import { getEvidenceManager } from './evidence'
+import { validateReadFile, resolveWriteFile, writeExportFile } from './file-policy'
+import { redactText } from './redaction'
 import { checkRefContext, getRefFloor, noteSnapshot, type RefContextError } from './ref-context'
 
 export type ActionErrorCode =
@@ -42,6 +44,7 @@ export type ActionErrorCode =
   | 'PERMISSION_ERROR'
   | 'OPERATION_REJECTED'
   | 'TASK_STATE_CONFLICT'
+  | 'INVALID_ARGUMENT'
 
 export class ActionError extends Error {
   readonly code: ActionErrorCode
@@ -90,7 +93,7 @@ const REF_INVALIDATION_REASONS: Record<string, string> = {
   'cross-origin': 'frame_unavailable'
 }
 
-function refFailure(ref: string, reason: string): ActionError {
+export function refFailure(ref: string, reason: string): ActionError {
   const code = REF_REASON_CODES[reason] ?? 'ELEMENT_NOT_FOUND'
   const invalidation = REF_INVALIDATION_REASONS[reason] ?? 'element_unavailable'
   const nextStep = '请先重新调用 browser_snapshot，再使用新 ref 操作'
@@ -1988,18 +1991,23 @@ export async function doCookies(
     secure?: boolean
     httpOnly?: boolean
     expiresSeconds?: number
+    includeSensitive?: boolean
   }
 ): Promise<{ content: string }> {
   const session = tab.view.webContents.session
   try {
     if (opts.action === 'get') {
-      const filter = opts.url ? { url: opts.url } : {}
+      const currentUrl = tab.view.webContents.getURL()
+      const filter = { url: opts.url || currentUrl }
+      try {
+        if (!['http:', 'https:'].includes(new URL(filter.url).protocol)) throw new Error('origin')
+      } catch { throw new ActionError('Cookie 读取需要有效的 HTTP 或 HTTPS 来源站点。', 'PERMISSION_ERROR') }
       const cookies = await session.cookies.get(filter as never)
       const list = cookies
         .filter((c) => !opts.name || c.name === opts.name)
         .map(
           (c) =>
-            `${c.name}=${c.value.length > 60 ? c.value.slice(0, 60) + '…' : c.value}` +
+            `${c.name}=${opts.includeSensitive ? (c.value.length > 60 ? c.value.slice(0, 60) + '…' : c.value) : '[redacted]'}` +
             `  (domain=${c.domain ?? ''}${c.httpOnly ? ' httpOnly' : ''}${c.secure ? ' secure' : ''})`
         )
       return { content: list.length ? `共 ${list.length} 条：\n${list.join('\n')}` : '（无匹配 Cookie）' }
@@ -2054,7 +2062,7 @@ export async function doCookies(
 /** localStorage / sessionStorage 读写 */
 export async function doStorage(
   tab: Tab,
-  opts: { action: 'get' | 'set' | 'remove' | 'clear'; kind: 'local' | 'session'; key?: string; value?: string }
+  opts: { action: 'get' | 'set' | 'remove' | 'clear'; kind: 'local' | 'session'; key?: string; value?: string; includeSensitive?: boolean }
 ): Promise<{ content: string }> {
   const wc = tab.view.webContents
   const result = (await wc.executeJavaScript(storageScript(opts.action, opts.kind, opts.key, opts.value), false)) as {
@@ -2068,12 +2076,12 @@ export async function doStorage(
   }
   if (!result?.ok) throw new ActionError(`存储操作失败（${result?.reason ?? 'unknown'}）`)
   if (opts.action === 'get') {
-    if (opts.key != null) return { content: `${opts.key} = ${result.value ?? '（空）'}` }
+    if (opts.key != null) return { content: `${opts.key} = ${result.value == null ? '（空）' : opts.includeSensitive ? result.value : '[redacted]'}` }
     const entries = Object.entries(result.values ?? {})
     return {
       content: entries.length
         ? `共 ${result.count} 项（显示 ${entries.length}${result.truncated ? '，已截断' : ''}）：\n` +
-          entries.map(([k, v]) => `  ${k} = ${v}`).join('\n')
+          entries.map(([k, v]) => `  ${k} = ${opts.includeSensitive ? v : '[redacted]'}`).join('\n')
         : `（${opts.kind === 'session' ? 'sessionStorage' : 'localStorage'} 为空）`
     }
   }
@@ -2081,7 +2089,7 @@ export async function doStorage(
 }
 
 /** 文件上传（input[type=file]），paths 为本机绝对路径 */
-export async function doUploadFile(tab: Tab, ref: string, paths: string[]): Promise<{ content: string }> {
+export async function doUploadFile(tab: Tab, ref: string, paths: string[], approvedExternalPaths: string[] = [], signal?: AbortSignal): Promise<{ content: string }> {
   assertTabUsable(tab)
   const wc = tab.view.webContents
   assertRefContext(wc)
@@ -2089,8 +2097,10 @@ export async function doUploadFile(tab: Tab, ref: string, paths: string[]): Prom
   const pathMod = await import('node:path')
   const files: { name: string; type: string; data: string }[] = []
   let total = 0
-  for (const p of paths) {
-    const stat = fs.statSync(p)
+  for (const requested of paths) {
+    throwIfAborted(signal)
+    const p = validateReadFile(requested, { profileId: tab.profileId, approvedExternal: approvedExternalPaths.includes(requested) })
+    const stat = fs.lstatSync(p)
     if (!stat.isFile()) throw new ActionError(`不是文件: ${p}`)
     total += stat.size
     if (total > 20 * 1024 * 1024) throw new ActionError('上传文件总大小超过 20MB 限制')
@@ -2109,10 +2119,20 @@ export async function doUploadFile(tab: Tab, ref: string, paths: string[]): Prom
                 : ext === '.txt'
                   ? 'text/plain'
                   : 'application/octet-stream'
-    files.push({ name: pathMod.basename(p), type: mime, data: fs.readFileSync(p).toString('base64') })
+    // Recheck after metadata reads so a switched link is never intentionally followed.
+    validateReadFile(p, { profileId: tab.profileId, approvedExternal: approvedExternalPaths.includes(requested) })
+    const fd = fs.openSync(p, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0))
+    try {
+      const actual = fs.fstatSync(fd)
+      if (!actual.isFile() || actual.dev !== stat.dev || actual.ino !== stat.ino || actual.size !== stat.size) throw new ActionError('上传文件在审批后已变化。', 'PERMISSION_ERROR')
+      const data = fs.readFileSync(fd)
+      if (data.length !== actual.size || total - stat.size + data.length > 20 * 1024 * 1024) throw new ActionError('上传文件在读取期间已变化。', 'PERMISSION_ERROR')
+      files.push({ name: pathMod.basename(p), type: mime, data: data.toString('base64') })
+    } finally { fs.closeSync(fd) }
   }
   assertTabUsable(tab)
   assertRefContext(wc)
+  throwIfAborted(signal)
   const result = (await wc.executeJavaScript(uploadScript(ref, files), false)) as {
     ok: boolean
     reason?: string
@@ -2140,63 +2160,20 @@ export async function doUploadFile(tab: Tab, ref: string, paths: string[]): Prom
  * 限制在浏览器自己的导出目录内，同时拒绝符号链接，避免写到用户配置或
  * 证据登记文件。不传 path 的自动导出不受影响。
  */
-const insideDir = (pathMod: typeof import('node:path'), root: string, target: string): boolean => {
-  const rel = pathMod.relative(root, target)
-  return rel === '' || (!rel.startsWith('..') && !pathMod.isAbsolute(rel))
-}
+export interface ExportOptions { profileId?: string; approvedExternal?: boolean; overwrite?: boolean }
 
 export async function resolveExportFile(
   requested: string | undefined,
   ext: '.pdf' | '.har',
-  defaultFile: string
+  defaultFile: string,
+  options: ExportOptions = {}
 ): Promise<{ file: string; explicit: boolean }> {
-  if (!requested) return { file: defaultFile, explicit: false }
-  const [fsMod, pathMod, osMod] = await Promise.all([
-    import('node:fs'),
-    import('node:path'),
-    import('node:os')
-  ])
-  if (!requested.trim() || requested.includes('\0')) {
-    throw new ActionError('导出路径不能为空或包含非法字符')
-  }
-  let file = requested
+  const pathMod = await import('node:path')
+  let file = requested || defaultFile
   if (pathMod.extname(file).toLowerCase() !== ext) file += ext
-  file = pathMod.resolve(file)
-  const home = osMod.homedir()
-  const roots = [
-    process.env['AA_BROWSER_EXPORT_DIR'],
-    process.env['AA_BROWSER_DOWNLOAD_DIR'] || pathMod.join(home, '.aabrowser', 'downloads'),
-    pathMod.join(home, '.aabrowser', 'har'),
-    pathMod.join(home, '.aabrowser', 'screenshots')
-  ]
-    .filter((root): root is string => Boolean(root))
-    .map((root) => pathMod.resolve(root))
-  if (!roots.some((root) => insideDir(pathMod, root, file))) {
-    throw new ActionError(
-      `导出路径必须位于浏览器导出目录内（${roots.join('、')}）；可用 AA_BROWSER_EXPORT_DIR 自定义目录。当前: ${file}`
-    )
-  }
-  if (fsMod.existsSync(file)) {
-    const st = fsMod.lstatSync(file)
-    if (st.isSymbolicLink()) throw new ActionError(`拒绝写入符号链接: ${file}`)
-    if (!st.isFile()) throw new ActionError(`导出路径不是普通文件: ${file}`)
-  }
-  // 父目录可能是指向外部的符号链接；按真实路径再确认一次（只检查已存在、且词法上位于根内的祖先）。
-  const root = roots.find((candidate) => insideDir(pathMod, candidate, file))
-  if (root && fsMod.existsSync(root)) {
-    let parent = pathMod.dirname(file)
-    while (!fsMod.existsSync(parent) && pathMod.dirname(parent) !== parent && insideDir(pathMod, root, parent)) {
-      parent = pathMod.dirname(parent)
-    }
-    if (fsMod.existsSync(parent)) {
-      const realParent = fsMod.realpathSync(parent)
-      const realRoot = fsMod.realpathSync(root)
-      if (!insideDir(pathMod, realRoot, realParent)) {
-        throw new ActionError(`导出路径的真实父目录不在允许范围内: ${realParent}`)
-      }
-    }
-  }
-  return { file, explicit: true }
+  try { file = resolveWriteFile(file, options) }
+  catch (error) { throw new ActionError(redactText((error as Error).message), 'PERMISSION_ERROR') }
+  return { file, explicit: !!requested }
 }
 
 /** 页面存 PDF */
@@ -2204,7 +2181,8 @@ export async function doPdf(
   tab: Tab,
   filePath?: string,
   landscape = false,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options: ExportOptions & { directory?: string } = {}
 ): Promise<{ savedPath: string }> {
   throwIfAborted(signal)
   const wc = tab.view.webContents
@@ -2212,18 +2190,16 @@ export async function doPdf(
   throwIfAborted(signal)
   const osMod = await import('node:os')
   const pathMod = await import('node:path')
-  const fsMod = await import('node:fs')
   const defaultFile = pathMod.join(
-    process.env['AA_BROWSER_DOWNLOAD_DIR'] || pathMod.join(osMod.homedir(), '.aabrowser', 'downloads'),
-    `aa-page-${Date.now()}.pdf`
+    options.directory || process.env['AA_BROWSER_DOWNLOAD_DIR'] || pathMod.join(osMod.homedir(), '.aabrowser', 'downloads'),
+    `aa-page-${Date.now()}-${(await import('node:crypto')).randomUUID()}.pdf`
   )
-  const { file, explicit } = await resolveExportFile(filePath, '.pdf', defaultFile)
+  const { file, explicit } = await resolveExportFile(filePath, '.pdf', defaultFile, { ...options, profileId: tab.profileId })
   throwIfAborted(signal)
-  fsMod.mkdirSync(pathMod.dirname(file), { recursive: true })
-  fsMod.writeFileSync(file, pdf)
+  writeExportFile(file, pdf, { ...options, profileId: tab.profileId })
   // Printing may be non-cancellable; do not register a PDF after its caller has cancelled.
   throwIfAborted(signal)
-  getEvidenceManager().record(file, 'pdf', { managed: !explicit })
+  getEvidenceManager(tab.profileId).record(file, 'pdf', { managed: !explicit })
   return { savedPath: file }
 }
 

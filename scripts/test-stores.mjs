@@ -55,15 +55,15 @@ test('invalid stored settings are normalized without leaking unsafe types', () =
   assert.equal(value.fullSnapshot, false)
   assert.deepEqual(value.allowedSites, ['https://example.com'])
 })
-test('new users default to light theme and legacy settings migrate without rewriting', () => {
+test('new users default to dark theme and explicit legacy themes are preserved', () => {
   fixture('theme-defaults')
   const fresh = new SettingsStore()
-  assert.equal(fresh.get().theme, 'light')
+  assert.equal(fresh.get().theme, 'dark')
   const legacyFile = path.join(path.dirname(process.env.AA_BROWSER_SETTINGS_FILE), 'legacy.json')
   fs.writeFileSync(legacyFile, JSON.stringify({ locale: 'zh-CN', searchEngine: 'https://www.bing.com/search?q=' }))
   process.env.AA_BROWSER_SETTINGS_FILE = legacyFile
   const legacy = new SettingsStore()
-  assert.equal(legacy.get().theme, 'light')
+  assert.equal(legacy.get().theme, 'dark')
   assert.equal(legacy.set({ theme: 'dark' }).theme, 'dark')
   assert.equal(legacy.set({ theme: 'system' }).theme, 'system')
 })
@@ -147,7 +147,7 @@ test('session snapshots only keep web URLs, strip credentials, dedupe and cap ta
   assert.equal(snapshot.activeIndex, 19)
   assert.equal(JSON.stringify(snapshot).includes('secret'), false)
   assert.equal(normalizeSessionSnapshot({ version: 2, tabs: [{ url: 'https://example.com' }] }).tabs.length, 1)
-  assert.equal(normalizeSessionSnapshot({ version: 3, tabs: [{ url: 'https://example.com' }] }), null)
+  assert.equal(normalizeSessionSnapshot({ version: 4, tabs: [{ url: 'https://example.com' }] }), null)
   assert.equal(normalizeSessionSnapshot({ version: 1, tabs: [{ url: 'about:blank' }] }), null)
 })
 test('session store round-trips restorable tabs and clears the record when none remain', () => {
@@ -160,7 +160,7 @@ test('session store round-trips restorable tabs and clears the record when none 
   ], 1)
   assert.deepEqual(saved.tabs.map((tab) => tab.url), ['https://a.example/', 'https://b.example/'])
   assert.deepEqual(saved.tabs.map((tab) => tab.id), ['tabaa', 'tabbb'])
-  assert.equal(saved.version, 2)
+  assert.equal(saved.version, 3)
   assert.equal(saved.activeIndex, 1)
   const loaded = store.load()
   assert.deepEqual(loaded.tabs.map((tab) => tab.url), ['https://a.example/', 'https://b.example/'])
@@ -176,6 +176,16 @@ test('corrupted or future session records are ignored instead of failing startup
   assert.equal(new SessionStore().load(), null)
   fs.writeFileSync(file, JSON.stringify({ version: 99, tabs: [{ url: 'https://x.example/' }] }))
   assert.equal(new SessionStore().load(), null)
+})
+test('session v3 preserves equal URLs in different profiles and rejects unsafe profile identifiers', () => {
+  const id = `p${'a'.repeat(24)}`
+  const result = normalizeSessionSnapshot({ version: 3, tabs: [
+    { url: 'https://same.example/', profileId: 'default' },
+    { url: 'https://same.example/', profileId: id },
+    { url: 'https://same.example/', profileId: id },
+    { url: 'https://unsafe.example/', profileId: '../another' }
+  ] })
+  assert.deepEqual(result.tabs.map((tab) => tab.profileId), ['default', id])
 })
 fs.writeFileSync(path.join(runDir, 'result.json'), JSON.stringify({ failures, results }, null, 2))
 console.log(`${results.length - failures}/${results.length} persistence checks passed`)

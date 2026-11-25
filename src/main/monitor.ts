@@ -1,14 +1,16 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import { nativeImage } from 'electron'
 import type { MonitorState } from '@shared/types'
 import type { Tab } from './tabs'
 import { captureVisual } from './visual'
-import { getEvidenceManager } from './evidence'
+import { getEvidenceManager, type EvidenceEntry } from './evidence'
 
 export interface MonitorFrame {
   tabId: string
+  profileId?: string
   url: string
   title: string
   capturedAt: number
@@ -33,9 +35,28 @@ const MAX_HISTORY = 20
  * 内部兜底永远轮不到执行。
  */
 const CAPTURE_TIMEOUT_MS = 20_000
+let contextProfile = (): string | undefined => undefined
+let directoryProvider: ((profileId: string) => string) | undefined
 
-function monitorDir(): string {
-  return process.env['AA_BROWSER_MONITOR_DIR'] || path.join(os.homedir(), '.aabrowser', 'monitor')
+export function configureMonitorProfiles(current: () => string | undefined, directoryFor: (profileId: string) => string): void {
+  contextProfile = current
+  directoryProvider = directoryFor
+}
+
+function monitorDir(profileId: string): string {
+  return path.resolve((profileId === 'default' ? process.env.AA_BROWSER_MONITOR_DIR : undefined) || directoryProvider?.(profileId) ||
+    (profileId === 'default' ? path.join(os.homedir(), '.aabrowser', 'monitor') : path.join(os.homedir(), '.aabrowser', 'profiles', profileId, 'monitor')))
+}
+
+function assertNoLinks(file: string): void {
+  for (let current = path.resolve(file); ; current = path.dirname(current)) {
+    try {
+      if (fs.lstatSync(current).isSymbolicLink()) throw new Error('[FILE_LINK_DENIED] Monitor paths cannot contain symbolic links or junctions.')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    if (path.dirname(current) === current) break
+  }
 }
 
 function cloneState(state: MonitorState): MonitorState {
@@ -47,12 +68,11 @@ function safeDisplayUrl(value: string): string {
     const url = new URL(value)
     url.username = ''
     url.password = ''
-    for (const key of [...url.searchParams.keys()]) {
-      if (/(?:token|secret|password|passwd|api[_-]?key|authorization|cookie)/i.test(key)) url.searchParams.set(key, '[redacted]')
-    }
+    url.search = ''
+    url.hash = ''
     return url.toString()
   } catch {
-    return value.slice(0, 500)
+    return '[invalid URL]'
   }
 }
 
@@ -68,6 +88,11 @@ export class BrowserMonitor {
   private previewRequested = false
   private windowVisible = false
   private latestFrame?: MonitorFrame
+  private selectedTab: Tab | null = null
+  private selectedProfileId = 'default'
+  private histories = new Map<string, MonitorState['history']>()
+  private historyOwners = new Map<string, string>()
+  private ownedFrames = new Map<string, EvidenceEntry>()
   /** 每次 start/stop/setTab 递增，丢弃旧标签或已停止会话的迟到截图。 */
   private captureGeneration = 0
   private pointer: MonitorFrame['pointer']
@@ -83,7 +108,34 @@ export class BrowserMonitor {
   constructor(private readonly deps: MonitorDeps) {}
 
   getState(): MonitorState {
+    const profileId = contextProfile()
+    if (profileId !== undefined && profileId !== this.selectedProfileId) {
+      return cloneState({ enabled: false, control: this.state.control, status: 'idle', frameSeq: 0, history: this.histories.get(profileId) ?? [] })
+    }
     return cloneState(this.state)
+  }
+
+  getUiState(): MonitorState {
+    return cloneState(this.state)
+  }
+
+  private select(tab: Tab): void {
+    const profileId = tab.profileId ?? 'default'
+    if (!/^(?:default|p[a-f0-9]{24})$/.test(profileId)) throw new Error('[INVALID_PROFILE] Invalid monitor Profile.')
+    if (contextProfile() !== undefined && contextProfile() !== profileId) throw new Error('[PROFILE_ACCESS_DENIED] Monitor target belongs to another Profile.')
+    this.captureGeneration++
+    this.selectedTab = tab
+    this.latestFrame = undefined
+    this.pointer = undefined
+    this.pointerTabId = undefined
+    this.state.tabId = tab.id
+    this.state.currentTask = undefined
+    this.state.lastError = undefined
+    this.state.lastFrameAt = undefined
+    this.selectedProfileId = profileId
+    let history = this.histories.get(profileId)
+    if (!history) { history = []; this.histories.set(profileId, history) }
+    this.state.history = history
   }
 
   setPreviewRequested(requested: boolean): void {
@@ -99,11 +151,8 @@ export class BrowserMonitor {
   start(tabId?: string): MonitorState {
     const tab = this.deps.getTab(tabId)
     if (!tab) throw new Error(tabId ? `标签不存在: ${tabId}` : '没有可预览的标签页')
-    this.captureGeneration++
+    this.select(tab)
     this.state.enabled = true
-    this.state.tabId = tab.id
-    this.pointer = undefined
-    this.pointerTabId = undefined
     this.state.status = 'idle'
     this.state.lastError = undefined
     if (!this.timer) this.timer = setInterval(() => { this.queueCapture() }, FRAME_INTERVAL_MS)
@@ -127,10 +176,7 @@ export class BrowserMonitor {
     if (!this.state.enabled) return this.start(tabId)
     const tab = this.deps.getTab(tabId)
     if (!tab) throw new Error(`标签不存在: ${tabId}`)
-    this.captureGeneration++
-    this.state.tabId = tab.id
-    this.pointer = undefined
-    this.pointerTabId = undefined
+    this.select(tab)
     this.queueCapture()
     this.deps.emitState(this.getState())
     return this.getState()
@@ -180,19 +226,26 @@ export class BrowserMonitor {
 
   historyFrame(capturedAt: number): MonitorFrame | null {
     if (!Number.isSafeInteger(capturedAt)) return null
-    const entry = this.state.history.find((item) => item.capturedAt === capturedAt)
+    const entry = this.getState().history.find((item) => item.capturedAt === capturedAt)
     if (!entry) return null
-    const root = path.resolve(monitorDir())
+    const profileId = this.historyOwners.get(entry.file)
+    if (!profileId) return null
+    const root = monitorDir(profileId)
     const file = path.resolve(entry.file)
-    if (path.dirname(file) !== root || !/^frame-\d+-\d+\.png$/.test(path.basename(file))) return null
+    if (path.dirname(file) !== root || !/^frame-\d+-\d+(?:-[a-f0-9-]{36})?\.png$/.test(path.basename(file))) return null
     try {
+      assertNoLinks(file)
       const stat = fs.lstatSync(file)
-      if (!stat.isFile() || stat.isSymbolicLink()) return null
-      const image = nativeImage.createFromBuffer(fs.readFileSync(file))
+      if (!stat.isFile() || stat.size > 64 * 1024 * 1024) return null
+      const bytes = fs.readFileSync(file)
+      if (bytes.length < 33 || bytes.toString('ascii', 12, 16) !== 'IHDR' ||
+          !bytes.readUInt32BE(16) || !bytes.readUInt32BE(20) || bytes.readUInt32BE(16) * bytes.readUInt32BE(20) > 16_000_000) return null
+      const image = nativeImage.createFromBuffer(bytes)
       if (image.isEmpty()) return null
       const resized = image.getSize().width > 960 ? image.resize({ width: 960 }) : image
       return {
         tabId: entry.tabId,
+        profileId,
         url: entry.url,
         title: entry.title,
         capturedAt: entry.capturedAt,
@@ -203,6 +256,21 @@ export class BrowserMonitor {
     } catch {
       return null
     }
+  }
+
+  private retireFrame(file: string, profileId: string): void {
+    const entry = this.ownedFrames.get(file)
+    const identity = entry?.identity
+    const matches = (stat: fs.BigIntStats): boolean => !!entry && !!identity && stat.isFile() && stat.size === BigInt(entry.bytes) &&
+      (['dev', 'ino', 'birthtimeNs', 'mtimeNs', 'ctimeNs'] as const).every((key) => identity[key] === stat[key].toString())
+    try {
+      assertNoLinks(file)
+      if (path.dirname(file) === monitorDir(profileId) && matches(fs.lstatSync(file, { bigint: true })) &&
+          getEvidenceManager(profileId).hash(file) === entry?.hash && matches(fs.lstatSync(file, { bigint: true }))) fs.unlinkSync(file)
+    } catch { /* Preserve changed, missing or linked files; TTL cleanup retains its own identity checks. */ }
+    getEvidenceManager(profileId).forget(file)
+    this.ownedFrames.delete(file)
+    this.historyOwners.delete(file)
   }
 
   private async capture(): Promise<void> {
@@ -218,7 +286,7 @@ export class BrowserMonitor {
     let generation = -1
     let tab: Tab | null = null
     try {
-      tab = this.deps.getTab(this.state.tabId)
+      tab = this.selectedTab
       if (!tab || tab.view.webContents.isDestroyed()) {
         this.state.status = 'error'
         this.state.currentTask = '监控标签已关闭'
@@ -249,11 +317,17 @@ export class BrowserMonitor {
       // stop()/start()/setTab() 可能在截图等待期间发生：旧画面不得写入新会话历史，
       // 也不得把已停止的监控重新标成 idle。
       if (generation !== this.captureGeneration) return
-      const dir = monitorDir()
+      const profileId = tab.profileId ?? 'default'
+      const dir = monitorDir(profileId)
+      assertNoLinks(dir)
       fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
-      const file = path.join(dir, `frame-${capturedAt}-${++this.state.frameSeq}.png`)
+      assertNoLinks(dir)
+      const file = path.join(dir, `frame-${capturedAt}-${++this.state.frameSeq}-${randomUUID()}.png`)
+      assertNoLinks(file)
       fs.writeFileSync(file, png, { mode: 0o600, flag: 'wx' })
-      getEvidenceManager().record(file, 'screenshot', { managed: true })
+      const owned = getEvidenceManager(profileId).record(file, 'screenshot', { managed: true })
+      if (owned) this.ownedFrames.set(file, owned)
+      this.historyOwners.set(file, profileId)
       const url = safeDisplayUrl(tab.view.webContents.getURL() || tab.url)
       const title = tab.view.webContents.getTitle() || tab.title
       const pointer = this.pointerTabId === tab.id ? this.pointer : undefined
@@ -263,11 +337,11 @@ export class BrowserMonitor {
       while (this.state.history.length > MAX_HISTORY) {
         const old = this.state.history.shift()
         if (!old) break
-        try { fs.unlinkSync(old.file) } catch { /* 已被证据清理 */ }
-        getEvidenceManager().forget(old.file)
+        this.retireFrame(old.file, profileId)
       }
       const frame: MonitorFrame = {
         tabId: tab.id,
+        profileId,
         url,
         title,
         capturedAt,

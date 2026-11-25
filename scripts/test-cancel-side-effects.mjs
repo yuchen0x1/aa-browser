@@ -10,6 +10,7 @@ import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { compileFunction, constants } from 'node:vm'
 import { TOOL_ANNOTATIONS, TOOL_DEFS } from '../src/shared/tool-defs.mjs'
+import { SECURITY_MODULES, securityFixture } from './security-fixture.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const require = createRequire(import.meta.url)
@@ -20,6 +21,8 @@ const out = path.join(tmp, 'compiled')
 const url = 'https://fixture.test/page'
 const text = 'fixture text'
 const cancelled = { message: /已被用户中断/ }
+fs.writeFileSync(path.join(tmp, 'never-upload.txt'), 'fixture upload bytes')
+let security
 
 function load(file, deps) {
   const filename = path.join(out, file)
@@ -29,6 +32,7 @@ function load(file, deps) {
     importModuleDynamically: constants.USE_MAIN_CONTEXT_DEFAULT_LOADER
   })((name) => {
     if (name.startsWith('node:')) return require(name)
+    if (security?.[name]) return security[name]
     assert.ok(Object.hasOwn(deps, name), `Unexpected production dependency: ${name}`)
     return deps[name]
   }, module, module.exports)
@@ -46,9 +50,10 @@ try {
   const compiled = spawnSync(process.execPath, [
     tsc, '--ignoreConfig', '--noCheck', '--noResolve', '--rootDir', 'src', '--outDir', out,
     '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--esModuleInterop',
-    'src/main/actions.ts', 'src/main/frames.ts', 'src/main/tools.ts', 'src/snapshot/scripts.ts'
+    'src/main/actions.ts', 'src/main/frames.ts', 'src/main/tools.ts', 'src/snapshot/scripts.ts', ...SECURITY_MODULES.map((name) => `src/main/${name}.ts`)
   ], { cwd: root, encoding: 'utf8' })
   assert.equal(compiled.status, 0, `Compilation failed: ${compiled.error ?? ''}\n${compiled.stdout}\n${compiled.stderr}`)
+  security = securityFixture(path.join(out, 'main'))
 
   // HAR uses a dynamic Electron import. Resolve it in the temp tree; fs/path/os stay real.
   const electronFixture = path.join(out, 'node_modules', 'electron')
@@ -106,6 +111,8 @@ try {
       isDestroyed: () => false,
       isLoading: () => false,
       async executeJavaScript(script) {
+        if (script.includes('__aaOperationNodes')) return { ok: true, risky: false, label: 'Fixture', fingerprint: 'fixture', document: '1', url }
+        if (script === 'String(performance.timeOrigin)') return '1'
         if (pageSteps.has(script)) return step(...pageSteps.get(script))
         if (script === scripts.focusStateScript('e1')) return step('focusState:e1', { ok: true })
         if (script.includes('window.__aaClickProbe =')) return step('armProbe', true)
@@ -118,9 +125,11 @@ try {
       sendInputEvent: (event) => calls.push(event.keyCode ? `${event.type}:${event.keyCode}` : event.type),
       mainFrame: {
         url, frameTreeNodeId: 1, frames: [],
-        executeJavaScript: (script) => script.includes('if (sensitive) el.focus()')
-          ? step('frameInspect', { ok: true, sensitive: false })
-          : step('frameWrite', { ok: true })
+        executeJavaScript: (script) => script.includes('__aaOperationNodes')
+          ? Promise.resolve({ ok: true, risky: false, label: 'Fixture frame', fingerprint: 'fixture', document: '1', url })
+          : script.includes('if (sensitive) el.focus()')
+            ? step('frameInspect', { ok: true, sensitive: false })
+            : step('frameWrite', { ok: true })
       }
     }
     const tab = {
@@ -206,7 +215,10 @@ try {
     await test(`in-flight cancellation: ${name}`, { timeout: 3000 }, async () => {
       const f = fixture(options)
       await f.abortDuring(tool, args)
-      assert.deepEqual(f.calls, calls)
+      const expected = [...calls]
+      const submits = args.submit || args.fields?.some((field) => field.submit)
+      if (submits && !expected.includes('operationApproval') && expected.includes('inspect:e1')) expected.splice(1, 0, 'operationApproval')
+      assert.deepEqual(f.calls, expected)
     })
   }
 
@@ -261,7 +273,7 @@ try {
     const f = fixture({ verify: '' })
     const result = await f.call('browser_fill_form', { fields: [formSubmit.fields[0]], snapshot: false, __aaSignal: new AbortController().signal })
     assert.match(result.content[0].text, /已填写 1 个字段/)
-    assert.deepEqual(f.calls, ['inspect:e1', 'focus:e1', 'focusState:e1', 'focusState:e1', `insertText:${text}`, 'verify:e1', 'setter:e1', 'focusState:e1', 'keyDown:Enter', 'keyUp:Enter'])
+    assert.deepEqual(f.calls, ['inspect:e1', 'operationApproval', 'focus:e1', 'focusState:e1', 'focusState:e1', `insertText:${text}`, 'verify:e1', 'setter:e1', 'focusState:e1', 'keyDown:Enter', 'keyUp:Enter'])
   })
 
   await test('without cancellation, HAR still saves and registers the approved output', async () => {

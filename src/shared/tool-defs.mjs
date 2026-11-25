@@ -317,7 +317,7 @@ export const TOOL_DEFS = [
     name: 'browser_cookies',
     title: 'Cookie 管理',
     description:
-      'Get / set / clear cookies of the browser session (covers all sites the session has visited). Essential for login-state testing. set requires url + name + value.',
+      'Get / set / clear cookies of the selected Profile session. Reads default to the active origin with redacted values; includeSensitive requires native approval. set requires url + name + value.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -328,6 +328,7 @@ export const TOOL_DEFS = [
         domain: { type: 'string', description: '(set/clear filter) Cookie domain' },
         secure: { type: 'boolean', description: '(set) Secure flag (default: true for https URLs)' },
         httpOnly: { type: 'boolean', description: '(set) HttpOnly flag' },
+        includeSensitive: { type: 'boolean', description: '(get) Reveal cookie values only after human approval' },
         expiresSeconds: { type: 'number', description: '(set) Expires in N seconds from now (omit = session cookie)' },
         tabId: { type: 'string', description: 'Tab id (default: active tab)' }
       },
@@ -343,6 +344,7 @@ export const TOOL_DEFS = [
       properties: {
         action: { type: 'string', enum: ['get', 'set', 'remove', 'clear'], description: 'Operation (get without key = list all)' },
         kind: { type: 'string', enum: ['local', 'session'], description: 'localStorage (default) or sessionStorage' },
+        includeSensitive: { type: 'boolean', description: '(get) Reveal sensitive storage values only after human approval' },
         key: { type: 'string', description: 'Storage key (get without key = list all entries)' },
         value: { type: 'string', description: '(set) Value to store' },
         tabId: { type: 'string', description: 'Tab id (default: active tab)' }
@@ -769,11 +771,11 @@ export const TOOL_DEFS = [
     name: 'browser_extensions',
     title: '浏览器扩展',
     description:
-      'Manage unpacked (Load unpacked) Chrome extensions. action=list shows loaded extensions (id, name, version, manifest version, local path); action=load loads an unpacked extension from an absolute directory path that contains manifest.json (persisted, reloaded on browser restart, injected into the shared session; isolated tabs do not get extensions); action=remove unloads one by path or extension id and removes it from the persisted list. Extensions take effect for new page loads — reload the tab after loading one.',
+      'Manage unpacked Chrome extensions for the selected Profile. list reports source, permissions, version and runtime status; load installs from a local directory; enable/disable toggles the registration; remove uninstalls it. check_updates inspects update availability without executing downloaded code. Reload pages after changes; temporary isolated tabs do not load Profile extensions.',
     inputSchema: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['list', 'load', 'remove'], description: 'Extension operation (default list)' },
+        action: { type: 'string', enum: ['list', 'load', 'remove', 'enable', 'disable', 'check_updates'], description: 'Extension operation (default list)' },
         path: { type: 'string', description: '(load) absolute directory containing manifest.json; (remove) alternative to id' },
         id: { type: 'string', description: '(remove) extension id from action=list' }
       }
@@ -793,10 +795,121 @@ export const TOOL_DEFS = [
       }
     }
   }
+  ,{
+    name: 'browser_profiles',
+    title: '浏览器配置文件',
+    description: 'Manage independent persistent browser identities. Existing calls use the legacy default profile. bind selects a profile for this MCP client; profileId on any tool selects only that call. Profile lifecycle changes require native human approval. Full data archives require a closed, offline profile; never copy a live Chromium database.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['list', 'get', 'create', 'update', 'remove', 'start', 'stop', 'default', 'bind', 'clone', 'export', 'import'] },
+        profileId: { type: 'string' },
+        name: { type: 'string', maxLength: 80 },
+        description: { type: 'string', maxLength: 500 },
+        color: { type: 'string' },
+        icon: { type: 'string' }
+      }
+    }
+  },
+  {
+    name: 'browser_workflows',
+    title: '可恢复工作流',
+    description: 'Execute durable, Profile-bound workflows using existing browser tools. Steps retain dependencies, checkpoints and results. Restart never automatically replays side effects; recovery verifies current page state and requests fresh native approval. Mutating interrupted steps require targeted review/retry. Inputs are encrypted where OS storage is available; unavailable secrets require reentry.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['list', 'get', 'templates', 'create', 'run', 'pause', 'resume', 'cancel', 'retry', 'input'] },
+        workflowId: { type: 'string' },
+        stepId: { type: 'string' },
+        name: { type: 'string', maxLength: 100 },
+        templateId: { type: 'string' },
+        scheduleAt: { type: 'number', description: 'One-shot schedule as a future Unix timestamp in milliseconds' },
+        url: { type: 'string' },
+        params: { type: 'object' },
+        steps: { type: 'array', maxItems: 80, items: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, tool: { type: 'string' }, args: { type: 'object' }, dependsOn: { type: 'array', items: { type: 'string' } }, maxRetries: { type: 'number' }, requiresApproval: { type: 'boolean' }, checkpoint: { type: 'object' } }, required: ['id', 'name', 'tool', 'args'] } },
+        input: { type: 'object' }
+      }
+    }
+  },
+  {
+    name: 'browser_network',
+    title: '网络环境管理',
+    description: 'Read and apply real Profile Session proxy environments, resolve routes, test connectivity and diagnose DNS/latency. Configuration changes require native approval and close existing connections before use. Credentials are protected by OS storage, never returned. DNS results describe the local resolver, not proxy-side DNS. Exit IP requests are explicit.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['get', 'set', 'apply', 'test', 'resolve', 'diagnose'] },
+        config: { type: 'object' },
+        url: { type: 'string' },
+        hostname: { type: 'string' },
+        exitIp: { type: 'boolean' }
+      }
+    }
+  },
+  {
+    name: 'browser_visual',
+    title: '视觉坐标操作',
+    description: 'Use DOM/ref first. capture returns a screenshot with an expiring captureId. click/drag/crop require that captureId, unchanged document, viewport, zoom and fresh pixels; coordinates are CSS viewport pixels. Actions record before/after evidence and require native approval. This engine does not infer OCR or semantic image matches; the agent locates coordinates from the screenshot.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['capture', 'click', 'drag', 'scroll', 'crop'] },
+        tabId: { type: 'string' },
+        captureId: { type: 'string' },
+        x: { type: 'number' }, y: { type: 'number' },
+        toX: { type: 'number' }, toY: { type: 'number' },
+        deltaX: { type: 'number' }, deltaY: { type: 'number' },
+        clip: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, width: { type: 'number' }, height: { type: 'number' } }, required: ['x', 'y', 'width', 'height'] }
+      }
+    }
+  },
+  {
+    name: 'browser_permissions',
+    title: '权限与审批记录',
+    description: 'Inspect this Profile/client/task permission grants and bounded redacted approval audit. request opens native human approval for one scoped, expiring grant; no caller flag can bypass approval. revoke removes a scoped grant. Sensitive/high-risk permissions are single-use.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['list', 'audit', 'request', 'revoke'] },
+        level: { type: 'string', enum: ['browse', 'read', 'interact', 'files', 'network', 'sensitive', 'high-risk'] },
+        grantId: { type: 'string' },
+        taskId: { type: 'string' },
+        ttlMs: { type: 'number' },
+        once: { type: 'boolean' },
+        reason: { type: 'string', maxLength: 200 },
+        operation: { type: 'string', maxLength: 200, description: 'Exact operation name required for sensitive/high-risk single-use grants' }
+      }
+    }
+  },
+  {
+    name: 'browser_diagnostics',
+    title: '浏览器诊断',
+    description: 'Read actual browser/renderer/MCP/Profile/workflow/resource health. repair supports bounded safe reload, connection reconnect and cache-only cleanup; it never automatically removes cookies, site storage or login state. Repairs require native human approval.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['get', 'repair'] },
+        repair: { type: 'string', enum: ['reload', 'reconnect', 'clear-cache', 'disable-extension'] },
+        extensionId: { type: 'string' },
+        tabId: { type: 'string' }
+      }
+    }
+  }
 ]
+
+// Optional call context is additive; old clients keep the legacy default profile.
+for (const tool of TOOL_DEFS) {
+  tool.inputSchema.properties.profileId ??= { type: 'string', description: 'Optional persistent Profile id; defaults to this MCP client binding or the browser default.' }
+}
 
 
 export const TOOL_ANNOTATIONS = Object.freeze({
+  browser_profiles: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  browser_workflows: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  browser_network: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  browser_visual: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  browser_permissions: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+  browser_diagnostics: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
   browser_navigate: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   browser_reload: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
   browser_snapshot: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: true },

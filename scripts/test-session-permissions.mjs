@@ -346,20 +346,20 @@ try {
     await tick() // An unhandled rejection here fails node:test.
   })
 
-  await test('existing non-prompt policy is preserved, including allowed unknown/features and unattended prompt denial', async () => {
+  await test('unknown and privileged features fail closed while basic navigation permissions remain available', async () => {
     const f = fixture()
     const ses = f.session({})
     const wc = webContents()
     for (const permission of [
       'clipboard-read', 'deprecated-sync-clipboard-read', 'midi', 'midiSysex', 'hid', 'serial', 'usb',
-      'bluetooth', 'idle-detection', 'speaker-selection', 'window-management', 'display-capture', 'openExternal'
+      'bluetooth', 'idle-detection', 'speaker-selection', 'window-management', 'display-capture', 'openExternal',
+      'unknown', 'keyboardLock', 'fileSystem', 'mediaKeySystem', 'persistent-storage', 'background-sync', 'local-fonts', 'local-network'
     ]) {
       assert.equal(await request(ses, wc, permission).result, false, permission)
       assert.equal(check(ses, permission), false, permission)
     }
     for (const permission of [
-      'unknown', 'fullscreen', 'pointerLock', 'keyboardLock', 'clipboard-sanitized-write',
-      'fileSystem', 'mediaKeySystem', 'persistent-storage', 'background-sync', 'local-fonts', 'local-network'
+      'fullscreen', 'pointerLock', 'clipboard-sanitized-write'
     ]) {
       assert.equal(await request(ses, wc, permission).result, true, permission)
       assert.equal(check(ses, permission), true, permission)

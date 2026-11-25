@@ -100,6 +100,8 @@ async function testRenderer() {
     }
     const handlers = {
       'aa:get-state': () => state,
+      'aa:platform-state': () => ({ profiles: [], defaultProfileId: 'default', activeProfileId: 'default', workflows: [], templates: [], network: {}, permissions: { grants: [], audit: [] }, diagnostics: {} }),
+      'aa:platform-action': () => ({ ok: false, error: 'Platform actions are outside this settings race fixture' }),
       'aa:settings-open': () => undefined,
       'aa:settings-get': () => view(),
       'aa:settings-set': (patch) => { settings = { ...settings, ...patch }; return structuredClone(settings) },

@@ -20,6 +20,7 @@ npm run test:release # 发布标签/草稿/资产回归（模拟 GitHub API）
 npm run test:agent-cancellation # 真实回环 WS：同号/重复请求、精准取消、连接重建
 npm run test:session-permissions # 生产权限策略：隔离会话、媒体子能力、文档失效（模拟 Electron）
 npm run test:approval-parity # 生产工具 handler：敏感输入与求值审批（模拟页面/审批边界）
+node scripts/test-workflows.mjs # 生产工作流：依赖、加密输入、崩溃检查点与副作用恢复
 ```
 
 要求使用 Node.js 22.12 或更高版本。Windows 和 Ubuntu 的打包及支持状态见 [平台指南](docs/PLATFORMS.md)。
@@ -29,7 +30,7 @@ npm run test:approval-parity # 生产工具 handler：敏感输入与求值审�
 ## 提交 PR 前
 
 - `npm run check`、`npm run build`、`npm run smoke`、`npm run test:desktop`、`npm run test:stores`、`npm run test:updater` 与 `npm run test:release` 必须通过（CI 会自动跑）
-- 新增 MCP 工具时同步更新：`src/main/tools.ts`、`cli/mcp.mjs` 工具定义、README 工具表
+- MCP 定义唯一来源是 `src/shared/tool-defs.mjs`，不要在桥里复制 schema；主进程增加 handler，README 工具表同步登记，运行 `npm run check:tools` 与 `npm run test:tools`
 - 修改注入引擎（`src/snapshot/engine.js`）时注意保持**自包含**：函数体不得引用外部变量/import，主进程靠 `Function.prototype.toString()` 注入
 - 动作/配置类改动请附带 smoke 断言
 
@@ -38,6 +39,10 @@ npm run test:approval-parity # 生产工具 handler：敏感输入与求值审�
 - 主进程/渲染层用 TypeScript 严格模式；注入引擎为自包含 JS（原因见上）
 - 提交信息使用 conventional commits（feat/fix/chore/docs…）
 - 涉及用户配置文件写入的功能：必须备份、幂等、最小改动
+- Profile 路由使用 `ProfileManager` 的异步上下文，禁止用可变全局“当前 Profile”替代；旧版 `persist:aa-main` 必须保持可读
+- 工作流复用既有受保护工具，不绕过审批、标签队列或 Profile 租约；调度意图先持久化，可能产生副作用的中断步骤不能自动重放
+- 文件读写经过统一文件策略；日志和测试产物不得包含真实 Cookie、密码或 token
+- 架构与扩展边界见 [架构说明](docs/ARCHITECTURE.md)，安全约束见 [安全模型](docs/SECURITY_MODEL.md)
 
 ## 报告 Bug
 

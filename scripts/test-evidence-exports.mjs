@@ -9,9 +9,13 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { compileFunction, constants } from 'node:vm'
+import { createRequire } from 'node:module'
+import { SECURITY_MODULES, securityFixture } from './security-fixture.mjs'
 import { TOOL_DEFS, TOOL_ANNOTATIONS } from '../src/shared/tool-defs.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const require = createRequire(import.meta.url)
+let security
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'aa-evidence-exports-'))
 const out = path.join(tmp, 'compiled')
 const home = path.join(tmp, 'home')
@@ -34,6 +38,8 @@ function load(name, deps) {
     filename,
     importModuleDynamically: constants.USE_MAIN_CONTEXT_DEFAULT_LOADER
   })((name) => {
+    if (name.startsWith('node:')) return require(name)
+    if (security?.[name]) return security[name]
     if (name === 'node:async_hooks') return { AsyncLocalStorage }
     assert.ok(Object.hasOwn(deps, name), `Unexpected production dependency: ${name}`)
     return deps[name]
@@ -48,9 +54,10 @@ try {
     path.join(root, 'node_modules', 'typescript', 'bin', 'tsc'),
     '--ignoreConfig', '--noCheck', '--noResolve', '--rootDir', path.join(root, 'src'), '--outDir', out,
     '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--esModuleInterop',
-    ...['actions', 'tools', 'evidence', 'atomic-json', 'extensions'].map((name) => path.join(root, 'src', 'main', `${name}.ts`))
+    ...['actions', 'tools', 'evidence', 'atomic-json', 'extensions', ...SECURITY_MODULES].map((name) => path.join(root, 'src', 'main', `${name}.ts`))
   ], { cwd: root, encoding: 'utf8' })
   assert.equal(compiled.status, 0, `Compilation failed: ${compiled.error ?? ''}\n${compiled.stdout}\n${compiled.stderr}`)
+  security = securityFixture(path.join(out, 'main'))
 
   const electron = path.join(out, 'node_modules', 'electron')
   fs.mkdirSync(electron, { recursive: true })
@@ -76,10 +83,10 @@ try {
   let revision = 0
   const tab = {
     id: 'fixture-tab', title: 'Fixture', url: 'https://fixture.test/', keepRendering: () => () => {},
-    view: { webContents: { isDestroyed: () => false, printToPDF: async () => Buffer.from(`fixture PDF ${++revision}`) } },
+    view: { webContents: { getURL: () => 'https://fixture.test/', isDestroyed: () => false, printToPDF: async () => Buffer.from(`fixture PDF ${++revision}`) } },
     net: { ensure: async () => {}, toHar: () => ({ log: { version: '1.2', comment: `fixture HAR ${++revision}` } }) }
   }
-  const tools = buildTools({ active: () => tab }, 'about:blank', '', {}, {})
+  const tools = buildTools({ active: () => tab }, 'about:blank', '', {}, {}, { assertRunning() {}, opRequest: async () => true })
   const call = (name, args = {}) => {
     const tool = tools.find((tool) => tool.name === name)
     assert.ok(tool, `Missing tool: ${name}`)

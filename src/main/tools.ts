@@ -5,6 +5,13 @@ import { checkedStateScript, fingerprintScript, jsLiteral, refLiteral, tagNameSc
 import { TabManager, normalizeUrl } from './tabs'
 import { clipBody, safeNetworkHeaders, safeNetworkUrl } from './network'
 import type { DownloadTracker } from './downloads'
+import { randomUUID } from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
+import { redactText } from './redaction'
+import { validateToolArguments } from './tool-validation'
+import { fileScope, pathInside, validateReadFile, writeExportFile } from './file-policy'
+import { authorizeProfileAccess, getPermissionManager, type PermissionScope } from './permissions'
+import { getProfileManager } from './profiles'
 import {
   doHover,
   doNavigateHistory,
@@ -51,6 +58,7 @@ import {
   doConsoleLogs,
   raceAbort,
   resolveWebContents,
+  refFailure,
   assertRefContext,
   assertTabUsable,
   throwIfAborted,
@@ -85,6 +93,7 @@ export interface McpToolDef extends McpToolDefBase {
 const text = (t: string): ToolContent => ({ type: 'text', text: t })
 const callSignal = (args: Record<string, unknown>): AbortSignal | undefined =>
   args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
+const permissionContext = new AsyncLocalStorage<PermissionScope>()
 
 interface PerformanceResourceEntry {
   name: string
@@ -247,16 +256,91 @@ export function buildTools(
     })
   }
 
-  /** 若开启"高危操作人工确认"，请求一次人工批准；未开启直接放行。 */
+  /** Risk approval is mandatory and cannot be disabled by legacy preferences. */
   async function opGate(desc: { site: string; tabTitle: string; action: string; detail?: string }, signal?: unknown): Promise<void> {
-    if (!approvals) return
-    if (!getSettings?.().requireOperationApproval) return
     const sig = signal instanceof AbortSignal ? signal : undefined
+    assertToolRunning(sig)
+    const scope = permissionContext.getStore() ?? { profileId: getProfileManager().currentProfileId(), clientId: tabs.currentAgentClientId?.() }
+    const level = /敏感|凭据/.test(desc.action) ? 'sensitive' : 'high-risk'
+    // A named scope grant cannot identify a DOM target or script. Consume/audit
+    // the grant, then require a decision about this concrete operation.
+    getPermissionManager().check(scope, level, desc.action)
+    if (!approvals) throw new ActionError('此操作需要桌面人工审批，当前审批服务不可用。', 'PERMISSION_ERROR')
     const allowed = await approvals.opRequest(
-      { site: desc.site, tabTitle: desc.tabTitle, fieldLabel: desc.action, detail: desc.detail },
+      { site: redactText(desc.site, 240), tabTitle: redactText(desc.tabTitle, 160), fieldLabel: desc.action, detail: desc.detail ? redactText(desc.detail, 600) : undefined },
       sig
     )
-    if (!allowed) throw new ActionError(`高危操作已取消：${desc.action}`)
+    getPermissionManager().record({ ...scope, level, action: desc.action, allowed: allowed === true })
+    if (allowed !== true) throw new ActionError(`高危操作已取消：${desc.action}`)
+    assertToolRunning(sig)
+  }
+
+  type OperationTarget = { ok: boolean; reason?: string; risky: boolean; label: string; fingerprint: string; document: string; url: string }
+  function operationProbe(ref?: string, selector?: string, index = 0): string {
+    const target = ref ? `(window.__aaRefs || {})[${jsLiteral(ref)}]` : selector ? `document.querySelectorAll(${jsLiteral(selector)})[${index}]` : 'document.activeElement'
+    return `(() => {
+      const el = ${target};
+      if (!el || !el.isConnected) return { ok: false, reason: el ? 'detached' : 'no-ref' };
+      const control = el.closest('button,input,a,[role="button"]') || el;
+      const form = control.form || control.closest('form');
+      const label = [control.getAttribute('aria-label'),control.getAttribute('title'),control.textContent,control.getAttribute('name'),control.getAttribute('id'),control.getAttribute('href'),control.getAttribute('formaction'),form?.getAttribute('action')].filter(Boolean).join(' ').slice(0,1000);
+      const submit = !!form && ((control.tagName === 'BUTTON' && (!control.getAttribute('type') || control.type === 'submit')) || (control.tagName === 'INPUT' && /^(submit|image)$/.test(control.type)));
+      const risky = submit || /(?:pay(?:ment)?|checkout|place\\s*order|buy\\s*now|delete|remove|destroy|publish|send|submit|transfer|withdraw|security|password|upload|支付|付款|下单|购买|删除|移除|清空|发布|发送|提交|转账|提现|密码|安全设置|上传)/i.test(label);
+      window.__aaOperationNodes ||= new WeakMap();
+      if (!window.__aaOperationNodes.has(control)) window.__aaOperationNodes.set(control, String(Math.random()));
+      const fingerprint = [window.__aaOperationNodes.get(control),control.tagName,control.type,control.id,control.name,label].join('|');
+      return { ok:true,risky,label:label.slice(0,160),fingerprint,document:String(performance.timeOrigin),url:location.href };
+    })()`
+  }
+
+  async function targetGate(tab: ReturnType<typeof resolveWebContents>, opts: { ref?: string; additionalRefs?: string[]; selector?: string; frameId?: string; index?: number; force?: boolean; action?: string; detail?: string }, signal?: AbortSignal): Promise<void> {
+    const wc = tab.view.webContents
+    if (opts.ref || opts.additionalRefs?.length) assertRefContext(wc)
+    const probes = [operationProbe(opts.ref, opts.selector, opts.index), ...(opts.additionalRefs ?? []).map((ref) => operationProbe(ref))]
+    const inspect = (): Promise<OperationTarget[]> => Promise.all(probes.map(async (probe) => opts.frameId
+      ? await frameEvaluate(wc, opts.frameId, probe, signal) as OperationTarget
+      : await wc.executeJavaScript(probe, false) as OperationTarget))
+    const before = await inspect()
+    assertToolRunning(signal)
+    const invalid = before.findIndex((target) => !target?.ok)
+    if (invalid >= 0) {
+      const ref = [opts.ref, ...(opts.additionalRefs ?? [])][invalid]
+      if (ref) throw refFailure(ref, before[invalid]?.reason ?? 'no-ref')
+      throw new ActionError('无法核验操作对象；请重新获取页面快照。', 'STALE_REF')
+    }
+    if (!opts.force && !before.some((target) => target.risky)) return
+    await opGate({ site: before[0].url, tabTitle: tab.title, action: opts.action || '执行可能产生副作用的页面操作', detail: [...before.map((target) => target.label), opts.detail].filter(Boolean).join('\n') }, signal)
+    const after = await inspect()
+    assertToolRunning(signal)
+    if (before.some((target, index) => !after[index]?.ok || target.fingerprint !== after[index].fingerprint || target.document !== after[index].document || target.url !== after[index].url)) {
+      throw new ActionError('审批期间页面或操作对象已变化；请重新检查页面并再次审批。', 'STALE_REF')
+    }
+  }
+
+  async function exportOptions(tab: ReturnType<typeof resolveWebContents>, requested: unknown, ext: '.pdf' | '.har', signal?: AbortSignal): Promise<import('./actions').ExportOptions> {
+    const options: import('./actions').ExportOptions = { profileId: tab.profileId }
+    if (typeof requested !== 'string' || !requested) return options
+    const [fs, path] = await Promise.all([import('node:fs'), import('node:path')])
+    const file = path.extname(requested).toLowerCase() === ext ? requested : `${requested}${ext}`
+    const scope = fileScope(tab.profileId)
+    const external = !scope.roots.some((root) => pathInside(root, file))
+    const overwrite = fs.existsSync(file)
+    if (external || overwrite) {
+      await opGate({ site: siteOf(tab), tabTitle: tab.title, action: overwrite ? '覆盖已有导出文件' : '导出到配置文件目录以外', detail: file }, signal)
+      options.approvedExternal = external
+      options.overwrite = overwrite
+    }
+    return options
+  }
+
+  async function documentGate(tab: ReturnType<typeof resolveWebContents>, desc: { action: string; detail?: string }, signal?: AbortSignal): Promise<void> {
+    const wc = tab.view.webContents
+    const url = wc.getURL()
+    const before = await wc.executeJavaScript('String(performance.timeOrigin)', false)
+    await opGate({ site: url, tabTitle: tab.title, ...desc }, signal)
+    const after = await wc.executeJavaScript('String(performance.timeOrigin)', false)
+    assertToolRunning(signal)
+    if (wc.getURL() !== url || before !== after) throw new ActionError('审批期间文档已变化；请重新检查页面。', 'STALE_REF')
   }
 
   /** 当前标签的站点标签（审批面板显示用；URL 异常时退回原始串） */
@@ -470,7 +554,10 @@ export function buildTools(
       const button = (args['button'] as 'left' | 'right' | 'middle') || 'left'
       const clickCount = args['doubleClick'] ? 2 : 1
       const signal = callSignal(args)
-      const r = await onTab(tab, signal, () => doClick(tab, String(args['ref']), want, { button, clickCount, signal }))
+      const r = await onTab(tab, signal, async () => {
+        await targetGate(tab, { ref: String(args['ref']) }, signal)
+        return doClick(tab, String(args['ref']), want, { button, clickCount, signal })
+      })
       return { content: [text(withSnap(`已点击: ${r.clicked}`, r.snapshot, want))] }
     }
   })
@@ -482,13 +569,16 @@ export function buildTools(
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const want = args['snapshot'] !== false
       const signal = args['__aaSignal'] instanceof AbortSignal ? args['__aaSignal'] : undefined
-      const r = await onTab(tab, signal, () => doDrag(tab, String(args['ref']), {
-        toRef: args['toRef'] as string | undefined,
-        dx: args['dx'] as number | undefined,
-        dy: args['dy'] as number | undefined,
-        wantSnapshot: want,
-        signal
-      }))
+      const r = await onTab(tab, signal, async () => {
+        await targetGate(tab, { ref: String(args['ref']), additionalRefs: typeof args['toRef'] === 'string' ? [args['toRef']] : [] }, signal)
+        return doDrag(tab, String(args['ref']), {
+          toRef: args['toRef'] as string | undefined,
+          dx: args['dx'] as number | undefined,
+          dy: args['dy'] as number | undefined,
+          wantSnapshot: want,
+          signal
+        })
+      })
       // 拖放是否真的被页面接收必须如实回报：命令成功但页面没有 drop
       // 是后台拖拽最典型的静默失败。
       const verdict = r.dropped ? '' : '\n注意：没有在页面侧观测到 drop 事件，目标元素可能不支持该拖放。'
@@ -515,10 +605,7 @@ export function buildTools(
           return { content: [text('已允许继续。敏感字段内容由你在网页中输入；Agent 提供的文本未写入、读取或回传。请继续后续步骤。')] }
         }
         if (args['submit']) {
-          await opGate(
-            { site: new URL(tab.view.webContents.getURL()).host || tab.view.webContents.getURL(), tabTitle: tab.title, action: '提交表单/输入后回车' },
-            signal
-          )
+          await targetGate(tab, { ref, force: true, action: '提交表单/输入后回车' }, signal)
           assertToolRunning(signal)
         }
         const want = args['snapshot'] !== false
@@ -540,12 +627,15 @@ export function buildTools(
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const want = args['snapshot'] !== false
       const signal = callSignal(args)
-      const r = await onTab(tab, signal, () => doSelectOption(tab, String(args['ref']), {
-        value: args['value'] as string | undefined,
-        label: args['label'] as string | undefined,
-        wantSnapshot: want,
-        signal
-      }))
+      const r = await onTab(tab, signal, async () => {
+        await targetGate(tab, { ref: String(args['ref']) }, signal)
+        return doSelectOption(tab, String(args['ref']), {
+          value: args['value'] as string | undefined,
+          label: args['label'] as string | undefined,
+          wantSnapshot: want,
+          signal
+        })
+      })
       return { content: [text(withSnap(`已选择: ${r.selected}`, r.snapshot, want))] }
     }
   })
@@ -730,7 +820,13 @@ export function buildTools(
     name: 'browser_press_key',
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
-      const r = await onTab(tab, callSignal(args), () => doPressKey(tab, String(args['key'] ?? ''), Array.isArray(args['modifiers']) ? args['modifiers'].map(String) : []))
+      const r = await onTab(tab, callSignal(args), async () => {
+        const key = String(args['key'] ?? '').split('+').at(-1)?.trim() ?? ''
+        if (/^(?:enter|return|space|spacebar|delete|backspace)$/i.test(key)) {
+          await targetGate(tab, { force: /^(?:enter|return)$/i.test(key), action: '通过键盘执行页面操作' }, callSignal(args))
+        }
+        return doPressKey(tab, String(args['key'] ?? ''), Array.isArray(args['modifiers']) ? args['modifiers'].map(String) : [])
+      })
       const suffix = r.modifiers.length ? ` + ${r.modifiers.join('+')}` : ''
       return { content: [text(`已按下: ${r.pressed}${suffix}`)] }
     }
@@ -748,15 +844,13 @@ export function buildTools(
       )
       assertToolRunning(signal)
       const { app } = await import('electron')
-      const dir = process.env['AA_BROWSER_SCREENSHOT_DIR'] || `${app.getPath('home')}/.aabrowser/screenshots`
+      const dir = getProfileManager().directory(tab.profileId, 'screenshots') || process.env['AA_BROWSER_SCREENSHOT_DIR'] || `${app.getPath('home')}/.aabrowser/screenshots`
       try {
-        const fs = await import('node:fs')
         const path = await import('node:path')
         assertToolRunning(signal)
-        fs.mkdirSync(dir, { recursive: true })
-        const file = path.join(dir, `aa-${Date.now()}.png`)
-        fs.writeFileSync(file, Buffer.from(image.data ?? '', 'base64'))
-        getEvidenceManager().record(file, 'screenshot')
+        const file = path.join(dir, `aa-${Date.now()}-${randomUUID()}.png`)
+        writeExportFile(file, Buffer.from(image.data ?? '', 'base64'), { profileId: tab.profileId })
+        getEvidenceManager(tab.profileId).record(file, 'screenshot')
         return {
           content: [
             image,
@@ -846,17 +940,18 @@ export function buildTools(
         throw new ActionError('Cookie 操作必须为 get、set 或 clear。')
       }
       if (action === 'set' || action === 'clear') {
-        await opGate(
+        await documentGate(tab,
           {
-            site: siteOf(tab),
-            tabTitle: tab.title,
             action: action === 'set' ? '写入 Cookie（会改变登录态）' : '清除 Cookie（可能导致登出）',
             detail:
               (args['url'] ? `来源: ${String(args['url'])}` : `域名: ${String(args['domain'] ?? '全部')}`) +
               ` · 名称: ${String(args['name'] ?? '全部')}`
           },
-          args['__aaSignal']
+          callSignal(args)
         )
+      }
+      if (action === 'get' && args['includeSensitive'] === true) {
+        await documentGate(tab, { action: '读取 Cookie 凭据', detail: String(args['url'] || tab.view.webContents.getURL()) }, callSignal(args))
       }
       const r = await doCookies(tab, {
         action,
@@ -866,7 +961,8 @@ export function buildTools(
         domain: args['domain'] as string | undefined,
         secure: args['secure'] as boolean | undefined,
         httpOnly: args['httpOnly'] as boolean | undefined,
-        expiresSeconds: args['expiresSeconds'] as number | undefined
+        expiresSeconds: args['expiresSeconds'] as number | undefined,
+        includeSensitive: args['includeSensitive'] === true
       })
       return { content: [text(r.content)] }
     }
@@ -878,15 +974,16 @@ export function buildTools(
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const action = String(args['action'])
       const r = await onTab(tab, args['__aaSignal'], async () => {
+        if (action === 'get' && args['includeSensitive'] === true) {
+          await documentGate(tab, { action: '读取页面存储敏感值', detail: String(args['key'] || '全部键') }, callSignal(args))
+        }
         if (action === 'set' || action === 'remove' || action === 'clear') {
-          await opGate(
+          await documentGate(tab,
             {
-              site: siteOf(tab),
-              tabTitle: tab.title,
               action: action === 'set' ? '写入页面存储' : action === 'remove' ? '删除页面存储' : '清空页面存储',
               detail: `${(args['kind'] as string) === 'session' ? 'sessionStorage' : 'localStorage'} · 键: ${String(args['key'] ?? '全部')}`
             },
-            args['__aaSignal']
+            callSignal(args)
           )
         }
         assertToolRunning(callSignal(args))
@@ -894,7 +991,8 @@ export function buildTools(
           action: action as 'get' | 'set' | 'remove' | 'clear',
           kind: (args['kind'] as 'local' | 'session') ?? 'local',
           key: args['key'] as string | undefined,
-          value: args['value'] as string | undefined
+          value: args['value'] as string | undefined,
+          includeSensitive: args['includeSensitive'] === true
         })
       })
       return { content: [text(r.content)] }
@@ -933,7 +1031,10 @@ export function buildTools(
     name: 'browser_pdf',
     handler: async (args) => {
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
-      const r = await onTab(tab, callSignal(args), () => doPdf(tab, args['path'] as string | undefined, !!args['landscape'], callSignal(args)))
+      const r = await onTab(tab, callSignal(args), async () => {
+        const options = await exportOptions(tab, args['path'], '.pdf', callSignal(args))
+        return doPdf(tab, args['path'] as string | undefined, !!args['landscape'], callSignal(args), { ...options, directory: getProfileManager().directory(tab.profileId, 'downloads') })
+      })
       return { content: [text(`PDF 已保存: ${r.savedPath}`)] }
     }
   })
@@ -945,17 +1046,10 @@ export function buildTools(
       const paths = (args['paths'] as unknown[]).map(String)
       if (!paths.length) throw new ActionError('paths 不能为空')
       const r = await onTab(tab, args['__aaSignal'], async () => {
-        await opGate(
-          {
-            site: siteOf(tab),
-            tabTitle: tab.title,
-            action: '把本机文件上传到网页',
-            detail: paths.map((p) => p.slice(-90)).join('、')
-          },
-          args['__aaSignal']
-        )
+        paths.forEach((file) => { validateReadFile(file, { profileId: tab.profileId, approvedExternal: true }) })
+        await targetGate(tab, { ref: String(args['ref']), force: true, action: '把本机文件上传到网页', detail: paths.join('\n') }, callSignal(args))
         assertToolRunning(callSignal(args))
-        return await doUploadFile(tab, String(args['ref']), paths)
+        return await doUploadFile(tab, String(args['ref']), paths, paths, callSignal(args))
       })
       return { content: [text(r.content)] }
     }
@@ -971,7 +1065,7 @@ export function buildTools(
       })
       if (!r.logs.length) return { content: [text('（无控制台日志）')] }
       const body = r.logs
-        .map((l) => `[${l.level}] ${l.text.replace(/\s+/g, ' ').slice(0, 500)}`)
+        .map((l) => `[${l.level}] ${redactText(l.text.replace(/\s+/g, ' '), 500)}`)
         .join('\n')
       return { content: [text(`共 ${r.logs.length} 条：\n${body}`)] }
     }
@@ -1064,12 +1158,10 @@ export function buildTools(
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const includeSensitive = args['includeSensitive'] === true
       if (includeSensitive) {
-        await opGate({
-          site: tab.url,
-          tabTitle: tab.title,
+        await documentGate(tab, {
           action: '查看敏感网络数据',
           detail: '将把认证头、凭据参数或其他可能包含秘密的网络数据返回给 Agent。'
-        }, args['__aaSignal'])
+        }, callSignal(args))
       }
       await tab.net.ensure()
       const entry = tab.net.find(String(args['requestId'] ?? ''))
@@ -1116,9 +1208,7 @@ export function buildTools(
       const tab = resolveWebContents(tabs, args['tabId'] as string | undefined)
       const includeSensitive = args['includeSensitive'] === true
       if (includeSensitive) {
-        await opGate({
-          site: tab.url,
-          tabTitle: tab.title,
+        await documentGate(tab, {
           action: '导出敏感网络数据',
           detail: '将把认证头、凭据参数或其他可能包含秘密的网络数据写入本地 HAR 文件。'
         }, signal)
@@ -1130,14 +1220,14 @@ export function buildTools(
         import('electron'), import('node:fs'), import('node:path'), import('node:os')
       ])
       assertToolRunning(signal)
-      const defaultFile = path.join(os.homedir(), '.aabrowser', 'har', `aa-${Date.now()}.har`)
-      const { file, explicit } = await resolveExportFile(args['path'] as string | undefined, '.har', defaultFile)
+      const defaultFile = path.join(getProfileManager().directory(tab.profileId, 'har') || path.join(os.homedir(), '.aabrowser', 'har'), `aa-${Date.now()}-${randomUUID()}.har`)
+      const options = await exportOptions(tab, args['path'], '.har', signal)
+      const { file, explicit } = await resolveExportFile(args['path'] as string | undefined, '.har', defaultFile, options)
       const data = JSON.stringify(tab.net.toHar(app.getVersion(), includeSensitive), null, 2)
       // 创建目录也是副作用；取消时不得创建目录、写文件或登记证据。
       assertToolRunning(signal)
-      fs.mkdirSync(path.dirname(file), { recursive: true })
-      fs.writeFileSync(file, data, 'utf-8')
-      getEvidenceManager().record(file, 'har', { managed: !explicit })
+      writeExportFile(file, data, options)
+      getEvidenceManager(tab.profileId).record(file, 'har', { managed: !explicit })
       return { content: [text(`HAR 已导出: ${file}\n共 ${fs.statSync(file).size} 字节`)] }
     }
   })
@@ -1204,8 +1294,6 @@ export function buildTools(
     handler: async (args) => {
       approvals?.assertRunning()
       const manager = getExtensionManager()
-      const ses = getSharedSession?.() as import('./extensions').ExtensionsSession | undefined
-      if (!ses?.extensions) throw new ActionError('浏览器会话未就绪，无法管理扩展；请稍后重试。')
       const action = String(args['action'] ?? 'list')
       if (action === 'list') {
         const list = manager.list()
@@ -1215,9 +1303,15 @@ export function buildTools(
         const lines = list.map((e) => `[${e.id}] ${e.name} v${e.version} (MV${e.manifestVersion})\n    ${e.path}`)
         return { content: [text(`共 ${list.length} 个已解压扩展：\n${lines.join('\n')}`)] }
       }
+      if (action === 'check_updates') return { content: [text(JSON.stringify(await manager.checkUpdates(), null, 2))] }
+      const ses = getSharedSession?.() as import('./extensions').ExtensionsSession | undefined
+      if (!ses?.extensions) throw new ActionError('浏览器会话未就绪，无法管理扩展；请稍后重试。')
       if (action === 'load') {
         const dir = String(args['path'] ?? '').trim()
         if (!dir) throw new ActionError('action=load 需要提供扩展目录的绝对路径 path（目录内须有 manifest.json）')
+        await opGate({ site: 'extensions', tabTitle: 'Extensions', action: '安装具有网页访问能力的本地扩展', detail: dir }, callSignal(args))
+        assertToolRunning(callSignal(args))
+        await getProfileManager().start(getProfileManager().currentProfileId())
         assertToolRunning(callSignal(args))
         const entry = await manager.load(ses, dir)
         return {
@@ -1232,9 +1326,19 @@ export function buildTools(
       if (action === 'remove') {
         const key = String(args['id'] ?? args['path'] ?? '').trim()
         if (!key) throw new ActionError('action=remove 需要提供扩展 id（action=list 可查）或路径 path')
+        await opGate({ site: 'extensions', tabTitle: 'Extensions', action: '移除浏览器扩展', detail: key }, callSignal(args))
         assertToolRunning(callSignal(args))
         const removed = manager.remove(ses, key)
         return { content: [text(`已卸载并移除: [${removed.id}] ${removed.name} v${removed.version}`)] }
+      }
+      if (action === 'enable' || action === 'disable') {
+        const key = String(args['id'] ?? args['path'] ?? '').trim()
+        if (!key) throw new ActionError('enable / disable 需要提供扩展 id 或 path')
+        await opGate({ site: 'extensions', tabTitle: 'Extensions', action: action === 'enable' ? '启用浏览器扩展' : '停用浏览器扩展', detail: key }, callSignal(args))
+        if (action === 'enable') await getProfileManager().start(getProfileManager().currentProfileId())
+        assertToolRunning(callSignal(args))
+        const entry = await manager.setEnabled(ses, key, action === 'enable')
+        return { content: [text(`扩展状态已更新: ${entry.name}`)] }
       }
       throw new ActionError(`未知 action: ${action}。可用 action：list、load、remove。`)
     }
@@ -1486,6 +1590,7 @@ export function buildTools(
               throw new ActionError(`元素 ${ref} 不是复选框/单选框（是 ${state.type || 'unknown'}）`)
             }
             if (state.checked !== field['checked']) {
+              await targetGate(tab, { ref }, signal)
               await doClick(tab, ref, false, { signal })
             }
             done.push(`${ref} = ${field['checked'] ? '已勾选' : '未勾选'}`)
@@ -1516,10 +1621,7 @@ export function buildTools(
             continue
           }
           if (field['submit']) {
-            await opGate(
-              { site: siteOf(tab), tabTitle: tab.title, action: '提交表单/输入后回车' },
-              signal
-            )
+            await targetGate(tab, { ref, force: true, action: '提交表单/输入后回车' }, signal)
             assertToolRunning(signal)
           }
           await doType(tab, ref, String(field['value'] ?? ''), {
@@ -1606,14 +1708,12 @@ export function buildTools(
       if (!expression.trim()) throw new ActionError('expression 不能为空')
       return onTab(tab, args['__aaSignal'], async (): Promise<{ content: ToolContent[] }> => {
         if (args['ref']) assertRefContext(tab.view.webContents)
-        await opGate(
+        await documentGate(tab,
           {
-            site: siteOf(tab),
-            tabTitle: tab.title,
             action: '在网页中执行 JavaScript',
             detail: expression.replace(/\s+/g, ' ').slice(0, 120)
           },
-          args['__aaSignal']
+          callSignal(args)
         )
         const ref = args['ref'] ? String(args['ref']) : ''
         // expression 是 browser_evaluate 的语义本身（在页面内求值的代码），刻意不转义；
@@ -1745,10 +1845,7 @@ export function buildTools(
           if (action === 'evaluate') {
             const expression = String(args['expression'] ?? '')
             if (!expression.trim()) throw new ActionError('expression 不能为空')
-            await opGate(
-              { site: siteOf(tab), tabTitle: tab.title, action: '在网页中执行 JavaScript', detail: `frame ${frameId} · ${expression.replace(/\s+/g, ' ').slice(0, 120)}` },
-              signal
-            )
+            await targetGate(tab, { frameId, selector: 'html', force: true, action: '在网页中执行 JavaScript' }, signal)
             assertToolRunning(signal)
             const value = await raceAbort(frameEvaluate(wc, frameId, expression, signal), signal)
             let rendered: string
@@ -1765,6 +1862,7 @@ export function buildTools(
           const selector = String(args['selector'] ?? '')
           if (!selector) throw new ActionError(`${action} 需要提供 selector`)
           if (action === 'click') {
+            await targetGate(tab, { frameId, selector, index: typeof args['index'] === 'number' ? args['index'] : 0 }, signal)
             const r = await frameClick(wc, frameId, selector, typeof args['index'] === 'number' ? args['index'] : 0, signal)
             return { content: [text(`已在 [${frameId}] 内点击: ${r.clicked}`)] }
           }
@@ -1780,6 +1878,7 @@ export function buildTools(
             return { content: [text(`已在 [${frameId}] 内输入（内容未记录）。`)] }
           }
           if (action === 'select') {
+            await targetGate(tab, { frameId, selector, index: typeof args['index'] === 'number' ? args['index'] : 0 }, signal)
             const r = await frameSelect(wc, frameId, selector, {
               value: args['value'] === undefined ? undefined : String(args['value']),
               label: args['label'] === undefined ? undefined : String(args['label'])
@@ -1930,7 +2029,7 @@ export function buildTools(
   // Individual handlers retain their own checks around multi-step actions.
   const canControlPaused = (toolName: string, args: Record<string, unknown>): boolean =>
     (toolName === 'browser_window' && args['action'] === 'release') ||
-    (toolName === 'browser_tasks' && ['list', 'get', 'cancel', 'resume'].includes(String(args['action'] ?? 'list')))
+    (toolName === 'browser_tasks' && ['list', 'get', 'cancel', 'pause', 'resume'].includes(String(args['action'] ?? 'list')))
   return tools.map((tool) => {
     const annotations = TOOL_ANNOTATIONS[tool.name]
     if (!annotations) throw new Error(`工具缺少 MCP annotations：${tool.name}`)
@@ -1942,20 +2041,35 @@ export function buildTools(
         const startTime = Date.now()
         const signal = callSignal(args)
         try {
+          validateToolArguments(tool.inputSchema, args)
           if (signal) throwIfAborted(signal)
-          const result = await tool.handler(args)
-          if (!canControlPaused(tool.name, args)) assertToolRunning(signal)
-          let summary = ''
-          const first = result.content?.[0]
-          if (first?.type === 'text' && first.text) {
-            summary = first.text.split('\n')[0].slice(0, 100)
-          } else if (first?.type === 'image') {
-            summary = '已捕获截图'
+          const executeWithProfile = async (): Promise<{ content: ToolContent[]; isError?: boolean }> => {
+            const profiles = getProfileManager()
+            const clientId = tabs.currentAgentClientId?.()
+            const inheritedProfile = profiles.hasContext() ? profiles.currentProfileId()
+              : clientId !== undefined ? profiles.clientProfile(clientId) : profiles.currentProfileId()
+            const profileId = typeof args['profileId'] === 'string' ? args['profileId'] : inheritedProfile
+            profiles.get?.(profileId)
+            profiles.assertLeaseAccess(profileId)
+            const scope: PermissionScope = { profileId, ...(clientId !== undefined ? { clientId } : {}), ...(typeof args['__aaTaskId'] === 'string' ? { taskId: args['__aaTaskId'] } : {}) }
+            return profiles.withUse(profileId, async () => {
+              if (clientId !== undefined) {
+                await authorizeProfileAccess(profileId, clientId, async () => {
+                  await permissionContext.run(scope, () => opGate({ site: profileId, tabTitle: 'Profile', action: `访问配置文件 ${profileId}`, detail: '此客户端将读取或操作另一个浏览器身份。授权仅限此客户端和配置文件，断开连接或到期后失效。' }, signal))
+                  return true
+                })
+              }
+              return profiles.runWithProfile(profileId, () => permissionContext.run(scope, () => tool.handler(args)))
+            })
           }
+          // Session-owned task controls never read a page and must remain usable
+          // while a workflow owns the Profile or a human has taken over.
+          const result = canControlPaused(tool.name, args) ? await tool.handler(args) : await executeWithProfile()
+          if (!canControlPaused(tool.name, args)) assertToolRunning(signal)
           onAction?.({
             id: Math.random().toString(36).slice(2, 9),
             tool: tool.name,
-            summary: summary || `${tool.title || tool.name} 成功 (${Date.now() - startTime}ms)`,
+            summary: `${tool.title || tool.name} ${result.isError ? '失败' : '完成'} (${Date.now() - startTime}ms)`,
             ts: Date.now(),
             isError: !!result.isError
           })
@@ -1964,7 +2078,7 @@ export function buildTools(
           onAction?.({
             id: Math.random().toString(36).slice(2, 9),
             tool: tool.name,
-            summary: `错误: ${err instanceof Error ? err.message : String(err)}`,
+            summary: `${tool.title || tool.name} 失败 (${err instanceof ActionError ? err.code : 'OPERATION_REJECTED'})`,
             ts: Date.now(),
             isError: true
           })

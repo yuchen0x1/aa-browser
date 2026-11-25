@@ -63,6 +63,17 @@ function registryFile(): string {
   return process.env['AA_BROWSER_EVIDENCE_FILE'] || path.join(os.homedir(), '.aabrowser', 'evidence-registry.json')
 }
 
+function assertNoLinks(file: string): void {
+  for (let current = path.resolve(file); ; current = path.dirname(current)) {
+    try {
+      if (fs.lstatSync(current).isSymbolicLink()) throw Object.assign(new Error('[EVIDENCE_PATH_DENIED] Evidence paths cannot contain symbolic links or junctions.'), { code: 'EVIDENCE_PATH_DENIED' })
+    } catch (error) {
+      if (!isMissing(error)) throw error
+    }
+    if (path.dirname(current) === current) break
+  }
+}
+
 /** 测试可用环境变量压低配额，验证淘汰顺序；默认 500MB */
 function quotaBytes(): number {
   const override = Number(process.env['AA_BROWSER_EVIDENCE_QUOTA_BYTES'])
@@ -111,15 +122,22 @@ export class EvidenceManager {
   /** 注册表损坏且无法备份时置位：宁可不写，也不能用空表覆盖原始数据。 */
   private writeBlocked = false
 
+  constructor(private readonly filePath?: string) {}
+
+  private get file(): string { return this.filePath ?? registryFile() }
+
   private load(): void {
     if (this.loaded) return
     this.loaded = true
-    const file = registryFile()
+    const file = this.file
     let text: string
     try {
+      assertNoLinks(file)
+      if (fs.statSync(file).size > 32 * 1024 * 1024) throw new Error('[EVIDENCE_STORE_TOO_LARGE] Evidence registry exceeds 32 MiB.')
       text = fs.readFileSync(file, 'utf-8')
     } catch (error) {
       if (!isMissing(error)) console.warn(`[evidence] 无法读取登记表 ${file}: ${String(error)}`)
+      if (!isMissing(error)) this.writeBlocked = true
       return
     }
     try {
@@ -157,7 +175,8 @@ export class EvidenceManager {
       return
     }
     try {
-      writeJsonAtomic(registryFile(), { version: 1, entries: this.entries })
+      assertNoLinks(this.file)
+      writeJsonAtomic(this.file, { version: 1, entries: this.entries })
       this.dirty = false
     } catch {
       /* 登记失败不影响主流程，下次 sweep 再试 */
@@ -171,6 +190,7 @@ export class EvidenceManager {
     const managed = DEFAULT_TTL[kind] > 0 && (opts?.managed ?? (kind !== 'pdf' && kind !== 'har'))
     let entry: EvidenceEntry
     try {
+      assertNoLinks(abs)
       const stat = fs.lstatSync(abs, { bigint: true })
       if (!stat.isFile()) return null
       entry = {
@@ -219,14 +239,20 @@ export class EvidenceManager {
   }
 
   hash(file: string): string {
-    return hashFile(file)
+    this.load()
+    const absolute = path.resolve(file)
+    if (!this.entries.some((entry) => entry.file === absolute)) throw new Error('[EVIDENCE_ACCESS_DENIED] File is not registered to the current Profile.')
+    assertNoLinks(absolute)
+    if (!fs.lstatSync(absolute).isFile()) throw new Error('[EVIDENCE_ACCESS_DENIED] Evidence file is not a regular file.')
+    return hashFile(absolute)
   }
 
   list(limit = 100): EvidenceEntry[] {
     this.load()
-    return this.entries.slice(-Math.min(500, Math.max(1, limit))).reverse().map((entry) =>
-      isManagedTemporary(entry) ? entry : { ...entry, ttlMs: 0 }
-    )
+    return this.entries.slice(-Math.min(500, Math.max(1, limit))).reverse().map((entry) => ({
+      ...entry, ...(entry.identity ? { identity: { ...entry.identity } } : {}),
+      ...(isManagedTemporary(entry) ? {} : { ttlMs: 0 })
+    }))
   }
 
   /** 删除过期 / 超配额的临时证据；返回清理结果。 */
@@ -245,9 +271,10 @@ export class EvidenceManager {
         continue
       }
       try {
+        assertNoLinks(entry.file)
         if (!matchesFile(entry, fs.lstatSync(entry.file, { bigint: true }))) retired.add(entry)
       } catch (error) {
-        if (isMissing(error)) retired.add(entry)
+        if (isMissing(error) || (error as NodeJS.ErrnoException).code === 'EVIDENCE_PATH_DENIED') retired.add(entry)
         else attempted.add(entry) // 无法确认身份（如 EACCES），保留登记供下次重试。
       }
     }
@@ -256,6 +283,7 @@ export class EvidenceManager {
       if (!isEphemeral(e) || retired.has(e) || attempted.has(e)) return
       attempted.add(e)
       try {
+        assertNoLinks(e.file)
         if (!e.identity || !matchesFile(e, fs.lstatSync(e.file, { bigint: true })) ||
             hashFile(e.file) !== e.hash.toLowerCase()) {
           retired.add(e)
@@ -303,8 +331,19 @@ export class EvidenceManager {
   }
 }
 
-let manager: EvidenceManager | null = null
-export function getEvidenceManager(): EvidenceManager {
-  if (!manager) manager = new EvidenceManager()
+const managers = new Map<string, EvidenceManager>()
+let profileProvider = (): string => 'default'
+let fileProvider: ((profileId: string) => string) | undefined
+export function configureEvidenceProfiles(current: () => string, fileFor: (profileId: string) => string): void {
+  profileProvider = current
+  fileProvider = fileFor
+}
+export function getEvidenceManager(profileId?: string): EvidenceManager {
+  const id = profileId ?? profileProvider()
+  if (!/^(?:default|p[a-f0-9]{24})$/.test(id)) throw new Error('[INVALID_PROFILE] Invalid evidence Profile.')
+  const file = path.resolve((id === 'default' ? process.env['AA_BROWSER_EVIDENCE_FILE'] : undefined) || fileProvider?.(id) ||
+    (id === 'default' ? registryFile() : path.join(os.homedir(), '.aabrowser', 'profiles', id, 'evidence-registry.json')))
+  let manager = managers.get(file)
+  if (!manager) { manager = new EvidenceManager(file); managers.set(file, manager) }
   return manager
 }

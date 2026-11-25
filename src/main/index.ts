@@ -6,7 +6,6 @@ import os from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { TabManager } from './tabs'
 import type { Tab } from './tabs'
-import { SHARED_PARTITION } from './tabs'
 import { getExtensionManager } from './extensions'
 import { AgentServer } from './agent-server'
 import { buildTools } from './tools'
@@ -29,6 +28,11 @@ import { PageFinder } from './page-finder'
 import { printPage } from './printing'
 import { getMainLocale } from './locale'
 import { BrowserMonitor } from './monitor'
+import { BrowserPlatform } from './platform'
+import { buildPlatformTools, type PlatformDomain } from './platform-tools'
+import { getProfileManager } from './profiles'
+import { redactText } from './redaction'
+import { writeExportFile } from './file-policy'
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const VERSION = app.getVersion()
@@ -84,6 +88,8 @@ let finder: PageFinder | null = null
 const approvals = new ApprovalManager()
 let updater: UpdateManager | null = null
 let monitor: BrowserMonitor | null = null
+let platform: BrowserPlatform | null = null
+function desktopProfileId(): string { return platform?.desktopProfileId() ?? getProfileManager().defaultId }
 /** 由 whenReady 注入：立即写入跨会话标签记录（final=true 时允许清空过期记录） */
 let flushSessionRecord: ((final?: boolean) => void) | null = null
 /** 由 whenReady 注入：标签变化后延迟写入跨会话记录 */
@@ -207,7 +213,7 @@ function updateBackgroundViewports(): void {
     } catch (error) {
       // 每次布局/最小化/显示都会走到这里；页面或窗口销毁瞬间的异常
       // 若逃逸成未处理拒绝，进程会静默退出，因此必须就地收敛。
-      console.warn(`[aa-browser] 后台视口同步失败: ${error instanceof Error ? error.message : String(error)}`)
+      console.warn(`[aa-browser] 后台视口同步失败: ${redactText(error instanceof Error ? error.message : error)}`)
     } finally {
       backgroundMetricsRunning = false
     }
@@ -239,13 +245,13 @@ function pushState(): void {
     // windowHeight 反映真实窗口（最小化时为 0）；后台布局使用记忆中的最后有效尺寸。
     windowHeight: liveWindow ? liveWindow.getContentBounds().height : 0,
     backgroundMode: currentWindowMode(),
-      monitor: monitor?.getState()
+      monitor: monitor?.getUiState()
     }
     chromeView.webContents.send('aa:state', state)
   } catch (error) {
     // pushState 是几乎每条路径都会调用的状态出口（窗口事件、监控、更新器、
     // 工具回调）。关窗与页面销毁瞬间的同步异常若逃逸，会让进程静默退出。
-    console.warn(`[aa-browser] 状态推送失败: ${error instanceof Error ? error.message : String(error)}`)
+    console.warn(`[aa-browser] 状态推送失败: ${redactText(error instanceof Error ? error.message : error)}`)
   }
 }
 
@@ -290,7 +296,7 @@ function handleBeforeInput(wc: Electron.WebContents): void {
     }
     if (ctrl && input.key.toLowerCase() === 't') {
       event.preventDefault()
-      tabManager?.createTab()
+      tabManager?.createTab(undefined, true, undefined, false, undefined, desktopProfileId())
       return
     }
     if (ctrl && input.key.toLowerCase() === 'w') {
@@ -384,7 +390,7 @@ function installPageContextMenu(wc: Electron.WebContents): void {
       push({ label: L.openLink, enabled: linkAllowed, click: () => { if (linkAllowed) void wc.loadURL(params.linkURL).catch(() => {}) } })
       push({ label: L.openLinkNewTab, enabled: linkAllowed, click: () => {
         const source = tabManager?.tabs.find((t) => t.view.webContents === wc)
-        if (linkAllowed) tabManager?.createTab(params.linkURL, true, source?.isolated)
+        if (linkAllowed) tabManager?.createTab(params.linkURL, true, source?.isolated, false, undefined, source?.profileId)
       } })
       push({ label: L.copyLink, click: () => { clipboard.writeText(params.linkURL) } })
       push({ type: 'separator' })
@@ -419,8 +425,9 @@ function installPageContextMenu(wc: Electron.WebContents): void {
       void wc.capturePage().then((img) => {
         const dir = app.getPath('pictures') || os.homedir()
         const p = path.join(dir, `aabrowser-${Date.now()}.png`)
-        fs.writeFileSync(p, img.toPNG())
-        getEvidenceManager().record(p, 'context-shot', { managed: false })
+        const profileId = tabManager?.tabs.find((tab) => tab.view.webContents === wc)?.profileId ?? 'default'
+        writeExportFile(p, img.toPNG(), { approvedExternal: true, profileId })
+        getEvidenceManager(profileId).record(p, 'context-shot', { managed: false })
         shell.showItemInFolder(p)
       }).catch(() => {})
     } })
@@ -610,7 +617,7 @@ function createWindow(): void {
   })
   cv.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   void cv.webContents.loadURL(chromeEntryUrl).catch((error: unknown) => {
-    console.error(`[aa-browser] chrome UI 加载失败: ${error instanceof Error ? error.message : String(error)}`)
+    console.error(`[aa-browser] chrome UI 加载失败: ${redactText(error instanceof Error ? error.message : error)}`)
   })
   handleBeforeInput(cv.webContents)
 }
@@ -631,6 +638,18 @@ function registerIpc(): void {
     return fn()
   }
 
+  ipcMain.handle('aa:platform-state', (event) => guard(event, null, () => platform?.state() ?? null))
+  ipcMain.handle('aa:platform-action', (event, name: unknown, input: unknown) => guard(event, { ok: false, error: 'untrusted' }, async () => {
+    if (!platform || typeof name !== 'string' || name.length > 80 || !input || typeof input !== 'object' || Array.isArray(input)) return { ok: false, error: '[INVALID_ARGUMENT] Invalid platform action' }
+    const [domain, action] = name.split('.')
+    if (!['profile', 'workflow', 'network', 'permission', 'diagnostics'].includes(domain) || !action) return { ok: false, error: '[INVALID_ARGUMENT] Invalid platform action' }
+    try {
+      const data = await tabManager!.runAsUi(() => platform!.invoke(domain as PlatformDomain, action, input as Record<string, unknown>, { owner: 'desktop', desktop: true }))
+      pushState()
+      return { ok: true, data }
+    } catch (error) { return { ok: false, error: redactText(error instanceof Error ? error.message : error, 600) } }
+  }))
+
   ipcMain.handle('aa:get-state', (event) => {
     return guard(event, null, () => ({
       tabs: tabManager?.infosForUi() ?? [],
@@ -648,14 +667,14 @@ function registerIpc(): void {
       canReopenClosed: tabManager?.canReopenClosed ?? false,
       windowHeight: win?.getContentBounds().height,
       backgroundMode: currentWindowMode(),
-      monitor: monitor?.getState()
+      monitor: monitor?.getUiState()
     } satisfies UiState))
   })
   ipcMain.handle('aa:tab-new', (event, url?: string) => {
     return guard(event, false, () => {
       const target = url ? normalizeUrl(url, searchUrlBase(), newtabUrl()) : newtabUrl()
       try {
-        tabManager?.createTab(target)
+        tabManager?.createTab(target, true, undefined, false, undefined, desktopProfileId())
       } catch {
         return false
       }
@@ -784,7 +803,7 @@ function registerIpc(): void {
       const active = tabManager.active()
       if (!active) {
         // 最后一个标签已关闭时地址栏仍应可用：直接开一个新标签。
-        tabManager.createTab(target, true, false)
+        tabManager.createTab(target, true, false, false, undefined, desktopProfileId())
         return true
       }
       void tabManager.navigate(active, target).catch(() => {
@@ -906,7 +925,7 @@ function registerIpc(): void {
     return guard(event, undefined, () => getDownloadTracker().showInFolder(String(id)))
   })
   ipcMain.handle('aa:download-dir', (event) => {
-    return guard(event, '', () => getDownloadTracker().dir)
+    return guard(event, '', () => getProfileManager().runWithProfile(desktopProfileId(), () => getDownloadTracker().dir))
   })
   ipcMain.handle('aa:download-cancel', (event, id: string) => {
     return guard(event, false, () => getDownloadTracker().cancel(String(id)))
@@ -915,7 +934,7 @@ function registerIpc(): void {
     return guard(event, { ok: false }, () => getDownloadTracker().retry(String(id)))
   })
   ipcMain.handle('aa:history-suggest', (event, query: string, limit?: number) => {
-    return guard(event, [], () => getHistoryStore().suggest(String(query ?? ''), Number(limit) || 8))
+    return guard(event, [], () => getHistoryStore(desktopProfileId()).suggest(String(query ?? ''), Number(limit) || 8))
   })
   ipcMain.handle('aa:settings-get', (event) => {
     return guard(event, null, () => {
@@ -964,30 +983,58 @@ function registerIpc(): void {
     if (result.canceled || !result.filePaths.length) return ''
     return result.filePaths[0]
   })
-  ipcMain.handle('aa:extension-list', (event) => {
-    return guard(event, [], () => getExtensionManager().list())
+  function extensionProfile(value: unknown): string {
+    const profiles = getProfileManager()
+    const id = typeof value === 'string' ? value : desktopProfileId()
+    profiles.get(id)
+    return id
+  }
+  ipcMain.handle('aa:extension-list', (event, profileId: unknown) => {
+    return guard(event, [], () => getExtensionManager(extensionProfile(profileId)).list())
   })
-  ipcMain.handle('aa:extension-load', async (event, dir: string) => {
+  ipcMain.handle('aa:extension-load', async (event, dir: string, profileId: unknown) => {
     if (!isTrustedSender(event)) return { ok: false, error: 'untrusted' } as { ok: boolean; error?: string }
     try {
-      const entry = await getExtensionManager().load(session.fromPartition(SHARED_PARTITION), String(dir ?? ''))
+      const id = extensionProfile(profileId)
+      const entry = await getProfileManager().withUse(id, async () => {
+        await getProfileManager().start(id)
+        return getExtensionManager(id).load(getProfileManager().sessionFor(id), String(dir ?? ''))
+      })
       pushState()
       return { ok: true, extension: entry }
     } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : String(error) }
+      return { ok: false, error: redactText(error instanceof Error ? error.message : error) }
     }
   })
-  ipcMain.handle('aa:extension-remove', (event, key: string) => {
-    return guard(event, { ok: false, error: 'untrusted' }, () => {
+  ipcMain.handle('aa:extension-remove', (event, key: string, profileId: unknown) => {
+    return guard(event, { ok: false, error: 'untrusted' }, async () => {
       try {
-        const removed = getExtensionManager().remove(session.fromPartition(SHARED_PARTITION), String(key ?? ''))
+        const id = extensionProfile(profileId)
+        const removed = await getProfileManager().withUse(id, () => getExtensionManager(id).remove(getProfileManager().sessionFor(id), String(key ?? '')))
         pushState()
         return { ok: true, extension: removed }
       } catch (error) {
-        return { ok: false, error: error instanceof Error ? error.message : String(error) }
+        return { ok: false, error: redactText(error instanceof Error ? error.message : error) }
       }
     })
   })
+  ipcMain.handle('aa:extension-enable', async (event, key: unknown, enabled: unknown, profileId: unknown) => {
+    if (!isTrustedSender(event)) return { ok: false, error: 'untrusted' }
+    try {
+      if (typeof key !== 'string' || typeof enabled !== 'boolean') throw new Error('[INVALID_ARGUMENT] Invalid extension action')
+      const id = extensionProfile(profileId)
+      const extension = await getProfileManager().withUse(id, async () => {
+        await getProfileManager().start(id)
+        return getExtensionManager(id).setEnabled(getProfileManager().sessionFor(id), key, enabled)
+      })
+      pushState()
+      return { ok: true, extension }
+    } catch (error) { return { ok: false, error: redactText(error instanceof Error ? error.message : error) } }
+  })
+  ipcMain.handle('aa:extension-check-updates', (event, profileId: unknown) => guard(event, { ok: false, error: 'untrusted' }, () => {
+    try { return { ok: true, updates: getExtensionManager(extensionProfile(profileId)).checkUpdates() } }
+    catch (error) { return { ok: false, error: redactText(error instanceof Error ? error.message : error) } }
+  }))
   ipcMain.handle('aa:agent-info', (event) => {
     return guard(event, null, () => {
       const info = agentServer?.info()
@@ -1083,7 +1130,7 @@ app.whenReady().then(async () => {
   app.setAppUserModelId('com.aa.browser')
   Menu.setApplicationMenu(null)
   try { syncAppImageBridge(true) }
-  catch (error) { console.error('Failed to refresh the installed MCP bridge:', error) }
+  catch (error) { console.error('Failed to refresh the installed MCP bridge:', redactText(error instanceof Error ? error.message : error)) }
 
   const appImage = process.platform === 'linux' && process.env['APPIMAGE']
   updater = new UpdateManager(VERSION, () => {
@@ -1109,14 +1156,6 @@ app.whenReady().then(async () => {
   } catch {
     /* 清理失败不应阻塞启动 */
   }
-  try {
-    const evidence = getEvidenceManager().sweep()
-    if (evidence.removed.length) {
-      console.log(`[aa-browser] 已清理 ${evidence.removed.length} 个过期证据文件（${Math.round(evidence.bytesFreed / 1024)}KB）`)
-    }
-  } catch {
-    /* 证据清理失败不应阻塞启动 */
-  }
 
   tabManager = new TabManager(newtabUrl(), searchUrlBase())
   finder = new PageFinder(tabManager, pushState)
@@ -1131,18 +1170,18 @@ app.whenReady().then(async () => {
     handleBeforeInput(wc)
     installPageContextMenu(wc)
   }
-  tabManager.onNavigate = (url, title) => getHistoryStore().add(url, title)
+  tabManager.onNavigate = (url, title, profileId) => getHistoryStore(profileId).add(url, title)
   tabManager.getAllowedSites = () => getSettingsStore().get().allowedSites
   tabManager.getDefaultIsolated = () => getSettingsStore().get().isolatedSessions
   tabManager.applyInternalTheme = applyInternalAppearance
-  tabManager.onSession = (ses) => {
+  tabManager.onSession = (ses, profileId) => {
     applyPermissionPolicy(ses, { requestApproval: (meta) => approvals.request(meta) })
-    getDownloadTracker().attach(ses)
+    getDownloadTracker().attach(ses, profileId)
   }
   // 清理隔离分区发生在关标签的同步路径上：任何失败都不能变成进程级未处理拒绝。
   tabManager.onIsolatedClosed = (partition) => {
     void clearIsolatedPartition(partition).catch((error: unknown) => {
-      console.warn(`[aa-browser] 隔离分区清理失败: ${error instanceof Error ? error.message : String(error)}`)
+      console.warn(`[aa-browser] 隔离分区清理失败: ${redactText(error instanceof Error ? error.message : error)}`)
     })
   }
   tabManager.onViewDetach = (view) => detachTabView(view)
@@ -1157,19 +1196,31 @@ app.whenReady().then(async () => {
   // 重试是新的网络请求，必须重新过站点白名单，不能沿用创建下载时的授权
   getDownloadTracker().setUrlGuard((url) => tabManager?.isUrlAllowed(url) ?? false)
 
-  // 上次会话装载的已解压扩展：必须在第一个标签创建前恢复，
-  // 否则扩展的 content scripts 会错过首屏页面。
-  try {
-    const restoredExtensions = await getExtensionManager().restore(session.fromPartition(SHARED_PARTITION))
-    if (restoredExtensions.restored) {
-      console.log(`[aa-browser] 已恢复 ${restoredExtensions.restored} 个已解压扩展`)
-      if (restoredExtensions.skipped.length) {
-        console.warn(`[aa-browser] ${restoredExtensions.skipped.length} 个扩展路径已失效，从恢复列表移除`)
-      }
+  platform = new BrowserPlatform({
+    tabs: tabManager, approvals, changed: pushState,
+    agent: () => ({ connected: !!agentCount, clientCount: agentCount, activeCalls: agentActivity.calls?.length ?? 0, paused: agentActivity.paused }),
+    isClientConnected: (clientId) => agentServer?.isClientConnected(clientId) ?? false,
+    isClientPaused: (clientId) => agentServer?.isClientPaused(clientId) ?? false,
+    controlAllowed: () => {
+      approvals.assertRunning()
+      if (monitor?.getState().control === 'human') throw new Error('[HUMAN_CONTROL] Browser input is currently owned by the user')
     }
-  } catch (error) {
-    console.warn(`[aa-browser] 扩展恢复失败: ${error instanceof Error ? error.message : String(error)}`)
+  })
+  await platform.initialize()
+  for (const profile of platform.profiles.list()) {
+    try { getEvidenceManager(profile.id).sweep() } catch { /* Evidence cleanup must not block startup. */ }
   }
+
+  app.on('login', (event, contents, _details, authInfo, callback) => {
+    if (!authInfo.isProxy) return
+    event.preventDefault()
+    const profileId = contents && getProfileManager().profileForSession(contents.session)
+    if (!profileId) { callback(); return }
+    void platform!.network.credentialsFor(profileId, authInfo.host, authInfo.port, true).then((credentials) => {
+      if (credentials) callback(credentials.username, credentials.password)
+      else callback()
+    }, () => callback())
+  })
 
   // 跨会话标签恢复：先把上次的普通标签建回来，再开启自动保存。
   // 恢复过程中的 onChange 也会排队保存，但 during-restore 标志保证不会用半恢复状态覆盖记录。
@@ -1209,7 +1260,7 @@ app.whenReady().then(async () => {
     const created: Tab[] = []
     for (const entry of restored.tabs) {
       try {
-        const tab = tabManager.createTab(entry.url, false, false, false, entry.id)
+        const tab = tabManager.createTab(entry.url, false, false, false, entry.id, entry.profileId ?? 'default')
         created.push(tab)
         restoredInitialLoads.push(tab.initialNavigation.catch(() => {}))
       } catch {
@@ -1233,7 +1284,7 @@ app.whenReady().then(async () => {
   if (restoredInitialLoads.length) await Promise.all(restoredInitialLoads)
 
   // Agent 接入服务
-  const tools = buildTools(
+  const coreTools = buildTools(
     tabManager,
     newtabUrl(),
     searchUrlBase(),
@@ -1324,8 +1375,10 @@ app.whenReady().then(async () => {
       return { requireOperationApproval: settings.requireOperationApproval, fullSnapshot: settings.fullSnapshot, searchEngine: settings.searchEngine }
     },
     () => agentServer?.runtimeInfo ?? { pid: process.pid, version: VERSION },
-    () => session.fromPartition(SHARED_PARTITION)
+    () => getProfileManager().sessionFor()
   )
+  const tools = [...coreTools, ...buildPlatformTools(platform)]
+  platform.setTools(coreTools)
   agentServer = new AgentServer(
     tools,
     (n, verifiedCount) => {
@@ -1359,6 +1412,7 @@ app.whenReady().then(async () => {
       return manager ? manager.runAsAgent(clientId, operation) : operation()
     },
     (clientId) => {
+      platform?.clientDisconnected(clientId)
       // A bridge reconnect with the same session id is common (app/window restart
       // does not restart an MCP host). Keep ownership for a grace period, then
       // release it so an abandoned client does not permanently hide its tabs.
@@ -1384,6 +1438,7 @@ app.whenReady().then(async () => {
       }
     }
   )
+  agentServer.onPause = (clientId) => platform?.pauseWorkflows(clientId)
   void agentServer.start().then(() => {
     // 新实例已经写好自己的连接信息：更新重启窗口结束，桥可以恢复正常流程。
     clearUpdateRestartMarker(discoveryFile())
@@ -1407,7 +1462,7 @@ app.whenReady().then(async () => {
 }).catch((error) => {
   // 启动链里任何未捕获错误都会让应用在没有窗口、没有提示的情况下退出；
   // 至少留下日志并以非零码退出，便于用户与 CI 定位。
-  const text = error instanceof Error ? (error.stack ?? error.message) : String(error)
+    const text = redactText(error instanceof Error ? (error.stack ?? error.message) : error, 2000)
   try {
     fs.appendFileSync(path.join(app.getPath('userData'), 'error.log'), `${new Date().toISOString()} startup failed ${text}\n`)
   } catch {
@@ -1427,6 +1482,7 @@ app.on('before-quit', () => {
   if (updater?.isInstalling()) writeUpdateRestartMarker(discoveryFile(), VERSION)
   else clearUpdateRestartMarker(discoveryFile())
   updater?.dispose()
+  platform?.shutdown()
   approvals.cancelAll()
   agentServer?.stop()
 })

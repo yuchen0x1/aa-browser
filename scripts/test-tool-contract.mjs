@@ -21,7 +21,8 @@ const clientsSource = fs.readFileSync(path.join(root, 'src', 'main', 'clients.ts
 const namesIn = (source, pattern) => [...source.matchAll(pattern)].map((match) => match[1])
 const unique = (values) => [...new Set(values)]
 const sourceNames = unique(namesIn(sourceSource, /name:\s*'(browser_[a-z0-9_]+)'/g))
-const mainNames = unique(namesIn(mainSource, /name:\s*'(browser_[a-z0-9_]+)'/g))
+const platformSource = fs.readFileSync(path.join(root, 'src', 'main', 'platform-tools.ts'), 'utf8')
+const mainNames = unique(namesIn(mainSource + platformSource, /name:\s*'(browser_[a-z0-9_]+)'/g))
 const expectedHints = ['readOnlyHint', 'destructiveHint', 'idempotentHint', 'openWorldHint']
 
 function annotationEntries(source) {

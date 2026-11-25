@@ -11,6 +11,7 @@ import path from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { compileFunction } from 'node:vm'
+import { SECURITY_MODULES, securityFixture } from './security-fixture.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const require = createRequire(import.meta.url)
@@ -49,13 +50,14 @@ try {
   const compiled = spawnSync(process.execPath, [
     tsc, '--ignoreConfig', '--noCheck', '--noResolve', '--rootDir', 'src', '--outDir', out,
     '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--esModuleInterop',
-    'src/main/actions.ts', 'src/main/tabs.ts'
+    'src/main/actions.ts', 'src/main/tabs.ts', ...SECURITY_MODULES.map((name) => `src/main/${name}.ts`)
   ], { cwd: root, encoding: 'utf8' })
   assert.equal(compiled.status, 0, `Compilation failed: ${compiled.error ?? ''}\n${compiled.stdout}\n${compiled.stderr}`)
 
   const filename = path.join(out, 'main/actions.js')
   const module = { exports: {} }
   const deps = {
+    ...securityFixture(path.join(out, 'main')),
     electron: {},
     '@snapshot/scripts': {},
     '@snapshot/engine': { __aaSnapshot() {} },
@@ -386,6 +388,7 @@ try {
     let timeoutCallback
     const tabsModule = { exports: {} }
     const tabDeps = {
+      ...securityFixture(path.join(out, 'main')),
       electron: { app: { on() {} } },
       'node:async_hooks': require('node:async_hooks'),
       './network': {},

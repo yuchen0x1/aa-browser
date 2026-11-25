@@ -14,6 +14,7 @@ export interface TabRecoveryInfo {
 
 export interface TabInfo {
   id: string
+  profileId?: string
   /** 标签创建时间（毫秒时间戳） */
   createdAt?: number
   title: string
@@ -87,6 +88,7 @@ export interface AgentActivityState {
 }
 
 export interface AgentTaskRecord extends AgentCallInfo {
+  profileId?: string
   status: 'running' | 'cancelling' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
   finishedAt?: number
   error?: string
@@ -201,6 +203,11 @@ export interface ExtensionInfo {
   manifestVersion: number
   /** 本机绝对路径（诊断展示用；可分享的诊断不含此字段） */
   path: string
+  enabled?: boolean
+  permissions?: string[]
+  hostPermissions?: string[]
+  source?: string
+  status?: string
 }
 
 /** omnibox 历史补全建议条目 */

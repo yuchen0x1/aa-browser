@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { randomUUID } from 'node:crypto'
 import type { Tab } from './tabs'
 import { ActionError, raceAbort, throwIfAborted } from './actions'
 import { reportProgress } from './progress'
@@ -62,6 +63,30 @@ type ValidSpec = Required<ViewportSpec>
 const delay = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
 
 const CDP_COMMAND_TIMEOUT_MS = 8_000
+const MAX_IMAGE_PIXELS = 16_000_000
+let profileProvider = (): string => 'default'
+let directoryProvider: ((profileId: string) => string) | undefined
+
+export function configureViewportProfiles(current: () => string, directoryFor: (profileId: string) => string): void {
+  profileProvider = current
+  directoryProvider = directoryFor
+}
+
+function screenshotDirectory(id: string): string {
+  return path.resolve((id === 'default' ? process.env['AA_BROWSER_SCREENSHOT_DIR'] : undefined) || directoryProvider?.(id) ||
+    (id === 'default' ? path.join(os.homedir(), '.aabrowser', 'screenshots') : path.join(os.homedir(), '.aabrowser', 'profiles', id, 'screenshots')))
+}
+
+function assertNoLinks(file: string): void {
+  for (let current = path.resolve(file); ; current = path.dirname(current)) {
+    try {
+      if (fs.lstatSync(current).isSymbolicLink()) throw new ActionError('[FILE_LINK_DENIED] Viewport output cannot contain symbolic links or junctions.')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    if (path.dirname(current) === current) break
+  }
+}
 
 async function sendCdp<T>(dbg: Electron.Debugger, method: string, params?: Record<string, unknown>, timeoutMs = CDP_COMMAND_TIMEOUT_MS): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -97,10 +122,13 @@ function validateSpec(spec: ViewportSpec): ValidSpec {
   if (typeof deviceScaleFactor !== 'number' || !Number.isFinite(deviceScaleFactor) || deviceScaleFactor < 1 || deviceScaleFactor > 4) {
     throw new ActionError(`视口 deviceScaleFactor 必须在 1..4，收到: ${String(deviceScaleFactor)}`)
   }
+  if (Math.ceil(width * deviceScaleFactor) * Math.ceil(height * deviceScaleFactor) > MAX_IMAGE_PIXELS) {
+    throw new ActionError('[IMAGE_TOO_LARGE] Viewport screenshots are limited to 16 million physical pixels.')
+  }
 
   let name: string
   if (typeof spec.name === 'string' && spec.name.length > 0) {
-    if (!/^[A-Za-z0-9_-]+$/.test(spec.name)) {
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(spec.name)) {
       throw new ActionError(`视口名称只能包含字母、数字、下划线和连字符，收到: ${spec.name}`)
     }
     name = spec.name
@@ -113,11 +141,14 @@ function validateSpec(spec: ViewportSpec): ValidSpec {
 
 /** 从 PNG base64 的 IHDR 块读取真实像素尺寸（宽在偏移 16，高在偏移 20，大端）。 */
 function readPngSize(base64: string): { width: number; height: number } {
+  if (Buffer.byteLength(base64, 'base64') > 64 * 1024 * 1024) throw new ActionError('[IMAGE_TOO_LARGE] Viewport PNG exceeds 64 MiB.')
   const buf = Buffer.from(base64, 'base64')
-  if (buf.length < 24 || buf.toString('ascii', 12, 16) !== 'IHDR') {
+  if (buf.length < 33 || !buf.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])) || buf.readUInt32BE(8) !== 13 || buf.toString('ascii', 12, 16) !== 'IHDR') {
     throw new ActionError('视口截图失败：浏览器返回的图像不是有效的 PNG')
   }
-  return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) }
+  const size = { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) }
+  if (!size.width || !size.height || size.width * size.height > MAX_IMAGE_PIXELS) throw new ActionError('[IMAGE_TOO_LARGE] Invalid or oversized viewport image.')
+  return size
 }
 
 /**
@@ -164,13 +195,16 @@ export async function captureViewportMatrix(
     throw new ActionError(`视口矩阵最多支持 12 个视口，收到 ${specs.length} 个`)
   }
   const validated = specs.map(validateSpec)
+  const profileId = tab.profileId ?? profileProvider()
+  if (!/^(?:default|p[a-f0-9]{24})$/.test(profileId)) throw new ActionError('[INVALID_PROFILE] Invalid viewport Profile.')
 
   const wc = tab.view.webContents
   const dbg = wc.debugger
-  const dir = process.env['AA_BROWSER_SCREENSHOT_DIR'] || path.join(os.homedir(), '.aabrowser', 'screenshots')
+  const dir = screenshotDirectory(profileId)
+  assertNoLinks(dir)
   fs.mkdirSync(dir, { recursive: true })
+  assertNoLinks(dir)
 
-  const usedFiles = new Set<string>()
   const results: ViewportResult[] = []
   let attachedHere = false
   // 保存当前视口；矩阵工具结束后显式恢复，避免 Chromium 在隐藏/最小化
@@ -235,14 +269,10 @@ export async function captureViewportMatrix(
       throwIfAborted(signal)
 
       // 文件名按视口唯一：同一毫秒内连续截图也不会互相覆盖。
-      let file = path.join(dir, `aa-matrix-${spec.name}-${Date.now()}.png`)
-      let dup = 1
-      while (usedFiles.has(file)) {
-        file = path.join(dir, `aa-matrix-${spec.name}-${Date.now()}-${dup++}.png`)
-      }
-      usedFiles.add(file)
-      fs.writeFileSync(file, Buffer.from(shot, 'base64'))
-      getEvidenceManager().record(file, 'viewport')
+      const file = path.join(dir, `aa-matrix-${spec.name}-${Date.now()}-${randomUUID()}.png`)
+      assertNoLinks(file)
+      fs.writeFileSync(file, Buffer.from(shot, 'base64'), { flag: 'wx', mode: 0o600 })
+      getEvidenceManager(profileId).record(file, 'viewport')
 
       results.push({
         name: spec.name,

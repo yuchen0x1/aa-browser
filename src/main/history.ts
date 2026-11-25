@@ -15,12 +15,13 @@ const MAX_ENTRIES = 1000
 
 /** 跨会话历史：追加式写 ~/.aabrowser/history/，并提供标题/URL 前缀补全。 */
 export class HistoryStore {
+  constructor(private readonly directory?: string) {}
   private entries: HistoryEntry[] = []
   private loaded = false
   private backupInvalid = false
 
   get dir(): string {
-    return process.env['AA_BROWSER_HISTORY_DIR'] || path.join(os.homedir(), '.aabrowser', 'history')
+    return this.directory || process.env['AA_BROWSER_HISTORY_DIR'] || path.join(os.homedir(), '.aabrowser', 'history')
   }
 
   private file(): string {
@@ -40,7 +41,7 @@ export class HistoryStore {
             continue
           }
           const entry: HistoryEntry = {
-            url: item.url,
+            url: safeHistoryUrl(item.url),
             title: typeof item.title === 'string' ? item.title : item.url,
             ts: typeof item.ts === 'number' && Number.isFinite(item.ts) && item.ts >= 0 ? item.ts : 0,
             count: typeof item.count === 'number' && Number.isFinite(item.count) && item.count > 0 ? Math.min(Number.MAX_SAFE_INTEGER, Math.floor(item.count)) : 1
@@ -68,6 +69,7 @@ export class HistoryStore {
   /** 记录一次访问（忽略新标签页/内部页） */
   add(url: string, title: string): void {
     if (!isHistoryUrl(url)) return
+    url = safeHistoryUrl(url)
     this.ensureLoaded()
     const idx = this.entries.findIndex((e) => e.url === url)
     if (idx >= 0) {
@@ -120,6 +122,17 @@ function isHistoryUrl(value: string): boolean {
   try { return ['http:', 'https:'].includes(new URL(value).protocol) } catch { return false }
 }
 
+function safeHistoryUrl(value: string): string {
+  const url = new URL(value)
+  let changed = !!url.username || !!url.password
+  url.username = ''; url.password = ''
+  for (const key of [...url.searchParams.keys()]) {
+    if (/(?:token|secret|password|passwd|api[-_]?key|authorization|cookie|credential|session|code)/i.test(key)) { url.searchParams.delete(key); changed = true }
+  }
+  if (/(?:token|secret|password|passwd|api[-_]?key|authorization|cookie|credential|session|code)=/i.test(url.hash)) { url.hash = ''; changed = true }
+  return changed ? url.toString() : value
+}
+
 function safeHost(u: string): string {
   try {
     return new URL(u).host
@@ -129,8 +142,16 @@ function safeHost(u: string): string {
 }
 
 /** 模块级单例 */
-let store: HistoryStore | null = null
-export function getHistoryStore(): HistoryStore {
-  if (!store) store = new HistoryStore()
+const stores = new Map<string, HistoryStore>()
+let profileProvider = (): string => 'default'
+let directoryProvider: ((id: string) => string) | undefined
+export function configureHistoryProfiles(current: () => string, directoryFor: (id: string) => string): void { profileProvider = current; directoryProvider = directoryFor }
+export function getHistoryStore(profileId?: string): HistoryStore {
+  const id = profileId ?? profileProvider()
+  if (!/^(?:default|p[a-f0-9]{24})$/.test(id)) throw new Error('Invalid history profile')
+  const root = process.env.AA_BROWSER_SETTINGS_FILE ? path.dirname(process.env.AA_BROWSER_SETTINGS_FILE) : path.join(os.homedir(), '.aabrowser')
+  const directory = directoryProvider?.(id) ?? (id === 'default' ? process.env.AA_BROWSER_HISTORY_DIR || path.join(root, 'history') : path.join(root, 'profiles', id, 'history'))
+  let store = stores.get(directory)
+  if (!store) { store = new HistoryStore(directory); stores.set(directory, store) }
   return store
 }

@@ -19,6 +19,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 import readline from 'node:readline'
 import { WebSocket } from 'ws'
+import { connectTrustedShell, startOperationApprovalDriver } from './trusted-approval-driver.mjs'
 
 const require = createRequire(import.meta.url)
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -44,6 +45,8 @@ let appChildStopping = false
 let testServer = null
 let testPageServer = null
 let testTmpFiles = []
+let trustedShell
+let approvalDriver
 
 let failures = 0
 function check(name, cond, detail = '') {
@@ -87,7 +90,7 @@ async function ensureAppRunning() {
     fs.writeFileSync(bridgePath, 'throw new Error("The previous bridge was not refreshed")')
   }
   // CI runners resolve `auto` to en-US; pin zh-CN so the wizard assertions stay deterministic.
-  fs.writeFileSync(path.join(SMOKE_DIR, 'settings.json'), JSON.stringify({ autoUpdate: false, locale: 'zh-CN' }))
+  fs.writeFileSync(path.join(SMOKE_DIR, 'settings.json'), JSON.stringify({ autoUpdate: false, locale: 'zh-CN', theme: 'dark' }))
   // 在应用启动前布置"上次异常退出遗留"的分区目录，
   // 用于验证启动阶段的分区清理（见 [18]）。
   const partsDir = path.join(SMOKE_DIR, 'profile', 'Partitions')
@@ -100,7 +103,11 @@ async function ensureAppRunning() {
     }
   }
   appChildStopping = false
-  const child = spawn(electronPath, packagedApp ? [] : ['.'], {
+  const debugReservation = http.createServer()
+  await new Promise((resolve) => debugReservation.listen(0, '127.0.0.1', resolve))
+  const debugPort = debugReservation.address().port
+  await new Promise((resolve) => debugReservation.close(resolve))
+  const child = spawn(electronPath, [...(packagedApp ? [] : ['.']), `--remote-debugging-port=${debugPort}`, '--remote-debugging-address=127.0.0.1'], {
     cwd: ROOT,
     env: (() => {
       const environment = {
@@ -132,7 +139,11 @@ async function ensureAppRunning() {
     await sleep(500)
     try {
       info = JSON.parse(fs.readFileSync(SMOKE_CONNECT_FILE, 'utf-8'))
-      if (info?.port && info?.token && isPidAlive(info.pid)) return { info, spawned: true, child }
+      if (info?.port && info?.token && isPidAlive(info.pid)) {
+        trustedShell = await connectTrustedShell(debugPort)
+        approvalDriver = startOperationApprovalDriver(trustedShell.evaluate)
+        return { info, spawned: true, child }
+      }
     } catch {
       /* test instance is still starting */
     }
@@ -273,7 +284,7 @@ async function main() {
     // 工具定义漂移回归：v0.6.0 曾出现桥少 3 个 mock 工具、客户端完全调不到。
     // 主进程工具数会随版本增长，改为从源码抽取真实名字做双向比对，避免硬编码过期。
     const mainToolNames = [...new Set(
-      [...fs.readFileSync(path.join(ROOT, 'src/main/tools.ts'), 'utf8').matchAll(/name:\s*'(browser_[a-z0-9_]+)'/g)].map((m) => m[1])
+      ['tools.ts', 'platform-tools.ts'].flatMap((file) => [...fs.readFileSync(path.join(ROOT, 'src/main', file), 'utf8').matchAll(/name:\s*'(browser_[a-z0-9_]+)'/g)].map((m) => m[1]))
     )]
     const missingTools = mainToolNames.filter((n) => !toolNames.includes(n))
     const extraTools = toolNames.filter((n) => !mainToolNames.includes(n))
@@ -313,7 +324,8 @@ async function main() {
         startupInfo.includes(`复制${promptLabel}`) && platformPrompt,
       startupInfo.slice(0, 500)
     )
-    check('启动页浅色背景与窗口宽度正常', startupBackground.includes('rgb(247, 249, 251)') && startupWidthOk.includes('true'), `${startupBackground}; 横向无溢出=${startupWidthOk}`)
+    const startupRgb = startupBackground.match(/\d+/g)?.map(Number) ?? []
+    check('启动页深色背景与窗口宽度正常', startupRgb.length === 3 && startupRgb.every((channel) => channel < 64) && startupWidthOk.includes('true'), `${startupBackground}; 横向无溢出=${startupWidthOk}`)
     const promptSnapshot = mcp.text(await mcp.call('browser_snapshot', { full: true }))
     const copyPromptRef = findRef(promptSnapshot, new RegExp(`- button "复制${promptLabel}"`))
     check('安装提示词提供可操作的复制按钮', !!copyPromptRef, promptSnapshot.slice(0, 400))
@@ -1186,17 +1198,22 @@ async function main() {
       console.log('\n[15] 状态与数据（cookies / storage / 上传 / 下载 / PDF）')
       const cookieBase = `http://127.0.0.1:${port}`
       await mcp.call('browser_cookies', { action: 'set', url: cookieBase, name: 'aa_smoke', value: 'cookie-ok-123' })
-      const got = mcp.text(await mcp.call('browser_cookies', { action: 'get', url: cookieBase, name: 'aa_smoke' }))
+      const redactedCookie = mcp.text(await mcp.call('browser_cookies', { action: 'get', url: cookieBase, name: 'aa_smoke' }))
+      check('Cookie 默认读取隐藏敏感值', redactedCookie.includes('aa_smoke=') && !redactedCookie.includes('cookie-ok-123'), redactedCookie)
+      const got = mcp.text(await mcp.call('browser_cookies', { action: 'get', url: cookieBase, name: 'aa_smoke', includeSensitive: true }))
       check('Cookie 写入并读回', got.includes('aa_smoke=cookie-ok-123'), got)
       await mcp.call('browser_cookies', { action: 'clear', url: cookieBase, name: 'aa_smoke' })
       const gotAfterClear = mcp.text(await mcp.call('browser_cookies', { action: 'get', url: cookieBase, name: 'aa_smoke' }))
       check('Cookie 清除生效', gotAfterClear.includes('无匹配'), gotAfterClear)
 
       await mcp.call('browser_storage', { action: 'set', kind: 'local', key: 'aa_smoke_key', value: 'storage-ok' })
-      const stored = mcp.text(await mcp.call('browser_storage', { action: 'get', kind: 'local', key: 'aa_smoke_key' }))
+      const redactedStorage = mcp.text(await mcp.call('browser_storage', { action: 'get', kind: 'local', key: 'aa_smoke_key' }))
+      check('Storage 默认读取隐藏敏感值', !redactedStorage.includes('storage-ok'), redactedStorage)
+      const stored = mcp.text(await mcp.call('browser_storage', { action: 'get', kind: 'local', key: 'aa_smoke_key', includeSensitive: true }))
       check('localStorage 写读回环', stored.includes('storage-ok'), stored)
 
-      const tmpFile = path.join(SMOKE_DIR, `aa-smoke-upload-${Date.now()}.txt`)
+      fs.mkdirSync(SMOKE_DOWNLOAD_DIR, { recursive: true })
+      const tmpFile = path.join(SMOKE_DOWNLOAD_DIR, `aa-smoke-upload-${Date.now()}.txt`)
       fs.writeFileSync(tmpFile, 'upload payload')
       testTmpFiles.push(tmpFile)
       // 刚从表单页返回主测试页：ref 属于页面快照，必须重新取（旧 ref 已失效）
@@ -1280,7 +1297,7 @@ async function main() {
       const sharedTabId = (/\[(t[a-z0-9]+)\]/.exec(newTabShared) || [])[1]
       await sleep(800)
       // 关键断言：另一个标签能读到 A 标签写入的登录态
-      const seenByB = mcp.text(await mcp.call('browser_cookies', { action: 'get', url: cookieUrl, name: 'shared_sid', tabId: sharedTabId }))
+      const seenByB = mcp.text(await mcp.call('browser_cookies', { action: 'get', url: cookieUrl, name: 'shared_sid', tabId: sharedTabId, includeSensitive: true }))
       check('共享会话：新标签能看到已有 Cookie', seenByB.includes('shared_sid=shared-login'), seenByB.slice(0, 300))
 
       // 隔离标签：必须看不到共享 Cookie
@@ -1322,7 +1339,7 @@ async function main() {
       })()
       check('共享分区目录被保留（登录态不丢）', sharedDirKept, '未找到 Partitions/aa-main')
       // 共享会话的 Cookie 必须仍在 —— 这是「登录态不丢」的真正判据
-      const sharedStill = mcp.text(await mcp.call('browser_cookies', { action: 'get', url: cookieUrl, name: 'shared_sid' }))
+      const sharedStill = mcp.text(await mcp.call('browser_cookies', { action: 'get', url: cookieUrl, name: 'shared_sid', includeSensitive: true }))
       check('关闭隔离标签后共享登录态仍在', sharedStill.includes('shared_sid=shared-login'), sharedStill.slice(0, 200))
 
       console.log('\n[18] 启动清理：上次异常退出遗留的分区')
@@ -1436,6 +1453,9 @@ async function main() {
       server.close()
     }
   } finally {
+    approvalDriver?.assertHealthy()
+    await approvalDriver?.stop()
+    trustedShell?.close()
     mcp.stop()
     mcpClient = null
     if (testServer) { testServer.close(); testServer = null }
@@ -1465,6 +1485,8 @@ async function main() {
 main().catch(async (err) => {
   console.error('🚨 冒烟测试异常:', err.message)
   try { mcpClient?.stop() } catch {}
+  await approvalDriver?.stop()
+  trustedShell?.close()
   try { testServer?.close() } catch {}
   try { testPageServer?.close() } catch {}
   for (const file of testTmpFiles) { try { fs.rmSync(file, { force: true }) } catch {} }

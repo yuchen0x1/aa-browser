@@ -29,6 +29,7 @@
           <svg width="15" height="15" viewBox="0 0 16 16"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 1.5v3h-3" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
         <button id="agent-pill" type="button" aria-label="AI Agent 连接状态，点击打开连接设置" title="点击打开 AI 连接设置">等待 AI 连接</button>
+        <select id="profile-selector" class="profile-selector" aria-label="当前配置文件" title="当前配置文件" disabled></select>
         <div id="omnibox-wrap">
           <span id="site-icon">
             <svg width="13" height="13" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" stroke="currentColor" fill="none" stroke-width="1.3"/><path d="M1.5 8h13M8 1.5c-4.5 4.5-4.5 8.5 0 13 4.5-4.5 4.5-8.5 0-13z" stroke="currentColor" fill="none" stroke-width="1.1"/></svg>
@@ -168,6 +169,11 @@
                 <svg class="settings-nav-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 1.5v3h-3" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
                 <span id="settings-nav-update">软件更新</span>
               </button>
+              <button type="button" class="settings-nav-item" data-target="settings-section-profiles" aria-controls="settings-section-profiles"><span class="platform-nav-symbol" aria-hidden="true">◎</span><span data-platform-zh="配置文件" data-platform-en="Profiles">配置文件</span></button>
+              <button type="button" class="settings-nav-item" data-target="settings-section-workflows" aria-controls="settings-section-workflows"><span class="platform-nav-symbol" aria-hidden="true">☷</span><span data-platform-zh="工作流" data-platform-en="Workflows">工作流</span></button>
+              <button type="button" class="settings-nav-item" data-target="settings-section-network" aria-controls="settings-section-network"><span class="platform-nav-symbol" aria-hidden="true">⇄</span><span data-platform-zh="网络环境" data-platform-en="Network">网络环境</span></button>
+              <button type="button" class="settings-nav-item" data-target="settings-section-security" aria-controls="settings-section-security"><span class="platform-nav-symbol" aria-hidden="true">◇</span><span data-platform-zh="权限与安全" data-platform-en="Security">权限与安全</span></button>
+              <button type="button" class="settings-nav-item" data-target="settings-section-diagnostics" aria-controls="settings-section-diagnostics"><span class="platform-nav-symbol" aria-hidden="true">⌁</span><span data-platform-zh="运行诊断" data-platform-en="Diagnostics">运行诊断</span></button>
               <div class="settings-nav-meta">
                 <span class="settings-nav-brand">Aa Browser</span>
                 <span id="settings-nav-version" class="settings-nav-version"></span>
@@ -349,16 +355,18 @@
                   <h3 id="settings-head-extensions">浏览器扩展</h3>
                   <p id="settings-desc-extensions" class="settings-section-desc">加载已解压的扩展程序（开发者模式扩展）</p>
                 </header>
+                <label class="platform-field"><span data-platform-zh="配置文件" data-platform-en="Profile">配置文件</span><select id="extension-profile" class="settings-select" aria-label="扩展配置文件 / Extension profile"></select></label>
                 <div class="settings-panel">
                   <div class="settings-group settings-row settings-row-stack">
                     <div class="settings-row-text">
                       <div id="settings-extensions-label" class="settings-label">已解压扩展</div>
-                      <div id="settings-extensions-hint" class="settings-hint">选择包含 manifest.json 的文件夹。扩展装载到共享会话并跨重启保留，对之后打开或刷新的页面生效；隔离标签不装载扩展。</div>
+                      <div id="settings-extensions-hint" class="settings-hint">扩展仅加载到所选配置文件。启用或禁用后，请重新加载受影响的网页。</div>
                     </div>
                     <div id="extension-list" class="client-list" aria-live="polite">尚未加载任何扩展</div>
                     <div class="settings-actions">
                       <button id="btn-extension-load" type="button" class="settings-btn settings-btn-primary">加载已解压的扩展程序…</button>
                       <button id="btn-extension-rescan" type="button" class="settings-btn">刷新列表</button>
+                      <button id="btn-extension-updates" type="button" class="settings-btn" data-platform-zh="检查本地更新" data-platform-en="Check local updates">检查本地更新</button>
                     </div>
                     <div id="set-extension-result" class="settings-hint" role="status" aria-live="polite"></div>
                   </div>
@@ -401,6 +409,51 @@
                     </div>
                   </div>
                 </div>
+              </section>
+              <section id="settings-section-profiles" class="settings-section" aria-labelledby="platform-profiles-title">
+                <header class="settings-section-head"><h3 id="platform-profiles-title" data-platform-zh="配置文件" data-platform-en="Browser Profiles">配置文件</h3></header>
+                <div id="platform-status" class="platform-status" role="status" aria-live="polite"></div>
+                <div class="platform-section-tools"><input id="profile-passphrase" type="password" class="settings-input" minlength="12" autocomplete="new-password" aria-label="备份密码（至少 12 位） / Backup password (12 characters minimum)" placeholder="备份密码 / Backup password" /><button id="profile-import" type="button" class="settings-btn" data-platform-zh="导入备份" data-platform-en="Import backup">导入备份</button><button id="platform-refresh" type="button" class="navbtn" title="刷新 / Refresh" aria-label="刷新 / Refresh">↻</button></div>
+                <div id="profile-list" class="platform-list" aria-live="polite"></div>
+                <form id="profile-form" class="platform-form">
+                  <input id="profile-edit-id" type="hidden" />
+                  <div class="platform-form-grid"><label><span data-platform-zh="名称" data-platform-en="Name">名称</span><input id="profile-name" class="settings-input" maxlength="80" required /></label><label><span data-platform-zh="描述" data-platform-en="Description">描述</span><input id="profile-description" class="settings-input" maxlength="500" /></label></div>
+                  <div class="platform-form-inline"><label><span data-platform-zh="颜色" data-platform-en="Color">颜色</span><input id="profile-color" type="color" value="#78cbb9" /></label><label><span data-platform-zh="图标" data-platform-en="Icon">图标</span><select id="profile-icon" class="settings-select"><option value="circle">◎</option><option value="work">▣</option><option value="person">◇</option><option value="test">△</option></select></label><button id="profile-save" type="submit" class="settings-btn settings-btn-primary" data-platform-zh="创建配置文件" data-platform-en="Create profile">创建配置文件</button><button id="profile-reset" type="button" class="settings-btn" hidden data-platform-zh="取消编辑" data-platform-en="Cancel edit">取消编辑</button></div>
+                </form>
+              </section>
+              <section id="settings-section-workflows" class="settings-section" aria-labelledby="platform-workflows-title">
+                <header class="settings-section-head"><h3 id="platform-workflows-title" data-platform-zh="自动化工作流" data-platform-en="Automation Workflows">自动化工作流</h3><span id="workflow-summary" class="settings-section-desc"></span></header>
+                <form id="workflow-form" class="platform-form">
+                  <div class="platform-form-grid">
+                    <label><span data-platform-zh="任务名称" data-platform-en="Workflow name">任务名称</span><input id="workflow-name" class="settings-input" maxlength="120" required /></label>
+                    <label><span data-platform-zh="配置文件" data-platform-en="Profile">配置文件</span><select id="workflow-profile" class="settings-select" required></select></label>
+                    <label><span data-platform-zh="模板" data-platform-en="Template">模板</span><select id="workflow-template" class="settings-select" required></select></label>
+                    <label id="workflow-url-label"><span data-platform-zh="目标网址" data-platform-en="Target URL">目标网址</span><input id="workflow-url" class="settings-input" type="url" placeholder="https://" required /></label>
+                    <label id="workflow-urls-label" class="platform-wide" hidden><span data-platform-zh="目标网址（每行一个，最多 10 个）" data-platform-en="Target URLs (one per line, up to 10)">目标网址（每行一个，最多 10 个）</span><textarea id="workflow-urls" class="settings-input" rows="3" placeholder="https://example.com"></textarea></label>
+                    <label id="workflow-parameters-label" class="platform-wide" hidden><span id="workflow-parameters-title">JSON</span><textarea id="workflow-parameters" class="settings-input" rows="4" placeholder="[]" spellcheck="false" autocomplete="off"></textarea></label>
+                    <label id="workflow-schedule-label" hidden><span data-platform-zh="计划执行时间" data-platform-en="Scheduled time">计划执行时间</span><input id="workflow-schedule" class="settings-input" type="datetime-local" /></label>
+                  </div>
+                  <button id="workflow-create" type="submit" class="settings-btn settings-btn-primary" data-platform-zh="创建工作流" data-platform-en="Create workflow">创建工作流</button>
+                </form>
+                <div id="workflow-list" class="platform-list" aria-live="polite"></div>
+              </section>
+              <section id="settings-section-network" class="settings-section" aria-labelledby="platform-network-title">
+                <header class="settings-section-head"><h3 id="platform-network-title" data-platform-zh="网络环境" data-platform-en="Network Environment">网络环境</h3></header>
+                <label class="platform-checkbox"><input id="network-enabled" type="checkbox" checked /><span data-platform-zh="启用此网络环境" data-platform-en="Enable this network environment">启用此网络环境</span></label>
+                <label class="platform-field"><span data-platform-zh="按站点代理规则" data-platform-en="Per-site proxy rules">按站点代理规则</span><textarea id="network-sites" class="settings-input" rows="3" placeholder="*.example.com=http://127.0.0.1:7890" spellcheck="false"></textarea></label>
+                <form id="network-form" class="platform-form"><div class="platform-form-grid"><label><span data-platform-zh="配置文件" data-platform-en="Profile">配置文件</span><select id="network-profile" class="settings-select" required></select></label><label><span data-platform-zh="连接方式" data-platform-en="Connection">连接方式</span><select id="network-mode" class="settings-select"><option value="system" data-platform-zh="系统代理" data-platform-en="System proxy">系统代理</option><option value="direct" data-platform-zh="直接连接" data-platform-en="Direct">直接连接</option><option value="fixed_servers" data-platform-zh="自定义代理" data-platform-en="Custom proxy">自定义代理</option></select></label><label class="platform-wide"><span data-platform-zh="代理规则" data-platform-en="Proxy rules">代理规则</span><input id="network-rules" class="settings-input" placeholder="http://127.0.0.1:7890" autocomplete="off" /></label><label class="platform-wide"><span data-platform-zh="绕过代理的站点" data-platform-en="Proxy bypass rules">绕过代理的站点</span><input id="network-bypass" class="settings-input" placeholder="localhost;127.0.0.1" autocomplete="off" /></label><label><span data-platform-zh="代理用户名" data-platform-en="Proxy username">代理用户名</span><input id="network-username" class="settings-input" autocomplete="off" /></label><label><span data-platform-zh="代理密码" data-platform-en="Proxy password">代理密码</span><input id="network-password" class="settings-input" type="password" autocomplete="new-password" /></label></div><div class="platform-section-tools"><button type="submit" class="settings-btn settings-btn-primary" data-platform-zh="应用网络配置" data-platform-en="Apply network">应用网络配置</button><button id="network-test" type="button" class="settings-btn" data-platform-zh="测试连接" data-platform-en="Test connection">测试连接</button><button id="network-diagnose" type="button" class="settings-btn" data-platform-zh="网络诊断" data-platform-en="Diagnose network">网络诊断</button></div></form>
+                <pre id="network-result" class="platform-output" role="status" hidden></pre>
+                <button id="network-clear-auth" type="button" class="settings-btn" data-platform-zh="移除此配置文件的代理凭据" data-platform-en="Remove this profile's proxy credentials">移除此配置文件的代理凭据</button>
+              </section>
+              <section id="settings-section-security" class="settings-section" aria-labelledby="platform-security-title">
+                <header class="settings-section-head"><h3 id="platform-security-title" data-platform-zh="权限与安全" data-platform-en="Permissions & Security">权限与安全</h3></header>
+                <h4 class="platform-subheading" data-platform-zh="有效授权" data-platform-en="Active grants">有效授权</h4><div id="permission-grants" class="platform-list"></div>
+                <h4 class="platform-subheading" data-platform-zh="最近审批记录" data-platform-en="Recent approval records">最近审批记录</h4><div id="permission-audit" class="platform-list"></div>
+              </section>
+              <section id="settings-section-diagnostics" class="settings-section" aria-labelledby="platform-diagnostics-title">
+                <header class="settings-section-head"><h3 id="platform-diagnostics-title" data-platform-zh="浏览器运行诊断" data-platform-en="Browser Diagnostics">浏览器运行诊断</h3></header>
+                <div id="diagnostics-metrics" class="platform-metrics"></div><div id="diagnostics-details" class="platform-list"></div>
+                <div class="platform-section-tools"><button id="diagnostics-refresh" type="button" class="settings-btn" data-platform-zh="重新诊断" data-platform-en="Refresh diagnostics">重新诊断</button><select id="diagnostics-profile" class="settings-select" aria-label="诊断配置文件 / Diagnostic profile"></select><select id="diagnostics-repair-action" class="settings-select" aria-label="修复操作 / Repair action"><option value="reload" data-platform-zh="重新加载页面" data-platform-en="Reload pages">重新加载页面</option><option value="reconnect" data-platform-zh="重新连接网络" data-platform-en="Reconnect network">重新连接网络</option></select><button id="diagnostics-repair" type="button" class="settings-btn" data-platform-zh="执行修复" data-platform-en="Run repair">执行修复</button></div>
               </section>
             </div>
           </div>

@@ -6,9 +6,12 @@ import { NetworkCapture } from './network'
 import { installDialogGuard } from './dialogs'
 import { installClosedShadowCapture } from './closed-shadow'
 import { noteNavigation, noteRendererRestart } from './ref-context'
+import { getProfileManager } from './profiles'
+import { redactText } from './redaction'
 
 export interface Tab {
   id: string
+  profileId: string
   /** 创建时间（用于 MCP 结果里的标签溯源） */
   createdAt: number
   partition: string
@@ -171,7 +174,7 @@ function readConsoleMessage(args: unknown[]): { level: string; text: string } | 
 export class TabManager {
   tabs: Tab[] = []
   /** 仅当前进程内保存普通标签 URL；隔离标签和退出清理不进入恢复记录。 */
-  private recentlyClosed: string[] = []
+  private recentlyClosed: { url: string; profileId: string }[] = []
   activeId: string | null = null
   private renderUsers = new WeakMap<WebContents, number>()
   private agentClientContext = new AsyncLocalStorage<number>()
@@ -188,9 +191,9 @@ export class TabManager {
   /** 由主进程注入：为页面 WebContents 注册右键菜单（需访问 owner window） */
   onContextMenu: ((wc: WebContents) => void) | null = null
   /** 由主进程注入：页面完成导航时记录历史（url, title） */
-  onNavigate: ((url: string, title: string) => void) | null = null
+  onNavigate: ((url: string, title: string, profileId: string) => void) | null = null
   /** 由主进程注入：为每个分区安装下载监听 */
-  onSession: ((ses: Session) => void) | null = null
+  onSession: ((ses: Session, profileId: string) => Promise<void> | void) | null = null
   isWindowForeground: () => boolean = () => false
   isWindowMinimized: () => boolean = () => false
   /**
@@ -239,7 +242,9 @@ export class TabManager {
 
   runAsAgent<T>(clientId: number, operation: () => Promise<T>): Promise<T> {
     if (this.primaryAgentClientId === undefined) this.primaryAgentClientId = clientId
-    return this.agentClientContext.run(clientId, operation)
+    const profiles = getProfileManager()
+    const execute = (): Promise<T> => this.agentClientContext.run(clientId, operation)
+    return profiles.hasContext() ? execute() : profiles.runWithProfile(profiles.clientProfile(clientId), execute)
   }
 
   currentAgentClientId(): number | undefined {
@@ -247,7 +252,7 @@ export class TabManager {
   }
 
   runAsUi<T>(operation: () => T): T {
-    return this.agentClientContext.exit(operation)
+    return getProfileManager().runWithoutProfile(() => this.agentClientContext.exit(operation))
   }
 
   private claimIfUnowned(tab: Tab): void {
@@ -263,6 +268,8 @@ export class TabManager {
   }
 
   private visibleToCurrentAgent(tab: Tab): boolean {
+    const profiles = getProfileManager()
+    if (profiles.hasContext() && tab.profileId !== profiles.currentProfileId()) return false
     const clientId = this.agentClientContext.getStore()
     return clientId === undefined || tab.agentClientId === clientId ||
       (clientId === this.primaryAgentClientId && tab.agentClientId === undefined)
@@ -270,21 +277,28 @@ export class TabManager {
 
   active(): Tab | null {
     const clientId = this.agentClientContext.getStore()
-    if (clientId === undefined) return this.tabs.find((t) => t.id === this.activeId) ?? null
+    if (clientId === undefined) {
+      const profiles = getProfileManager()
+      if (profiles.hasContext()) {
+        const id = profiles.currentProfileId()
+        return this.tabs.find((tab) => tab.id === this.activeId && tab.profileId === id) ?? this.tabs.find((tab) => tab.profileId === id) ?? null
+      }
+      return this.tabs.find((t) => t.id === this.activeId) ?? null
+    }
     const scopedId = this.agentActiveTabs.get(clientId)
-    const scoped = scopedId ? this.tabs.find((tab) => tab.id === scopedId &&
+    const scoped = scopedId ? this.tabs.find((tab) => tab.id === scopedId && this.visibleToCurrentAgent(tab) &&
       (tab.agentClientId === clientId || (clientId === this.primaryAgentClientId && tab.agentClientId === undefined))) : undefined
     if (scoped) {
       this.claimIfUnowned(scoped)
       return scoped
     }
-    const owned = this.tabs.find((tab) => tab.agentClientId === clientId)
+    const owned = this.tabs.find((tab) => tab.agentClientId === clientId && this.visibleToCurrentAgent(tab))
     if (owned) {
       this.agentActiveTabs.set(clientId, owned.id)
       return owned
     }
     if (clientId !== this.primaryAgentClientId) return null
-    const current = this.tabs.find((tab) => tab.id === this.activeId && tab.agentClientId === undefined)
+    const current = this.tabs.find((tab) => tab.id === this.activeId && tab.agentClientId === undefined && this.visibleToCurrentAgent(tab))
     if (!current) return null
     this.claimIfUnowned(current)
     this.agentActiveTabs.set(clientId, current.id)
@@ -292,7 +306,7 @@ export class TabManager {
   }
 
   activeForUi(): Tab | null {
-    return this.agentClientContext.exit(() => this.active())
+    return this.runAsUi(() => this.active())
   }
 
   get(id: string): Tab | null {
@@ -315,14 +329,18 @@ export class TabManager {
    * @param restoreId 会话恢复时沿用上次的标签 id，让 Agent 缓存的 tabId 继续有效。
    *                  只接受 genId 形状且当前未被占用。
    */
-  createTab(url?: string, activate = true, isolated?: boolean, deferInitialNavigation = false, restoreId?: string): Tab {
+  createTab(url?: string, activate = true, isolated?: boolean, deferInitialNavigation = false, restoreId?: string, profileId?: string): Tab {
     const target = url || this.newtabUrl
     this.assertUrlAllowed(target)
-    const reusable = restoreId !== undefined && /^t[a-z0-9]{1,32}$/.test(restoreId) && !this.get(restoreId)
+    const profiles = getProfileManager()
+    const selectedProfile = profileId ?? profiles.currentProfileId()
+    profiles.get(selectedProfile)
+    if (profiles.hasContext() && selectedProfile !== profiles.currentProfileId()) throw new Error('PROFILE_CONTEXT_MISMATCH: Cannot create a tab outside the bound profile')
+    const reusable = restoreId !== undefined && /^t[a-z0-9]{1,32}$/.test(restoreId) && !this.tabs.some((tab) => tab.id === restoreId)
     const id = reusable ? restoreId : genId()
     const useIsolated = isolated ?? this.getDefaultIsolated()
-    const partition = useIsolated ? `persist:${ISOLATED_PARTITION_PREFIX}${id}` : SHARED_PARTITION
-    const ses = session.fromPartition(partition)
+    const partition = useIsolated ? `persist:${ISOLATED_PARTITION_PREFIX}${id}` : profiles.partitionFor(selectedProfile)
+    const ses = useIsolated ? session.fromPartition(partition) : profiles.sessionFor(selectedProfile)
     const view = new WebContentsView({
       webPreferences: {
         partition,
@@ -347,9 +365,14 @@ export class TabManager {
       }
     }
     const net = new NetworkCapture(wc)
-    const ready = Promise.resolve().then(() => this.prepareTab(wc, net, id))
+    const ready = Promise.resolve().then(async () => {
+      if (!useIsolated) await profiles.start(selectedProfile)
+      await this.onSession?.(ses, selectedProfile)
+      await this.prepareTab(wc, net, id)
+    })
     const tab: Tab = {
       id,
+      profileId: selectedProfile,
       createdAt: Date.now(),
       partition,
       session: ses,
@@ -388,7 +411,6 @@ export class TabManager {
         if (this.shouldShowAgentTab() && clientId === this.primaryAgentClientId) this.activeId = tab.id
       }
     }
-    this.onSession?.(ses)
     void tab.initialNavigation.catch((error: unknown) => {
       if (!wc.isDestroyed() && this.tabs.includes(tab)) {
         console.warn(`[aa-browser] 标签 ${id} 页面导航未完成 (${error instanceof Error ? error.name : '未知错误'})`)
@@ -491,13 +513,13 @@ export class TabManager {
   }
 
   get canReopenClosed(): boolean {
-    return this.recentlyClosed.some((url) => this.isUrlAllowed(url))
+    return this.recentlyClosed.some((entry) => this.isUrlAllowed(entry.url))
   }
 
   reopenClosed(): Tab | null {
     while (this.recentlyClosed.length) {
-      const url = this.recentlyClosed.pop()!
-      if (this.isUrlAllowed(url)) return this.createTab(url, true, false)
+      const { url, profileId } = this.recentlyClosed.pop()!
+      try { if (this.isUrlAllowed(url)) return this.createTab(url, true, false, false, undefined, profileId) } catch { /* Profile may have been deleted. */ }
     }
     return null
   }
@@ -512,7 +534,7 @@ export class TabManager {
     }
     this.clearRecoveryTimer(tab)
     if (remember && !tab.isolated && tab.url !== this.newtabUrl && /^(https?|file):/i.test(tab.url)) {
-      this.recentlyClosed.push(tab.url)
+      this.recentlyClosed.push({ url: tab.url, profileId: tab.profileId })
       if (this.recentlyClosed.length > 20) this.recentlyClosed.shift()
     }
     // 标签已关闭，无须保留对话框守卫；先释放 CDP 再关闭页面，避免退出时悬挂命令。
@@ -545,9 +567,9 @@ export class TabManager {
       else this.agentActiveTabs.delete(clientId)
     }
     // 用户关闭最后一个标签时保留一个可输入的新标签页，而不是留下空窗口；
-    // closeAll() 传 remember=false，退出时不会反向创建标签。
+    // closeAll()/closeProfile() 传 remember=false，关闭环境时不会反向创建标签。
     if (remember && this.tabs.length === 0) {
-      this.createTab(this.newtabUrl, true, false)
+      this.createTab(this.newtabUrl, true, false, false, undefined, tab.profileId)
     }
     // 隔离分区是一次性的：关闭标签后连同 Cookie/Storage/缓存一起清掉，
     // 否则每个隔离标签都会在 Partitions/ 下留一个永久目录。
@@ -583,7 +605,12 @@ export class TabManager {
   }
 
   closeAll(): void {
-    for (const t of [...this.tabs]) this.closeTab(t.id, false)
+    this.runAsUi(() => { for (const t of [...this.tabs]) this.closeTab(t.id, false) })
+  }
+
+  closeProfile(profileId: string): void {
+    this.runAsUi(() => { for (const tab of [...this.tabs]) if (tab.profileId === profileId) this.closeTab(tab.id, false) })
+    this.recentlyClosed = this.recentlyClosed.filter((entry) => entry.profileId !== profileId)
   }
 
   private notifyRecovery(tab: Tab): void {
@@ -696,7 +723,7 @@ export class TabManager {
       noteNavigation(wc)
       tab.url = url
       this.onChange()
-      if (!tab.isolated) this.onNavigate?.(url, tab.title)
+      if (!tab.isolated) this.onNavigate?.(url, tab.title, tab.profileId)
     })
     wc.on('did-start-navigation', (_e, _url, isInPlace, isMainFrame) => {
       // 在提交前就使旧 ref 失效，避免导航进行中仍向旧文档派发操作。
@@ -707,7 +734,7 @@ export class TabManager {
       noteNavigation(wc)
       if (url) tab.url = url
       this.onChange()
-      if (!tab.isolated) this.onNavigate?.(url, tab.title)
+      if (!tab.isolated) this.onNavigate?.(url, tab.title, tab.profileId)
     })
     wc.on('unresponsive', () => {
       this.recoverTab(tab, 'unresponsive')
@@ -715,7 +742,7 @@ export class TabManager {
     wc.on('console-message', (event) => {
       const msg = readConsoleMessage([event])
       if (!msg) return
-      tab.consoleBuf.push({ level: msg.level, text: msg.text, ts: Date.now() })
+      tab.consoleBuf.push({ level: msg.level, text: redactText(msg.text, 10000), ts: Date.now() })
       if (tab.consoleBuf.length > 200) tab.consoleBuf.splice(0, tab.consoleBuf.length - 200)
     })
 
@@ -730,7 +757,8 @@ export class TabManager {
     wc.setWindowOpenHandler(({ url }) => {
       if (url && this.isUrlAllowed(url)) {
         try {
-          this.createTab(url, true, tab.isolated)
+          const open = (): Tab => this.createTab(url, true, tab.isolated, false, undefined, tab.profileId)
+          getProfileManager().runWithProfile(tab.profileId, () => tab.agentClientId === undefined ? this.agentClientContext.exit(open) : this.agentClientContext.run(tab.agentClientId, open))
         } catch {
           /* 白名单拒绝 */
         }
@@ -784,9 +812,10 @@ export class TabManager {
   infos(): TabInfo[] {
     const clientId = this.agentClientContext.getStore()
     if (clientId !== undefined && !this.tabs.some((tab) => tab.agentClientId === clientId)) this.active()
-    const scopedActiveId = clientId === undefined ? this.activeId : this.agentActiveTabs.get(clientId) ?? null
+    const scopedActiveId = clientId === undefined ? this.active()?.id ?? null : this.agentActiveTabs.get(clientId) ?? null
     return this.tabs.filter((tab) => this.visibleToCurrentAgent(tab)).map((t) => ({
       id: t.id,
+      profileId: t.profileId,
       createdAt: t.createdAt,
       title: t.title,
       url: t.url,
@@ -803,7 +832,7 @@ export class TabManager {
   }
 
   infosForUi(): TabInfo[] {
-    return this.agentClientContext.exit(() => this.infos())
+    return this.runAsUi(() => this.infos())
   }
 
   /**
@@ -813,6 +842,7 @@ export class TabManager {
    * 这里只清标记，不关闭标签，也不动 Cookie/Storage。
    */
   releaseAgentClient(clientId: number): void {
+    getProfileManager().releaseClient(clientId)
     this.agentActiveTabs.delete(clientId)
     if (this.primaryAgentClientId === clientId) this.primaryAgentClientId = undefined
     for (const tab of this.tabs) {
@@ -825,16 +855,17 @@ export class TabManager {
    * 跨会话恢复所需的普通网页标签（保持标签顺序，跳过隔离标签和内部页）。
    * 只收集 http(s) 地址；同一地址只保留一次，活动标签序号按过滤后的列表计算。
    */
-  sessionTabs(): { tabs: { url: string; title: string; id: string }[]; activeIndex: number } {
+  sessionTabs(): { tabs: { url: string; title: string; id: string; profileId: string }[]; activeIndex: number } {
     const restorable = this.tabs.filter((tab) => !tab.isolated && /^https?:\/\//i.test(tab.url))
     const seen = new Set<string>()
-    const tabs: { url: string; title: string; id: string }[] = []
+    const tabs: { url: string; title: string; id: string; profileId: string }[] = []
     let activeIndex = 0
     for (const tab of restorable) {
-      if (seen.has(tab.url)) continue
-      seen.add(tab.url)
+      const key = `${tab.profileId}\n${tab.url}`
+      if (seen.has(key)) continue
+      seen.add(key)
       if (tab.id === this.activeId) activeIndex = tabs.length
-      tabs.push({ url: tab.url, title: tab.title, id: tab.id })
+      tabs.push({ url: tab.url, title: tab.title, id: tab.id, profileId: tab.profileId })
     }
     return { tabs, activeIndex }
   }

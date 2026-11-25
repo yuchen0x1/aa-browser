@@ -15,6 +15,7 @@ import { ActionError } from './actions'
 import { getEvidenceManager } from './evidence'
 import type { Tab } from './tabs'
 import { reportProgress } from './progress'
+import { writeFileAtomic } from './atomic-json'
 
 export interface VisualCapture { base64: string; width: number; height: number }
 
@@ -46,6 +47,45 @@ export interface DiffResult {
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 const NAME_RE = /^[A-Za-z0-9._-]{1,80}$/
 const MAX_FULL_PAGE_HEIGHT = 8000
+const MAX_PNG_PIXELS = 16_000_000
+const MAX_PNG_BYTES = 64 * 1024 * 1024
+let profileProvider = (): string => 'default'
+let directoryProvider: ((profileId: string) => string) | undefined
+
+export function configureVisualProfiles(current: () => string, directoryFor: (profileId: string) => string): void {
+  profileProvider = current
+  directoryProvider = directoryFor
+}
+
+function profileId(id?: string): string {
+  const selected = id ?? profileProvider()
+  if (!/^(?:default|p[a-f0-9]{24})$/.test(selected)) throw new ActionError('[INVALID_PROFILE] Invalid visual Profile.')
+  return selected
+}
+
+function assertNoLinks(file: string): void {
+  for (let current = path.resolve(file); ; current = path.dirname(current)) {
+    try {
+      if (fs.lstatSync(current).isSymbolicLink()) throw new ActionError('[FILE_LINK_DENIED] Visual paths cannot contain symbolic links or junctions.')
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+    if (path.dirname(current) === current) break
+  }
+}
+
+function assertDimensions(width: number, height: number): void {
+  if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width <= 0 || height <= 0 || width * height > MAX_PNG_PIXELS) {
+    throw new ActionError('[IMAGE_TOO_LARGE] PNG dimensions must be positive and contain at most 16 million pixels.')
+  }
+}
+
+function writeVisualFile(file: string, data: Buffer | string): void {
+  assertNoLinks(file)
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  assertNoLinks(file)
+  writeFileAtomic(file, data)
+}
 
 /**
  * 给可能永不结算的截图加上限。超时后原始 Promise 仍需消费拒绝，
@@ -62,8 +102,10 @@ function settleWithin<T>(work: Promise<T>, ms: number, label: string): Promise<T
   })
 }
 
-export function visualBaselinesDir(): string {
-  return process.env.AA_BROWSER_BASELINE_DIR || path.join(os.homedir(), '.aabrowser', 'baselines')
+export function visualBaselinesDir(id?: string): string {
+  const selected = profileId(id)
+  return path.resolve((selected === 'default' ? process.env.AA_BROWSER_BASELINE_DIR : undefined) || directoryProvider?.(selected) ||
+    (selected === 'default' ? path.join(os.homedir(), '.aabrowser', 'baselines') : path.join(os.homedir(), '.aabrowser', 'profiles', selected, 'baselines')))
 }
 
 function assertName(name: string): void {
@@ -73,10 +115,12 @@ function assertName(name: string): void {
 }
 
 function pngDimensions(buf: Buffer): { width: number; height: number } {
-  if (buf.length < 24 || !buf.subarray(0, 8).equals(PNG_SIGNATURE)) {
+  if (buf.length < 33 || buf.length > MAX_PNG_BYTES || !buf.subarray(0, 8).equals(PNG_SIGNATURE) || buf.readUInt32BE(8) !== 13 || buf.toString('ascii', 12, 16) !== 'IHDR') {
     throw new ActionError('截图数据不是有效的 PNG 图像。')
   }
-  return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) }
+  const dimensions = { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) }
+  assertDimensions(dimensions.width, dimensions.height)
+  return dimensions
 }
 
 /**
@@ -119,6 +163,7 @@ export async function captureVisual(wc: WebContents, opts?: { fullPage?: boolean
         const originalHeight = Math.max(1, measuredHeight || 720)
         const width = Math.max(originalWidth, Math.ceil(dimensions.contentWidth ?? 0) || 1280)
         const height = Math.min(Math.max(originalHeight, Math.ceil(dimensions.contentHeight ?? 0) || 720), MAX_FULL_PAGE_HEIGHT)
+        assertDimensions(width, height)
         // 0×0 说明本来就没有可恢复的视口；留空让 finally 直接清除覆盖。
         if (measuredWidth > 0 && measuredHeight > 0) {
           restoreViewport = { width: originalWidth, height: originalHeight }
@@ -142,7 +187,10 @@ export async function captureVisual(wc: WebContents, opts?: { fullPage?: boolean
       }
       if (image && !image.isEmpty()) {
         const size = image.getSize()
-        return { base64: image.toPNG().toString('base64'), width: size.width, height: size.height }
+        assertDimensions(size.width, size.height)
+        const png = image.toPNG()
+        pngDimensions(png)
+        return { base64: png.toString('base64'), width: size.width, height: size.height }
       }
       if (image) failures.push('capturePage: 返回空图像')
       // 依次尝试两条 CDP 通道：fromSurface=false 直读渲染器主帧（从未合成过的
@@ -196,6 +244,7 @@ export async function captureVisual(wc: WebContents, opts?: { fullPage?: boolean
       captureBeyondViewport = false
     }
 
+    assertDimensions(width, height)
     const shot = (await dbg.sendCommand('Page.captureScreenshot', {
       format: 'png',
       fromSurface: true,
@@ -257,15 +306,15 @@ function paethPredictor(a: number, b: number, c: number): number {
 
 /** 纯 Node 解码器：拼接 IDAT → inflate → 逐行撤销 PNG 过滤器 → RGBA。 */
 function decodePng(buf: Buffer): DecodedPng {
-  if (buf.length < 24 || !buf.subarray(0, 8).equals(PNG_SIGNATURE)) {
-    throw new ActionError('PNG 解码失败：不是有效的 PNG 文件。')
-  }
+  pngDimensions(buf)
 
   let width = 0
   let height = 0
   let bitDepth = 0
   let colorType = 0
   let interlace = 0
+  let hasHeader = false
+  let hasEnd = false
   const idat: Buffer[] = []
   let pos = 8
   while (pos + 12 <= buf.length) {
@@ -274,20 +323,27 @@ function decodePng(buf: Buffer): DecodedPng {
     if (pos + 12 + len > buf.length) throw new ActionError('PNG 解码失败：数据块长度超出文件范围。')
     const body = buf.subarray(pos + 8, pos + 8 + len)
     if (type === 'IHDR') {
+      if (hasHeader || pos !== 8 || len !== 13) throw new ActionError('PNG 解码失败：IHDR 数据块无效。')
+      hasHeader = true
       width = body.readUInt32BE(0)
       height = body.readUInt32BE(4)
       bitDepth = body[8] ?? 0
       colorType = body[9] ?? 0
       interlace = body[12] ?? 0
+      if (body[10] !== 0 || body[11] !== 0) throw new ActionError('PNG 解码失败：压缩或过滤方法无效。')
     } else if (type === 'IDAT') {
       idat.push(Buffer.from(body))
     } else if (type === 'IEND') {
+      if (len !== 0) throw new ActionError('PNG 解码失败：IEND 数据块无效。')
+      hasEnd = true
       break
     }
     pos += 12 + len
   }
 
   if (!width || !height) throw new ActionError('PNG 解码失败：缺少有效的 IHDR 尺寸信息。')
+  assertDimensions(width, height)
+  if (!hasEnd) throw new ActionError('PNG 解码失败：缺少 IEND 数据块。')
   if (bitDepth !== 8) throw new ActionError(`PNG 解码不支持位深 ${bitDepth}；${UNSUPPORTED_PNG}。`)
   if (colorType !== 2 && colorType !== 6) throw new ActionError(`PNG 解码不支持颜色类型 ${colorType}；${UNSUPPORTED_PNG}。`)
   if (interlace !== 0) throw new ActionError(`PNG 解码不支持隔行图像；${UNSUPPORTED_PNG}。`)
@@ -295,8 +351,12 @@ function decodePng(buf: Buffer): DecodedPng {
 
   const bpp = colorType === 6 ? 4 : 3
   const stride = width * bpp
-  const raw = inflateSync(Buffer.concat(idat))
-  if (raw.length < height * (stride + 1)) throw new ActionError('PNG 解码失败：解压后的像素数据不完整。')
+  const expected = height * (stride + 1)
+  let raw: Buffer
+  try { raw = inflateSync(Buffer.concat(idat), { maxOutputLength: expected }) } catch {
+    throw new ActionError('PNG 解码失败：压缩数据损坏或超出预期像素大小。')
+  }
+  if (raw.length !== expected) throw new ActionError('PNG 解码失败：解压后的像素数据大小不符。')
 
   const out = new Uint8Array(width * height * 4)
   const prev = new Uint8Array(stride)
@@ -391,10 +451,18 @@ function metaPath(dir: string, name: string): string {
   return path.join(dir, `${name}.json`)
 }
 
-function readBaseline(name: string): BaselineMeta {
-  const metaFile = metaPath(visualBaselinesDir(), name)
+function readBaseline(name: string, id?: string): BaselineMeta {
+  assertName(name)
+  const directory = visualBaselinesDir(id)
+  const metaFile = metaPath(directory, name)
+  const pngFile = path.join(directory, `${name}.png`)
   let text: string
   try {
+    assertNoLinks(metaFile)
+    assertNoLinks(pngFile)
+    const metadata = fs.lstatSync(metaFile)
+    const image = fs.lstatSync(pngFile)
+    if (!metadata.isFile() || metadata.size > 64 * 1024 || !image.isFile() || image.size > MAX_PNG_BYTES) throw new Error('基线文件类型或大小无效')
     text = fs.readFileSync(metaFile, 'utf8')
   } catch (error) {
     throw new ActionError(`读取基线「${name}」元数据失败：${error instanceof Error ? error.message : String(error)}`)
@@ -402,9 +470,13 @@ function readBaseline(name: string): BaselineMeta {
   try {
     const meta = JSON.parse(text) as Partial<BaselineMeta>
     if (
-      !meta || typeof meta.name !== 'string' || typeof meta.file !== 'string' ||
-      typeof meta.width !== 'number' || typeof meta.height !== 'number'
+      !meta || meta.name !== name || meta.file !== pngFile ||
+      typeof meta.width !== 'number' || typeof meta.height !== 'number' ||
+      typeof meta.url !== 'string' || typeof meta.fullPage !== 'boolean' ||
+      typeof meta.createdAt !== 'number' || !Number.isFinite(meta.createdAt) || meta.createdAt < 0 ||
+      typeof meta.bytes !== 'number' || !Number.isSafeInteger(meta.bytes) || meta.bytes < 0 || meta.bytes > MAX_PNG_BYTES
     ) throw new Error('元数据字段缺失')
+    assertDimensions(meta.width, meta.height)
     return meta as BaselineMeta
   } catch (error) {
     throw new ActionError(`基线「${name}」元数据已损坏：${error instanceof Error ? error.message : String(error)}`)
@@ -413,6 +485,7 @@ function readBaseline(name: string): BaselineMeta {
 
 export async function visualSave(tab: Tab, name: string, opts?: { fullPage?: boolean }): Promise<BaselineMeta> {
   assertName(name)
+  const id = profileId(tab.profileId)
   const fullPage = opts?.fullPage === true
   const capture = await captureVisual(tab.view.webContents, { fullPage, background: !tab.canUseWindowInput(), isWindowMinimized: () => tab.isWindowMinimized?.() ?? false })
   const png = Buffer.from(capture.base64, 'base64')
@@ -422,24 +495,27 @@ export async function visualSave(tab: Tab, name: string, opts?: { fullPage?: boo
     throw new ActionError('截图尺寸校验失败，未保存基线。')
   }
 
-  const dir = visualBaselinesDir()
-  fs.mkdirSync(dir, { recursive: true })
+  const dir = visualBaselinesDir(id)
   const file = path.join(dir, `${name}.png`)
-  fs.writeFileSync(file, png)
-  getEvidenceManager().record(file, 'baseline')
+  assertNoLinks(metaPath(dir, name))
+  writeVisualFile(file, png)
+  getEvidenceManager(id).record(file, 'baseline')
+
+  let url = ''
+  try { const parsed = new URL(tab.url); parsed.username = ''; parsed.password = ''; parsed.search = ''; parsed.hash = ''; url = parsed.toString() } catch { /* Invalid URLs carry no persisted metadata. */ }
 
   const meta: BaselineMeta = {
     name,
     file,
-    url: tab.url,
+    url,
     width: capture.width,
     height: capture.height,
     fullPage,
     createdAt: Date.now(),
     bytes: png.length
   }
-  fs.writeFileSync(metaPath(dir, name), JSON.stringify(meta, null, 2))
-  getEvidenceManager().record(metaPath(dir, name), 'baseline')
+  writeVisualFile(metaPath(dir, name), JSON.stringify(meta, null, 2))
+  getEvidenceManager(id).record(metaPath(dir, name), 'baseline')
   return meta
 }
 
@@ -449,19 +525,23 @@ export async function visualCompare(
   opts?: { fullPage?: boolean; pixelThreshold?: number; maxDiffPercent?: number; writeDiff?: boolean }
 ): Promise<DiffResult> {
   assertName(name)
-  const baseline = readBaseline(name)
+  const id = profileId(tab.profileId)
+  const baseline = readBaseline(name, id)
   // 默认沿用基线当时的截图范围，保证对比口径一致。
   const fullPage = opts?.fullPage ?? baseline.fullPage
   const current = await captureVisual(tab.view.webContents, { fullPage, background: !tab.canUseWindowInput(), isWindowMinimized: () => tab.isWindowMinimized?.() ?? false })
 
   let basePng: Buffer
   try {
+    assertNoLinks(baseline.file)
+    if (fs.lstatSync(baseline.file).size > MAX_PNG_BYTES) throw new Error('基线图像超出大小限制')
     basePng = fs.readFileSync(baseline.file)
   } catch (error) {
     throw new ActionError(`读取基线图片「${name}」失败：${error instanceof Error ? error.message : String(error)}`)
   }
   reportProgress(0.3, 1, '解码基线')
   const base = decodePng(basePng)
+  if (base.width !== baseline.width || base.height !== baseline.height) throw new ActionError('基线图像与元数据尺寸不符。')
   const cur = decodePng(Buffer.from(current.base64, 'base64'))
 
   const threshold = Math.min(255, Math.max(0, opts?.pixelThreshold ?? 16))
@@ -537,32 +617,31 @@ export async function visualCompare(
   if (diffImage) {
     // 差异图放在子目录：基线名允许点号，`home` 的差异图与名为
     // `home.diff` 的基线原本会写到同一个 home.diff.png 并互相覆盖/误删。
-    const diffDir = path.join(visualBaselinesDir(), 'diffs')
-    fs.mkdirSync(diffDir, { recursive: true })
+    const diffDir = path.join(visualBaselinesDir(id), 'diffs')
     const diffFile = path.join(diffDir, `${name}.diff.png`)
-    fs.writeFileSync(diffFile, encodePng(base.width, base.height, diffImage))
-    getEvidenceManager().record(diffFile, 'diff')
+    writeVisualFile(diffFile, encodePng(base.width, base.height, diffImage))
+    getEvidenceManager(id).record(diffFile, 'diff')
     result.diffFile = diffFile
   }
   reportProgress(1, 1, '完成')
   return result
 }
 
-export function visualList(): BaselineMeta[] {
-  const dir = visualBaselinesDir()
+export function visualList(id?: string): BaselineMeta[] {
+  const selected = profileId(id)
+  const dir = visualBaselinesDir(selected)
   let files: string[]
   try {
+    assertNoLinks(dir)
     files = fs.readdirSync(dir)
   } catch {
     return []
   }
   const out: BaselineMeta[] = []
-  for (const file of files) {
+  for (const file of files.slice(0, 10_000)) {
     if (!file.endsWith('.json')) continue
     try {
-      const meta = JSON.parse(fs.readFileSync(path.join(dir, file), 'utf8')) as Partial<BaselineMeta>
-      if (!meta || typeof meta.name !== 'string' || typeof meta.file !== 'string') continue
-      out.push(meta as BaselineMeta)
+      out.push(readBaseline(file.slice(0, -5), selected))
     } catch {
       /* 跳过无法解析的元数据文件 */
     }
@@ -570,23 +649,26 @@ export function visualList(): BaselineMeta[] {
   return out.sort((a, b) => a.name.localeCompare(b.name))
 }
 
-export function visualDelete(name: string): boolean {
+export function visualDelete(name: string, id?: string): boolean {
   assertName(name)
-  const dir = visualBaselinesDir()
+  const selected = profileId(id)
+  const dir = visualBaselinesDir(selected)
   const files = [
     path.join(dir, `${name}.png`),
     path.join(dir, `${name}.json`),
     path.join(dir, 'diffs', `${name}.diff.png`)
   ]
+  for (const file of files) assertNoLinks(file)
   let existed = false
   for (const file of files) {
     if (!fs.existsSync(file)) continue
-    existed = true
     try {
+      if (!fs.lstatSync(file).isFile()) throw new Error('基线路径不是普通文件')
       fs.unlinkSync(file)
-      getEvidenceManager().forget(file)
-    } catch {
-      /* 文件被占用等情况下保留，交由调用方重试 */
+      existed = true
+      getEvidenceManager(selected).forget(file)
+    } catch (error) {
+      throw new ActionError(`删除基线「${name}」失败：${error instanceof Error ? error.message : String(error)}`)
     }
   }
   return existed

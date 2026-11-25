@@ -14,7 +14,7 @@ import { writeJsonAtomic } from './atomic-json'
  * 文件写入使用原子替换；损坏或未来版本的文件返回 null，绝不阻塞启动。
  */
 
-export const SESSION_VERSION = 2
+export const SESSION_VERSION = 3
 export const MAX_RESTORE_TABS = 20
 const MAX_TITLE_LENGTH = 300
 /** 与 TabManager 的 genId 同一形状；恢复时只接受这种 id，避免任意字符串进入运行时。 */
@@ -22,6 +22,7 @@ const TAB_ID = /^t[a-z0-9]{1,32}$/
 
 export interface SessionTab {
   url: string
+  profileId?: string
   title?: string
   /**
    * v2：保留标签 id。更新重启后 Agent 手里的 tabId 仍然有效，
@@ -46,6 +47,8 @@ function normalizeSessionUrl(raw: unknown): string | null {
     if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
     url.username = ''
     url.password = ''
+    for (const key of [...url.searchParams.keys()]) if (/(?:token|secret|password|passwd|api[-_]?key|authorization|cookie|credential|session|code)/i.test(key)) url.searchParams.delete(key)
+    if (/(?:token|secret|password|passwd|api[-_]?key|authorization|cookie|credential|session|code)=/i.test(url.hash)) url.hash = ''
     return url.toString()
   } catch {
     return null
@@ -58,7 +61,7 @@ export function normalizeSessionSnapshot(value: unknown): SessionSnapshot | null
   const record = value as Record<string, unknown>
   const version = record.version
   // v1 只有地址；v2 增加标签 id。旧文件继续可读，保存时统一写成当前版本。
-  if (version !== undefined && version !== 1 && version !== SESSION_VERSION) return null
+  if (version !== undefined && version !== 1 && version !== 2 && version !== SESSION_VERSION) return null
 
   const seen = new Set<string>()
   const seenIds = new Set<string>()
@@ -68,12 +71,15 @@ export function normalizeSessionSnapshot(value: unknown): SessionSnapshot | null
     if (!item || typeof item !== 'object' || Array.isArray(item)) continue
     const tab = item as Record<string, unknown>
     const url = normalizeSessionUrl(tab.url)
-    if (!url || seen.has(url)) continue
-    seen.add(url)
+    const profileId = tab.profileId === undefined ? undefined : typeof tab.profileId === 'string' && /^(?:default|p[a-f0-9]{24})$/.test(tab.profileId) ? tab.profileId : null
+    if (profileId === null) continue
+    const key = `${profileId ?? 'default'}\n${url}`
+    if (!url || seen.has(key)) continue
+    seen.add(key)
     const title = typeof tab.title === 'string' ? tab.title.trim().slice(0, MAX_TITLE_LENGTH) : ''
     const id = typeof tab.id === 'string' && TAB_ID.test(tab.id) && !seenIds.has(tab.id) ? tab.id : undefined
     if (id) seenIds.add(id)
-    tabs.push({ url, ...(title ? { title } : {}), ...(id ? { id } : {}) })
+    tabs.push({ url, ...(profileId ? { profileId } : {}), ...(title ? { title } : {}), ...(id ? { id } : {}) })
     if (tabs.length >= MAX_RESTORE_TABS) break
   }
   if (!tabs.length) return null
@@ -108,7 +114,7 @@ export class SessionStore {
    * 没有任何可恢复网页时删除旧记录，避免下次启动恢复过期页面。
    * 写入失败只记录警告：会话记录是尽力而为的便利功能，不能影响浏览。
    */
-  save(tabs: { url: string; title?: string; id?: string }[], activeIndex = 0): SessionSnapshot | null {
+  save(tabs: { url: string; title?: string; id?: string; profileId?: string }[], activeIndex = 0): SessionSnapshot | null {
     const snapshot = normalizeSessionSnapshot({ version: SESSION_VERSION, savedAt: Date.now(), activeIndex, tabs })
     try {
       if (!snapshot) {

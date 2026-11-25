@@ -219,10 +219,13 @@ if (!process.versions.electron) {
     const diagnosticsFocus = await ui('document.activeElement.id')
     check('copy diagnostics is next in the keyboard order', diagnosticsFocus === 'btn-copy-connection-diagnostics', { diagnosticsFocus })
     await key('Tab')
-    // The extensions section sits between AI integration and software update; the load button must be reachable here.
-    check('one Tab continues from connection diagnostics into the extensions section', await ui('document.activeElement.id === "btn-extension-load"'))
+    check('one Tab continues from connection diagnostics into the extension Profile selector', await ui('document.activeElement.id === "extension-profile"'))
+    await key('Tab')
+    check('the next Tab reaches the extension load button', await ui('document.activeElement.id === "btn-extension-load"'))
     await key('Tab')
     check('the next Tab reaches the extensions rescan button', await ui('document.activeElement.id === "btn-extension-rescan"'))
+    await key('Tab')
+    check('local extension update checks are keyboard accessible', await ui('document.activeElement.id === "btn-extension-updates"'))
     await key('Tab')
     check('Tab continues from extensions to update settings', await ui('document.activeElement.id === "set-auto-update"'))
     await ui(`document.querySelector('#btn-client-setup').disabled=${literal(setupDisabled)}`)
@@ -366,6 +369,30 @@ if (!process.versions.electron) {
       agentActivity: { active: true, paused: false, tool: 'browser_wait', startedAt: Date.now(), calls: [{ id: 999, client: 1, tool: 'browser_wait', startedAt: Date.now(), progress: 1, total: 10, message: 'UI regression progress' }] }
     }
     const send = async (value) => { chrome.send('aa:state', value); await pause(100) }
+    const metadata = { ...live, tabs: live.tabs.map((tab) => tab.id === live.activeId ? {
+      ...tab, title: 'Updated tab metadata', url: 'https://ui-metadata.test/updated',
+      favicon: 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==',
+      loading: true, isolated: true, agentClientId: 701
+    } : tab) }
+    for (const selector of ['.tab.active', '.tab.active .close']) {
+      await send(live)
+      chrome.focus()
+      await ui(`window.__tabNodeProbe=document.querySelector('.tab.active'); window.__tabCloseProbe=window.__tabNodeProbe.querySelector('.close'); document.querySelector(${literal(selector)}).focus(); window.__tabFocusProbe=document.activeElement`)
+      await send(metadata)
+      const refreshed = await ui(`({retained:document.querySelector('.tab.active')===window.__tabNodeProbe && window.__tabNodeProbe.querySelector('.close')===window.__tabCloseProbe && document.activeElement===window.__tabFocusProbe,
+        title:window.__tabNodeProbe.querySelector('.title').textContent,loading:!!window.__tabNodeProbe.querySelector('.dot'),owner:window.__tabNodeProbe.querySelector('.tab-owner')?.textContent,isolated:window.__tabNodeProbe.classList.contains('isolated')})`)
+      check(`tab metadata refresh preserves node and focus: ${selector}`, refreshed.retained && refreshed.title === 'Updated tab metadata' && refreshed.loading && refreshed.owner === 'A701' && refreshed.isolated, refreshed)
+      const loaded = { ...metadata, tabs: metadata.tabs.map((tab) => ({ ...tab, loading: false })) }
+      await send(loaded)
+      check(`favicon completion preserves node and focus: ${selector}`, await ui(`document.activeElement===window.__tabFocusProbe && document.querySelector('.tab.active')===window.__tabNodeProbe && !window.__tabNodeProbe.querySelector('.dot') && !!window.__tabNodeProbe.querySelector('.favicon img')`))
+      await send({ ...loaded, tabs: [...loaded.tabs, { ...loaded.tabs[0], id: 'ui-keyed-extra', active: false }] })
+      check(`adding a tab preserves existing node and focus: ${selector}`, await ui(`document.activeElement===window.__tabFocusProbe && document.querySelector('.tab.active')===window.__tabNodeProbe && document.querySelectorAll('.tab').length===${live.tabs.length + 1}`))
+      await send({ ...loaded, tabs: loaded.tabs.filter((tab) => tab.id === live.activeId) })
+      check(`removing other tabs preserves existing node and focus: ${selector}`, await ui(`document.activeElement===window.__tabFocusProbe && document.querySelector('.tab.active')===window.__tabNodeProbe && document.querySelectorAll('.tab').length===1`))
+      await send(live)
+      check(`restoring tab metadata removes stale owner and isolation state: ${selector}`, await ui(`document.querySelector('.tab.active')===window.__tabNodeProbe && !window.__tabNodeProbe.querySelector('.tab-owner,.tab-lock') && !window.__tabNodeProbe.classList.contains('isolated')`))
+    }
+    await ui('delete window.__tabNodeProbe; delete window.__tabCloseProbe; delete window.__tabFocusProbe')
     await send(fixture)
     await click('#btn-downloads')
     const progressing = {...fixture, downloads:fixture.downloads.map(d=>({...d,state:'progressing'}))}

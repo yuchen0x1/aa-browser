@@ -10,6 +10,7 @@ import readline from 'node:readline'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import WebSocket from 'ws'
+import { startOperationApprovalDriver } from './trusted-approval-driver.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const require = createRequire(import.meta.url)
@@ -69,6 +70,7 @@ async function run() {
   let secondServer
   let child
   let rl
+  let approvalDriver
   const pending = new Map()
   const sockets = []
   let id = 0
@@ -143,6 +145,7 @@ async function run() {
     await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject) })
     const chrome = await until(() => webContents.getAllWebContents().find((wc) => wc.getURL().endsWith('/renderer/index.html')), 'chrome')
     const state = () => chrome.executeJavaScript('window.aa.getState()')
+    approvalDriver = startOperationApprovalDriver((script) => chrome.executeJavaScript(script, true))
 
     const pageWc = (prefix = base) => webContents.getAllWebContents().find((wc) => !wc.isDestroyed() && wc.getURL().startsWith(prefix))
     const target = await until(() => pageWc(), 'page webContents')
@@ -439,8 +442,11 @@ async function run() {
     assert.match(afterNavigation.text, /sibling tab/)
     pass('a ref from before navigation is rejected instead of being mapped to another element')
 
+    approvalDriver.assertHealthy()
+    assert.ok(approvalDriver.approved > 0, 'script execution requires a real desktop decision')
     exitCode = 0
   } finally {
+    await approvalDriver?.stop()
     rl?.close()
     for (const socket of sockets) socket.close()
     child?.kill()

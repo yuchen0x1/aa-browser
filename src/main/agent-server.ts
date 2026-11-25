@@ -9,6 +9,9 @@ import type { McpToolDef } from './tools'
 import type { ApprovalManager } from './approvals'
 import { runWithProgress } from './progress'
 import { writeJsonAtomic } from './atomic-json'
+import { redactText } from './redaction'
+import { validateToolArguments } from './tool-validation'
+import { revokeClientProfileAccess } from './permissions'
 import { TaskCenter, type TaskRecord, type TaskSideEffectRecord } from './task-center'
 import {
   IdempotencyConflictError,
@@ -24,16 +27,15 @@ const MAX_BUFFERED_BYTES = 64 * 1024 * 1024
 const MAX_TASK_HISTORY = 100
 const MAX_ACTIVITY_TASKS = 24
 const CLIENT_SESSION_TTL_MS = 24 * 60 * 60 * 1000
+export const MAX_REQUEST_BYTES = 2 * 1024 * 1024
+export const MAX_CLIENT_CALLS = 16
+export const MAX_ACTIVE_CALLS = 64
+export const MAX_CLIENTS = 32
 
 type ActiveTool = AgentTaskRecord
 
 function redactTaskText(value: unknown): string {
-  return String(value ?? '')
-    .replace(/\b(https?:\/\/)[^\s/@]+:[^\s/@]+@/gi, '$1[redacted]@')
-    .replace(/([?&][^=\s]*(?:token|secret|password|passwd|api[_-]?key|authorization|cookie)[^=\s]*=)[^&\s]*/gi, '$1[redacted]')
-    .replace(/\b(Bearer|Basic)\s+[^\s,;]+/gi, '$1 [redacted]')
-    .replace(/\b(password|passwd|token|secret|api[_-]?key|authorization|cookie)\b\s*[:=]\s*[^\s,;]+/gi, '$1=[redacted]')
-    .slice(0, 240)
+  return redactText(value, 240)
 }
 
 function terminalLedgerState(state: TaskRecord['state']): IdempotencyEntry['state'] {
@@ -86,6 +88,7 @@ function connectionFile(): string {
 
 /** 本地 Agent 接入服务：WS + token 鉴权 + connection.json 发现文件 */
 export class AgentServer {
+  onPause?: (clientId?: number) => void
   private server = http.createServer()
   private wss: WebSocketServer
   private clients = new Set<WebSocket>()
@@ -121,7 +124,7 @@ export class AgentServer {
     private onClientDisconnected: (clientId: number) => void = () => {},
     private taskTabInfo: (tabId?: string) => { id: string; url?: string; title?: string; rendererPid?: number } | null = () => null
   ) {
-    this.wss = new WebSocketServer({ server: this.server })
+    this.wss = new WebSocketServer({ server: this.server, maxPayload: MAX_REQUEST_BYTES })
     this.wss.on('connection', (ws, req) => this.onConnection(ws, req))
   }
 
@@ -483,6 +486,13 @@ export class AgentServer {
     }
   }
 
+  private notifyPause(clientId?: number): void {
+    try { this.onPause?.(clientId) }
+    catch (error) {
+      console.warn(`[aa-browser] 工作流暂停通知失败: ${redactText(error instanceof Error ? error.message : String(error), 240)}`)
+    }
+  }
+
   /** 中断当前调用并进入暂停状态；重复调用不会重复广播或产生额外副作用。 */
   pause(resumeAt?: number): void {
     for (const calls of this.active.values()) {
@@ -511,6 +521,7 @@ export class AgentServer {
       this.activityState.tool !== next.tool ||
       this.activityState.startedAt !== next.startedAt
     this.activityState = next
+    this.notifyPause()
     if (changed) this.onActivityChange(this.activity())
   }
 
@@ -542,6 +553,7 @@ export class AgentServer {
         controller.abort()
       }
     }
+    this.notifyPause(clientId)
     this.persistTaskHistory(true)
     this.refreshActivity()
   }
@@ -651,6 +663,7 @@ export class AgentServer {
       ws.close(4401, 'unauthorized')
       return
     }
+    if (this.clients.size >= MAX_CLIENTS) { ws.close(4429, 'too many clients'); return }
     this.clients.add(ws)
     const now = Date.now()
     for (const [key, session] of this.clientSessions) {
@@ -682,7 +695,7 @@ export class AgentServer {
 
     ws.on('message', (raw) => {
       void this.handleMessage(ws, raw.toString()).catch((error: unknown) => {
-        console.warn(`[aa-browser] 处理桥请求失败: ${error instanceof Error ? error.message : String(error)}`)
+        console.warn(`[aa-browser] 处理桥请求失败: ${redactText(error instanceof Error ? error.message : String(error))}`)
       })
     })
     const dropClient = (): void => {
@@ -696,7 +709,10 @@ export class AgentServer {
       this.clients.delete(ws)
       this.clientIds.delete(ws)
       this.verifiedClients.delete(ws)
-      if (![...this.clientIds.values()].includes(clientId)) this.onClientDisconnected(clientId)
+      if (![...this.clientIds.values()].includes(clientId)) {
+        revokeClientProfileAccess(clientId)
+        this.onClientDisconnected(clientId)
+      }
       this.refreshActivity()
       this.onStatusChange(this.clients.size, this.verifiedClients.size)
     }
@@ -705,15 +721,15 @@ export class AgentServer {
   }
 
   private async handleMessage(ws: WebSocket, raw: string): Promise<void> {
+    if (Buffer.byteLength(raw) > MAX_REQUEST_BYTES) { ws.close(1009, 'request too large'); return }
     let req: WsRequest
     try {
       req = JSON.parse(raw) as WsRequest
     } catch {
-      // 没有 id 无法回错误帧；记录截断样本，便于排查桥或代理写入的坏帧。
-      console.warn(`[aa-browser] 忽略无法解析的桥消息: ${raw.slice(0, 200)}`)
+      console.warn('[aa-browser] 忽略无法解析的桥消息（原始内容未记录）')
       return
     }
-    if (typeof req?.id !== 'number') return
+    if (!Number.isSafeInteger(req?.id) || req.id < 0) return
     if (req.cancel === true) {
       this.active.get(ws)?.get(req.id)?.abort()
       return
@@ -721,9 +737,14 @@ export class AgentServer {
     // 活动 id 的响应权归原调用；忽略同连接的重复请求，既不覆盖 controller，
     // 也不回同 id 的错误（会让桥把原调用误判为失败）。取消帧仍在上面正常处理。
     if (this.active.get(ws)?.has(req.id)) return
+    const totalCalls = [...this.active.values()].reduce((sum, calls) => sum + calls.size, 0)
+    if ((this.active.get(ws)?.size ?? 0) >= MAX_CLIENT_CALLS || totalCalls >= MAX_ACTIVE_CALLS) {
+      this.reply(ws, { id: req.id, ok: false, error: '[RESOURCE_LIMIT] Too many concurrent tool calls; wait for a running call to finish' })
+      return
+    }
     const clientId = this.clientIds.get(ws) ?? 0
     const canControlPausedTasks = (req.tool === 'browser_window' && req.args?.['action'] === 'release') ||
-      (req.tool === 'browser_tasks' && ['list', 'get', 'cancel', 'resume'].includes(String(req.args?.['action'] ?? 'list')))
+      (req.tool === 'browser_tasks' && ['list', 'get', 'cancel', 'pause', 'resume'].includes(String(req.args?.['action'] ?? 'list')))
     if ((this.approvals?.isInterrupted() || this.pausedClients.has(clientId)) && !canControlPausedTasks) {
       this.reply(ws, { id: req.id, ok: false, error: this.pausedClients.has(clientId) ? '此 MCP 客户端已暂停；请调用 browser_tasks action=resume 后重试。' : 'Agent 已被用户中断（人工接管或任务暂停）；请调用 browser_window action=release，或在浏览器工具栏点击“恢复”后重试。' })
       return
@@ -741,6 +762,12 @@ export class AgentServer {
     const tool = this.tools.find((t) => t.name === req.tool)
     if (!tool) {
       this.reply(ws, { id: req.id, ok: false, error: `未知工具: ${req.tool}` })
+      return
+    }
+    try {
+      if (tool.inputSchema) validateToolArguments(tool.inputSchema, req.args ?? {})
+    } catch (error) {
+      this.reply(ws, { id: req.id, ok: false, error: redactText((error as Error).message) })
       return
     }
     const actionName = String(req.args?.['action'] ?? '')
@@ -815,12 +842,11 @@ export class AgentServer {
     let activityCalls = this.activeTools.get(ws)
     if (!activityCalls) { activityCalls = new Map(); this.activeTools.set(ws, activityCalls) }
     const label = this.clientLabels.get(clientId)
-    const explicitSource = typeof req.args?.['__aaClientSession'] === 'string' ? req.args['__aaClientSession'] : ''
-    const source = explicitSource || (label?.name
+    const source = label?.name
       ? `mcp:${label.name}`
       : label?.session
         ? `mcp:${label.session.slice(0, 8)}`
-        : `client-${clientId}`)
+        : `client-${clientId}`
     const requestedTabId = typeof req.args?.['tabId'] === 'string' ? req.args['tabId'] : undefined
     const tabInfo = this.taskTabInfo(requestedTabId)
     const tabId = requestedTabId || tabInfo?.id
@@ -909,10 +935,11 @@ export class AgentServer {
           report: (progress, total, message) => this.sendProgress(ws, req.id, progress, total, message)
         },
         () => this.runWithClientScope(task.client, () => tool.handler({
-          ...(req.args ?? {}),
+          ...Object.fromEntries(Object.entries(req.args ?? {}).filter(([key]) => !key.startsWith('__aa'))),
           __aaSignal: controller.signal,
           __aaClientId: task.client,
           __aaCallId: req.id,
+          __aaTaskId: taskId,
           __aaClientSession: label?.session
         }))
       )
@@ -972,6 +999,7 @@ export class AgentServer {
 
   /** 清理发现文件（应用退出时调用） */
   stop(): void {
+    for (const clientId of new Set(this.clientIds.values())) revokeClientProfileAccess(clientId)
     for (const calls of this.active.values()) {
       for (const controller of calls.values()) controller.abort()
     }

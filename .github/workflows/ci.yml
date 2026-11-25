@@ -63,7 +63,8 @@ jobs:
             test:bridge test:bridge-connection-race \
             test:bridge-lifecycle test:bridge-restart-replay \
             test:agent-cancellation test:atomic-json test:task-center test:ref-lifecycle \
-            test:session-permissions test:approval-parity
+            test:session-permissions test:approval-parity \
+            test:profiles test:profile-evidence test:workflows test:platform-security test:platform-services
           do
             echo "::group::$suite"
             if npm run "$suite"; then echo "::endgroup::"; else echo "::error::$suite failed"; failed+=("$suite"); echo "::endgroup::"; fi
@@ -169,8 +170,17 @@ jobs:
             run_suite test:background npm run test:background
           fi
           run_suite test:update-ui "${display[@]}" npm run test:update-ui
-          run_suite test:ui-ux "${display[@]}" npm run test:ui-ux
+          # Keyboard focus checks need native window activation on Linux.
+          if [ "$RUNNER_OS" = Linux ]; then
+            run_suite test:ui-ux run_with_window_manager npm run test:ui-ux
+          else
+            run_suite test:ui-ux npm run test:ui-ux
+          fi
           run_suite test:extensions-e2e "${display[@]}" npm run test:extensions-e2e
+          run_suite test:profiles-e2e "${display[@]}" npm run test:profiles-e2e
+          run_suite test:workflows-e2e "${display[@]}" npm run test:workflows-e2e
+          run_suite test:platform-services-e2e "${display[@]}" npm run test:platform-services-e2e
+          run_suite test:platform-ui "${display[@]}" npm run test:platform-ui
           run_suite test:settings-safety "${display[@]}" npm run test:settings-safety
           run_suite test:cancel-side-effects "${display[@]}" npm run test:cancel-side-effects
           run_suite test:newtab-i18n "${display[@]}" npm run test:newtab-i18n
@@ -230,7 +240,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $uninstaller = Start-Process -Wait -PassThru -WindowStyle Hidden -FilePath (Join-Path $installDir 'Uninstall Aa Browser.exe') -ArgumentList '/S'
           if ($uninstaller.ExitCode -ne 0 -or (Test-Path (Join-Path $installDir 'Aa Browser.exe'))) { throw 'NSIS uninstall failed' }
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
         with:
           name: release-${{ matrix.platform }}

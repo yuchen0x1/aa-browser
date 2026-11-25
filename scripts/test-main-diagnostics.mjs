@@ -51,6 +51,8 @@ try {
   delete process.env.Path
   process.env.PATH = bin
   process.env.AA_BROWSER_SETTINGS_FILE = path.join(runDir, 'settings.json')
+  process.env.AA_BROWSER_DATA_DIR = runDir
+  process.env.AA_BROWSER_PROFILES_FILE = path.join(runDir, 'profiles.json')
   fs.writeFileSync(process.env.AA_BROWSER_SETTINGS_FILE, JSON.stringify({ locale: 'en-US' }))
   Object.defineProperty(process, 'resourcesPath', { configurable: true, value: path.join(runDir, 'resources') })
 
@@ -78,7 +80,7 @@ try {
       showItemInFolder: () => { throw new Error('Shell operations are forbidden in diagnostic tests') }
     }
   }
-  // Every production filesystem access is guarded, including reads and PATH probes.
+  // File contents and mutations stay inside the fixture; directory safety checks may inspect ancestor metadata.
   const sandboxFs = { constants: fs.constants }
   const pathArguments = {
     existsSync: [0], statSync: [0], lstatSync: [0], realpathSync: [0], readFileSync: [0], copyFileSync: [0, 1], mkdirSync: [0],
@@ -90,8 +92,12 @@ try {
         if (method === 'writeFileSync' && typeof args[index] === 'number') continue
         const relative = path.relative(runDir, path.resolve(args[index]))
         if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-          violations.push(`${method}: ${args[index]}`)
-          throw new Error(`Production filesystem access escaped the sandbox: ${args[index]}`)
+          const descendant = path.relative(path.resolve(args[index]), runDir)
+          const ancestorMetadata = ['existsSync', 'lstatSync'].includes(method) && descendant && descendant !== '..' && !descendant.startsWith(`..${path.sep}`) && !path.isAbsolute(descendant)
+          if (!ancestorMetadata) {
+            violations.push(`${method}: ${args[index]}`)
+            throw new Error(`Production filesystem access escaped the sandbox: ${args[index]}`)
+          }
         }
       }
       operations.push({ method, args })
@@ -268,6 +274,7 @@ try {
     item.getTotalBytes = () => 100
     item.getReceivedBytes = () => 20
     item.setSavePath = (file) => { item.savePath = file }
+    item.cancel = () => item.emit('done', {}, 'cancelled')
     return item
   }
   function downloadFixture(state = 'cancelled') {

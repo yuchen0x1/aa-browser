@@ -32,7 +32,7 @@ const SOURCE = 'src/shared/tool-defs.mjs'
 const sourceText = fs.readFileSync(path.join(ROOT, SOURCE), 'utf-8')
 const sourceNames = namesIn(SOURCE, /name:\s*'(browser_[a-z0-9_]+)'/g)
 const annotationNames = [...sourceText.matchAll(/^\s{2}(browser_[a-z0-9_]+):\s*\{/gm)].map((m) => m[1])
-const mainNames = namesIn('src/main/tools.ts', /name:\s*'(browser_[a-z0-9_]+)'/g)
+const mainNames = ['src/main/tools.ts', 'src/main/platform-tools.ts'].flatMap((file) => namesIn(file, /name:\s*'(browser_[a-z0-9_]+)'/g))
 const bridgeText = fs.readFileSync(path.join(ROOT, 'cli/mcp.mjs'), 'utf-8')
 const bridgeNames = namesIn('cli/mcp.mjs', /name:\s*'(browser_[a-z0-9_]+)'/g)
 // README 允许把成对工具写在同一行（如 browser_navigate_back / browser_navigate_forward），
