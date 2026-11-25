@@ -38,6 +38,12 @@ export interface LoadedExtension {
   version: string
   manifestVersion: number
   path: string
+  enabled: boolean
+  permissions: string[]
+  hostPermissions: string[]
+  source: 'local-unpacked'
+  status: 'running' | 'disabled' | 'stopped' | 'error'
+  error?: string
 }
 
 /** 与 settings.ts 同目录约定：默认 ~/.aabrowser/extensions.json，测试可用环境变量重定向。 */
@@ -48,7 +54,7 @@ function defaultExtensionsFile(): string {
 }
 
 /** 校验目录是一个合法的已解压扩展，返回 manifest 摘要；失败时抛出可读错误。 */
-function readManifest(dir: string): { name: string; version: string; manifestVersion: number } {
+function readManifest(dir: string): { name: string; version: string; manifestVersion: number; permissions: string[]; hostPermissions: string[] } {
   let manifestRaw: unknown
   try {
     manifestRaw = JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8'))
@@ -67,15 +73,19 @@ function readManifest(dir: string): { name: string; version: string; manifestVer
   if (mv < MIN_MANIFEST_VERSION || mv > 3) {
     throw new Error(`不支持的 manifest_version: ${mv}（仅支持 2 / 3）。`)
   }
-  return { name, version, manifestVersion: mv }
+  const strings = (value: unknown): string[] => Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string').slice(0, 200) : []
+  return { name, version, manifestVersion: mv, permissions: strings(manifest.permissions), hostPermissions: strings(manifest.host_permissions) }
 }
 
 /** 读取持久化列表；损坏文件按空列表处理（下次保存覆盖）。 */
-function loadPersisted(file: string): string[] {
+function loadPersisted(file: string): { path: string; enabled: boolean }[] {
   try {
     const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf8'))
-    if (!Array.isArray(parsed)) return []
-    return parsed.filter((p): p is string => typeof p === 'string' && !!p.trim()).slice(0, MAX_EXTENSIONS)
+    const record = parsed && typeof parsed === 'object' ? parsed as { version?: unknown; entries?: unknown } : null
+    const entries = Array.isArray(parsed) ? parsed : record?.version === 2 && Array.isArray(record.entries) ? record.entries : []
+    return entries.map((entry: unknown) => typeof entry === 'string' ? { path: entry, enabled: true } : entry)
+      .filter((entry: unknown): entry is { path: string; enabled: boolean } => !!entry && typeof entry === 'object' && typeof (entry as { path?: unknown }).path === 'string' && !!(entry as { path: string }).path.trim())
+      .slice(0, MAX_EXTENSIONS).map((entry: { path: string; enabled?: boolean }) => ({ path: entry.path, enabled: entry.enabled !== false }))
   } catch {
     return []
   }
@@ -87,8 +97,8 @@ export class ExtensionManager {
   private loadedPaths = new Set<string>()
   private file: string
 
-  constructor() {
-    this.file = process.env['AA_BROWSER_EXTENSIONS_FILE'] || defaultExtensionsFile()
+  constructor(file?: string) {
+    this.file = file || process.env['AA_BROWSER_EXTENSIONS_FILE'] || defaultExtensionsFile()
   }
 
   get count(): number {
@@ -101,34 +111,55 @@ export class ExtensionManager {
     const skipped: string[] = []
     for (const p of paths) {
       try {
-        await this.loadInto(ses, p)
+        if (p.enabled) {
+          const previous = this.loaded.find((entry) => entry.path === path.resolve(p.path) && entry.status === 'stopped')
+          if (previous) { this.loaded = this.loaded.filter((entry) => entry !== previous); this.loadedPaths.delete(previous.path) }
+          await this.loadInto(ses, p.path)
+        }
+        else {
+          const abs = path.resolve(p.path)
+          if (this.loadedPaths.has(abs)) continue
+          const manifest = readManifest(abs)
+          this.loaded.push({ ...manifest, id: `disabled:${abs}`, path: abs, enabled: false, source: 'local-unpacked', status: 'disabled' })
+          this.loadedPaths.add(abs)
+        }
       } catch {
-        skipped.push(p)
+        skipped.push(p.path)
+        const abs = path.resolve(p.path)
+        const previous = this.loaded.find((entry) => entry.path === abs)
+        if (previous) { previous.status = 'error'; previous.error = 'Extension initialization failed; verify the local files and permissions.' }
+        else {
+          this.loaded.push({ id: `error:${abs}`, name: path.basename(abs), version: '?', manifestVersion: 0, path: abs, enabled: p.enabled, permissions: [], hostPermissions: [], source: 'local-unpacked', status: 'error', error: 'Extension initialization failed; verify the local files and permissions.' })
+          this.loadedPaths.add(abs)
+        }
       }
     }
-    if (skipped.length) this.persist()
-    return { restored: this.loaded.length, skipped }
+    return { restored: this.loaded.filter((entry) => entry.status === 'running').length, skipped }
   }
 
   /** 装载一个已解压扩展目录到 Session（幂等：同一路径重复加载返回已有条目）。 */
   private async loadInto(ses: ExtensionsSession, dir: string): Promise<LoadedExtension> {
     const abs = path.resolve(dir)
     if (this.loadedPaths.has(abs)) {
-      return this.loaded.find((e) => e.path === abs)!
+      const existing = this.loaded.find((e) => e.path === abs)!
+      if (existing.status !== 'error') return existing
+      this.loaded = this.loaded.filter((entry) => entry !== existing); this.loadedPaths.delete(abs)
     }
+    if (this.loaded.length >= MAX_EXTENSIONS) throw new Error('最多安装 20 个扩展。')
     let stat: fs.Stats
     try {
-      stat = fs.statSync(abs)
+      stat = fs.lstatSync(abs)
     } catch {
       throw new Error(`目录不存在或不可访问：${abs}`)
     }
     if (!stat.isDirectory()) throw new Error(`不是目录：${abs}`)
+    if (stat.isSymbolicLink()) throw new Error('不允许从符号链接安装扩展。')
     const manifest = readManifest(abs)
     const api = ses.extensions
     if (!api?.loadExtension) throw new Error('当前 Electron 版本不支持 session.extensions API。')
     let extId = ''
     try {
-      const result = await api.loadExtension(abs, { allowFileAccess: true })
+      const result = await api.loadExtension(abs, { allowFileAccess: false })
       extId = typeof result === 'string' ? result : String((result as { id?: string })?.id ?? '')
     } catch (error) {
       throw new Error(`扩展加载失败：${error instanceof Error ? error.message : String(error)}`)
@@ -138,7 +169,12 @@ export class ExtensionManager {
       name: manifest.name,
       version: manifest.version,
       manifestVersion: manifest.manifestVersion,
-      path: abs
+      path: abs,
+      enabled: true,
+      permissions: manifest.permissions,
+      hostPermissions: manifest.hostPermissions,
+      source: 'local-unpacked',
+      status: 'running'
     }
     this.loaded.push(entry)
     this.loadedPaths.add(abs)
@@ -156,11 +192,7 @@ export class ExtensionManager {
   remove(ses: ExtensionsSession, key: string): LoadedExtension {
     const entry = this.loaded.find((e) => e.path === path.resolve(key) || e.id === key)
     if (!entry) throw new Error(`未找到该扩展：${key}`)
-    try {
-      ses.extensions?.removeExtension?.(entry.id)
-    } catch {
-      /* 卸载失败不阻止移除记录：下次启动不再自动装载 */
-    }
+    if (entry.enabled && entry.status === 'running') ses.extensions?.removeExtension?.(entry.id)
     this.loaded = this.loaded.filter((e) => e !== entry)
     this.loadedPaths.delete(entry.path)
     this.persist()
@@ -168,7 +200,44 @@ export class ExtensionManager {
   }
 
   list(): ExtensionInfo[] {
-    return this.loaded.map((e) => ({ ...e }))
+    return this.loaded.map((e) => ({ ...e, permissions: [...e.permissions], hostPermissions: [...e.hostPermissions] }))
+  }
+
+  async setEnabled(ses: ExtensionsSession, key: string, enabled: boolean): Promise<LoadedExtension> {
+    const entry = this.loaded.find((item) => item.id === key || item.path === path.resolve(key))
+    if (!entry) throw new Error('未找到该扩展。')
+    if (entry.enabled === enabled) return { ...entry }
+    if (!enabled) {
+      if (!ses.extensions?.removeExtension) throw new Error('会话不支持卸载扩展。')
+      if (entry.status === 'running') ses.extensions.removeExtension(entry.id)
+      entry.enabled = false; entry.status = 'disabled'
+    } else {
+      const index = this.loaded.indexOf(entry)
+      this.loaded = this.loaded.filter((item) => item !== entry); this.loadedPaths.delete(entry.path)
+      try {
+        const loaded = await this.loadInto(ses, entry.path)
+        this.loaded.splice(this.loaded.indexOf(loaded), 1); this.loaded.splice(index, 0, loaded)
+        this.persist(); return { ...loaded }
+      } catch (error) { this.loaded.splice(index, 0, entry); this.loadedPaths.add(entry.path); throw error }
+    }
+    this.persist()
+    return { ...entry }
+  }
+
+  suspend(ses: ExtensionsSession): void {
+    for (const entry of this.loaded) {
+      if (!entry.enabled || entry.status !== 'running') continue
+      if (!ses.extensions?.removeExtension) throw new Error('会话不支持卸载扩展。')
+      ses.extensions.removeExtension(entry.id)
+      entry.status = 'stopped'
+    }
+  }
+
+  checkUpdates(): { id: string; installedVersion: string; localVersion?: string; changed: boolean; error?: string }[] {
+    return this.loaded.map((entry) => {
+      try { const localVersion = readManifest(entry.path).version; return { id: entry.id, installedVersion: entry.version, localVersion, changed: localVersion !== entry.version } }
+      catch { return { id: entry.id, installedVersion: entry.version, changed: false, error: 'Local extension manifest unavailable' } }
+    })
   }
 
   /** 新目录选择对话框的结果校验：只做 manifest 预检，不装载。 */
@@ -179,15 +248,22 @@ export class ExtensionManager {
 
   private persist(): void {
     try {
-      writeJsonAtomic(this.file, this.loaded.map((e) => e.path), false)
+      const entries = this.loaded.map((e) => ({ path: e.path, enabled: e.enabled }))
+      writeJsonAtomic(this.file, entries.every((entry) => entry.enabled) ? entries.map((entry) => entry.path) : { version: 2, entries }, false)
     } catch {
       /* 持久化失败只影响下次启动自动恢复，不阻塞本次使用 */
     }
   }
 }
 
-let manager: ExtensionManager | null = null
-export function getExtensionManager(): ExtensionManager {
-  if (!manager) manager = new ExtensionManager()
+const managers = new Map<string, ExtensionManager>()
+let profileProvider = (): string => 'default'
+let profileFileProvider: ((id: string) => string) | undefined
+export function configureExtensionProfiles(current: () => string, fileFor: (id: string) => string): void { profileProvider = current; profileFileProvider = fileFor }
+export function getExtensionManager(profileId = profileProvider()): ExtensionManager {
+  if (!/^(?:default|p[a-f0-9]{24})$/.test(profileId)) throw new Error('Invalid extension profile')
+  const file = profileFileProvider?.(profileId) ?? (profileId === 'default' ? process.env['AA_BROWSER_EXTENSIONS_FILE'] || defaultExtensionsFile() : path.join(path.dirname(defaultExtensionsFile()), 'profiles', profileId, 'extensions', 'registry.json'))
+  let manager = managers.get(file)
+  if (!manager) { manager = new ExtensionManager(file); managers.set(file, manager) }
   return manager
 }

@@ -6,10 +6,13 @@ import { shell } from 'electron'
 import type { Session, DownloadItem } from 'electron'
 import { diagnosticMessage, errorDetail } from '../shared/diagnostics'
 import { getMainLocale } from './locale'
+import { DEFAULT_PROFILE_ID, getProfileManager } from './profiles'
+import { redactText } from './redaction'
 
 /** 一条下载记录 */
 export interface DownloadRecord {
   id: string
+  profileId: string
   filename: string
   url: string
   savePath: string
@@ -61,11 +64,12 @@ export class DownloadTracker {
   /** 记录 -> 发起它的 session（完成后仍保留，用于重试） */
   private recordSessions = new Map<string, Session>()
   /** 发起重试时排队的来源记录；will-download 用它标注新记录 */
-  private pendingRetries: { id: string; url: string; ts: number }[] = []
+  private pendingRetries: { id: string; url: string; ts: number; session: Session }[] = []
   /** URL 白名单校验（由主进程注入；未注入时拒绝重试） */
   private urlGuard: (url: string) => boolean = () => false
   private directoryProvider: () => string = defaultDownloadDir
   private lastPush = 0
+  private sessionProfiles = new WeakMap<Session, string>()
   /** 下载列表变化时回调（主进程用来 pushState） */
   onChange: (() => void) | null = null
 
@@ -85,21 +89,40 @@ export class DownloadTracker {
     this.onChange?.()
   }
 
-  attach(session: Session): void {
+  private directoryFor(profileId: string): string {
+    return profileId === DEFAULT_PROFILE_ID ? this.directoryProvider() || defaultDownloadDir() : getProfileManager().directory(profileId, 'downloads')
+  }
+
+  private visible(record: DownloadRecord, profileId?: string): boolean {
+    const profiles = getProfileManager()
+    const selected = profileId ?? (profiles.hasContext() ? profiles.currentProfileId() : undefined)
+    return selected === undefined || record.profileId === selected
+  }
+
+  attach(session: Session, profileId = DEFAULT_PROFILE_ID): void {
     if (this.attachedSessions.has(session)) return
     this.attachedSessions.add(session)
+    this.sessionProfiles.set(session, profileId)
     session.on('will-download', (_event, item: DownloadItem) => {
-      const dir = this.directoryProvider() || defaultDownloadDir()
+      const dir = this.directoryFor(profileId)
       try {
+        let ancestor = path.resolve(dir)
+        for (;;) {
+          if (fs.existsSync(ancestor) && fs.lstatSync(ancestor).isSymbolicLink()) throw new Error('Unsafe download directory')
+          const parent = path.dirname(ancestor)
+          if (parent === ancestor) break
+          ancestor = parent
+        }
         fs.mkdirSync(dir, { recursive: true })
       } catch {
-        /* 忽略 */
+        item.cancel()
+        return
       }
       const stamp = Date.now().toString(36)
       const downloadId = randomUUID()
       const downloadUrl = item.getURL()
       // 只有 URL 匹配才认领重试记录，避免启动失败后把下一条无关下载标成 -r。
-      const retryIndex = this.pendingRetries.findIndex((p) => p.url === downloadUrl)
+      const retryIndex = this.pendingRetries.findIndex((p) => p.url === downloadUrl && p.session === session)
       const retriedFrom = retryIndex >= 0 ? this.pendingRetries.splice(retryIndex, 1)[0].id : undefined
       const rawFilename = item.getFilename() || `download-${stamp}`
       // Chromium normally supplies a basename, but a hostile server can still
@@ -111,6 +134,7 @@ export class DownloadTracker {
 
       const record: DownloadRecord = {
         id: `d${downloadId.replace(/-/g, '')}`,
+        profileId,
         filename,
         url: item.getURL(),
         savePath,
@@ -123,7 +147,12 @@ export class DownloadTracker {
       this.records.push(record)
       this.activeItems.set(record.id, { item, session })
       this.recordSessions.set(record.id, session)
-      if (this.records.length > MAX_RECORDS) this.records.splice(0, this.records.length - MAX_RECORDS)
+      while (this.records.length > MAX_RECORDS) {
+        const index = this.records.findIndex((entry) => !this.activeItems.has(entry.id))
+        if (index < 0) break
+        const [evicted] = this.records.splice(index, 1)
+        this.recordSessions.delete(evicted.id)
+      }
       this.notify()
 
       item.on('updated', (_e, state) => {
@@ -142,19 +171,19 @@ export class DownloadTracker {
     })
   }
 
-  list(limit = 20): DownloadRecord[] {
-    return this.records.slice(-Math.min(100, Math.max(1, limit)))
+  list(limit = 20, profileId?: string): DownloadRecord[] {
+    return this.records.filter((record) => this.visible(record, profileId)).slice(-Math.min(100, Math.max(1, limit))).map((record) => ({ ...record, url: redactText(record.url, 4000) }))
   }
 
   /** 下载目录（与 attach 保持一致） */
   get dir(): string {
-    return this.directoryProvider() || defaultDownloadDir()
+    return this.directoryFor(getProfileManager().currentProfileId())
   }
 
   /** 打开文件（仅已完成的下载；返回失败原因供 UI 展示） */
   async open(id: string): Promise<{ ok: boolean; reason?: string }> {
     const locale = getMainLocale()
-    const rec = this.records.find((r) => r.id === id)
+    const rec = this.records.find((r) => r.id === id && this.visible(r))
     if (!rec) return { ok: false, reason: diagnosticMessage(locale, 'downloads.missing', id) }
     if (rec.state !== 'completed') {
       return { ok: false, reason: diagnosticMessage(locale, 'downloads.notCompleted', rec.state) }
@@ -168,13 +197,14 @@ export class DownloadTracker {
 
   /** 在系统文件管理器中显示 */
   showInFolder(id: string): void {
-    const rec = this.records.find((r) => r.id === id)
+    const rec = this.records.find((r) => r.id === id && this.visible(r))
     if (!rec) return
     shell.showItemInFolder(rec.savePath)
   }
 
   /** 取消正在进行的下载；已完成/已取消的记录返回 false。 */
   cancel(id: string): boolean {
+    if (!this.records.some((record) => record.id === id && this.visible(record))) return false
     const active = this.activeItems.get(id)
     if (!active) return false
     try {
@@ -182,11 +212,18 @@ export class DownloadTracker {
     } catch {
       /* 下载项可能已随页面销毁 */
     }
-    const rec = this.records.find((r) => r.id === id)
+    const rec = this.records.find((r) => r.id === id && this.visible(r))
     if (rec) rec.state = 'cancelled'
     this.activeItems.delete(id)
     this.onChange?.()
     return true
+  }
+  cancelProfile(profileId: string): number {
+    let count = 0
+    getProfileManager().runWithProfile(profileId, () => {
+      for (const record of this.records) if (record.profileId === profileId && this.cancel(record.id)) count++
+    })
+    return count
   }
 
   /**
@@ -195,7 +232,7 @@ export class DownloadTracker {
    */
   async retry(id: string): Promise<{ ok: boolean; reason?: string }> {
     const locale = getMainLocale()
-    const rec = this.records.find((r) => r.id === id)
+    const rec = this.records.find((r) => r.id === id && this.visible(r))
     if (!rec) return { ok: false, reason: diagnosticMessage(locale, 'downloads.missing', id) }
     if (this.activeItems.has(id) || rec.state === 'progressing') {
       return { ok: false, reason: diagnosticMessage(locale, 'downloads.active') }
@@ -207,7 +244,7 @@ export class DownloadTracker {
 
     const session = this.recordSessions.get(id)
     if (!session) return { ok: false, reason: diagnosticMessage(locale, 'downloads.noSession') }
-    const pending = { id, url: rec.url, ts: Date.now() }
+    const pending = { id, url: rec.url, ts: Date.now(), session }
     this.pendingRetries.push(pending)
     const discard = (): void => {
       const index = this.pendingRetries.indexOf(pending)

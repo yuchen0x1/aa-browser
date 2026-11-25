@@ -166,6 +166,21 @@ async function runElectron() {
       else assert.notEqual(result.isError, true, `${name}: ${text}`)
       return { text, content: result.content }
     }
+    const approvedMinimizedCall = async (name, args) => {
+      const outcome = call(name, args)
+      let failed
+      outcome.catch((error) => { failed = error })
+      const approval = await until(async () => {
+        if (failed) throw failed
+        return (await state()).pendingApprovals.find((item) => item.kind === 'operation')
+      }, 'operation requires a native decision')
+      await until(() => win.isVisible() && !win.isMinimized(), 'operation approval reveals the browser')
+      win.minimize()
+      await until(() => win.isMinimized(), 'return to background before approving')
+      markMinimized()
+      assert.equal(await ui(`window.aa.decideApproval(${JSON.stringify(approval.id)}, true)`), true)
+      return outcome
+    }
     const connectDirectAgent = async () => {
       const info = JSON.parse(fs.readFileSync(process.env.AA_BROWSER_CONNECTION_FILE, 'utf8'))
       const endpoint = new URL(`ws://127.0.0.1:${info.port}/`)
@@ -316,7 +331,7 @@ async function runElectron() {
       assert.ok(render.w > 200 && render.h > 200, `minimized viewport collapsed: ${JSON.stringify(render)}`)
       const search = findRef(homepage.text, /- (?:textbox|searchbox).*Search/)
       await call('browser_type', { ref: search, text: 'asyncio', clear: true, snapshot: false })
-      await call('browser_press_key', { key: 'Enter' })
+      await approvedMinimizedCall('browser_press_key', { key: 'Enter' })
       assert.match((await call('browser_wait', { urlContains: 'q=asyncio', timeoutMs: 10000 })).text, /已包含/)
       const url = (await state()).tabs.find((tab) => tab.active)?.url
       assert.equal(new URL(url).hostname, 'www.python.org')
@@ -340,7 +355,7 @@ async function runElectron() {
       assert.ok(fullHeight > (viewport.h ?? 0) + 400, `full-page capture ${fullHeight}px is not taller than viewport ${viewport.h}px`)
       stillMinimized()
       liveResult = { searchUrl: url, resultUrl, screenshot, fullHeight, viewportHeight: viewport.h }
-      pass(`Python.org: real search, result click, extraction and capture all while minimized (${resultUrl})`)
+      pass(`Python.org: approved search submission, result click, extraction and capture while minimized (${resultUrl})`)
     }
 
     const fixture = await call('browser_navigate', { url: base })
@@ -371,7 +386,7 @@ async function runElectron() {
     // 拖拽后焦点属于可拖动按钮；键盘提交必须先回到目标输入框，才能证明按键进入页面而不是旧焦点。
     const submissionInput = findRef((await call('browser_snapshot', { full: true })).text, /textbox.*Search query/)
     await call('browser_type', { ref: submissionInput, text: 'Background testX', snapshot: false })
-    await call('browser_press_key', { key: 'Enter' })
+    await approvedMinimizedCall('browser_press_key', { key: 'Enter' })
     assert.match((await call('browser_wait', { text: 'Background search submitted' })).text, /已出现/)
     const element = findRef((await call('browser_snapshot', { full: true })).text, /button.*Result action/)
     checkImage(await call('browser_screenshot', { ref: element }))
@@ -380,7 +395,7 @@ async function runElectron() {
     await call('browser_visual_diff', { action: 'save', name: 'bg-baseline', fullPage: true })
     assert.match((await call('browser_visual_diff', { action: 'compare', name: 'bg-baseline', fullPage: true })).text, /视觉对比「bg-baseline」：通过/)
     stillMinimized()
-    pass('minimized: hover, typing, scroll, real drag/drop, keyboard submission, element and full-page screenshots without activation')
+    pass('minimized: hover, typing, scroll, drag/drop, approved submission and screenshots; approval requires user attention')
 
     // Notification is a real Electron permission, but only requested by the private fixture.
     const permission = page.executeJavaScript('Notification.requestPermission()')
@@ -510,8 +525,14 @@ async function runElectron() {
       const soakTabId = opened.text.match(/\[(t[a-z0-9]+)\]/)?.[1]
       assert.ok(soakTabId, opened.text)
       await call('browser_wait', { selector: '#ticks', timeoutMs: 10000, tabId: soakTabId })
+      const readSoakTicks = async () => {
+        const page = await call('browser_extract', { tabId: soakTabId })
+        const count = /Live ticks:\s*(\d+)/.exec(page.text)?.[1]
+        assert.ok(count !== undefined, `missing visible heartbeat: ${page.text}`)
+        return Number(count)
+      }
       const startAt = Date.now()
-      const baselineTick = Number(JSON.parse((await call('browser_evaluate', { expression: 'window.soakTicks', tabId: soakTabId })).text))
+      const baselineTick = await readSoakTicks()
       const initialMonitor = await state()
       const startFrameSeq = initialMonitor.monitor?.frameSeq ?? 0
       const metricsTotal = (metrics) => metrics.reduce((sum, item) => {
@@ -572,7 +593,7 @@ async function runElectron() {
           await delay(Math.min(30_000, soakDurationMs - (Date.now() - startAt)))
           const elapsedMs = Date.now() - startAt
           if (elapsedMs - lastHeartbeatAt < 5 * 60_000 && elapsedMs < soakDurationMs) continue
-          const evaluated = Number(JSON.parse((await call('browser_evaluate', { expression: 'window.soakTicks', tabId: soakTabId })).text))
+          const evaluated = await readSoakTicks()
           assert.ok(Number.isFinite(evaluated) && evaluated > lastTick, `page heartbeat stalled at ${evaluated}`)
           lastTick = evaluated
           assertBackgroundClean()
@@ -591,7 +612,7 @@ async function runElectron() {
         userApp.close()
       }
       const finishedAt = Date.now()
-      const finalTicks = Number(JSON.parse((await call('browser_evaluate', { expression: 'window.soakTicks', tabId: soakTabId })).text))
+      const finalTicks = await readSoakTicks()
       const finalState = await state()
       const finalPrivateBytes = metricsTotal(app.getAppMetrics())
       const timerDelta = finalTicks - baselineTick

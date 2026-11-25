@@ -95,7 +95,7 @@ try {
   assert.equal(entry.manifestVersion, 3)
   assert.ok(entry.id.startsWith('ext-'), `expected assigned id, got ${entry.id}`)
   assert.equal(entry.path, path.resolve(good))
-  assert.deepEqual(ses.calls[0], { op: 'load', dir: path.resolve(good), options: { allowFileAccess: true } }, 'must request file access for unpacked MV2/3 extensions')
+  assert.deepEqual(ses.calls[0], { op: 'load', dir: path.resolve(good), options: { allowFileAccess: false } }, 'extensions must not receive implicit local file access')
 
   // Idempotent reload of the same path returns the existing entry without a second load call
   const again = await manager.load(ses, path.join(good, 'sub', '..', '..') === path.join(good, 'sub') ? good : good)
@@ -104,7 +104,7 @@ try {
 
   // list reflects the single loaded extension
   assert.equal(manager.list().length, 1)
-  assert.deepEqual(manager.list()[0], { id: entry.id, name: 'Fixture Ext', version: '1.2.3', manifestVersion: 3, path: path.resolve(good) })
+  assert.deepEqual(manager.list()[0], { id: entry.id, name: 'Fixture Ext', version: '1.2.3', manifestVersion: 3, path: path.resolve(good), enabled: true, permissions: [], hostPermissions: [], source: 'local-unpacked', status: 'running' })
 
   // Failure cases surface readable errors and don't touch the session
   const failCases = [
@@ -128,6 +128,28 @@ try {
   assert.ok(fs.existsSync(extFile), 'successful load must persist the registry')
   const persisted = JSON.parse(fs.readFileSync(extFile, 'utf8'))
   assert.deepEqual(persisted, [path.resolve(good), path.resolve(mv2)])
+  await manager.setEnabled(ses, entry.id, false)
+  assert.equal(manager.list().find((item) => item.id === entry.id).enabled, false)
+  const disabledRestore = new ExtensionManager()
+  const disabledSession = fakeSession()
+  await disabledRestore.restore(disabledSession)
+  assert.equal(disabledSession.calls.length, 1, 'disabled extension must not be loaded into Chromium after restart')
+  assert.equal(disabledRestore.list().find((item) => item.path === good).status, 'disabled')
+  await manager.setEnabled(ses, entry.id, true)
+  assert.equal(manager.list().find((item) => item.path === good).enabled, true)
+  assert.equal(manager.checkUpdates().every((item) => !item.changed), true)
+  writeExtension(good, { name: 'Fixture Ext', version: '1.3.0', manifest_version: 3, permissions: ['tabs'], host_permissions: ['https://fixture.test/*'] })
+  assert.equal(manager.checkUpdates().find((item) => item.id === manager.list().find((item) => item.path === good).id).changed, true)
+
+  // Profile stop removes background extension execution without losing enabled preferences.
+  manager.suspend(ses)
+  assert.equal(manager.list().every((item) => item.enabled && item.status === 'stopped'), true)
+  const beforeRestart = ses.calls.filter((call) => call.op === 'load').length
+  const restarted = await manager.restore(ses)
+  assert.equal(restarted.restored, 2)
+  assert.equal(manager.list().every((item) => item.status === 'running'), true)
+  assert.equal(ses.calls.filter((call) => call.op === 'load').length, beforeRestart + 2)
+  assert.equal(manager.count, 2, 'restart must not duplicate extension records')
 
   // Restore into a fresh session replays the persisted list in order
   const manager2 = new ExtensionManager()
@@ -137,20 +159,23 @@ try {
   assert.equal(restore.skipped.length, 0)
   assert.deepEqual(ses2.calls.map((c) => c.dir), [path.resolve(good), path.resolve(mv2)])
 
-  // Restore skips disappeared paths and rewrites the registry without them
+  // Restore exposes broken extensions while preserving their configuration for repair.
   fs.rmSync(good, { recursive: true, force: true })
   const manager3 = new ExtensionManager()
   const ses3 = fakeSession()
   const restore3 = await manager3.restore(ses3)
   assert.equal(restore3.restored, 1)
   assert.deepEqual(restore3.skipped, [path.resolve(good)])
-  assert.deepEqual(JSON.parse(fs.readFileSync(extFile, 'utf8')), [path.resolve(mv2)])
+  assert.equal(manager3.list().find((item) => item.path === good).status, 'error')
+  assert.deepEqual(JSON.parse(fs.readFileSync(extFile, 'utf8')), [path.resolve(good), path.resolve(mv2)])
 
   // Remove unloads by id and by path, and persists the shrink
-  const removed = manager3.remove(ses3, manager3.list()[0].id)
+  const removed = manager3.remove(ses3, manager3.list().find((entry) => entry.status === 'running').id)
   assert.equal(removed.path, path.resolve(mv2))
   assert.deepEqual(ses3.calls[ses3.calls.length - 1], { op: 'remove', id: removed.id })
-  assert.deepEqual(JSON.parse(fs.readFileSync(extFile, 'utf8')), [])
+  assert.deepEqual(JSON.parse(fs.readFileSync(extFile, 'utf8')), [path.resolve(good)])
+  assert.equal(manager3.count, 1)
+  manager3.remove(ses3, manager3.list()[0].id)
   assert.equal(manager3.count, 0)
   assert.throws(() => manager3.remove(ses3, path.resolve(mv2)), /未找到该扩展/)
 
@@ -169,7 +194,7 @@ try {
   const restore5 = await manager5.restore(fakeSession())
   assert.equal(restore5.restored, 0)
 
-  console.log('PASS: ExtensionManager validates manifests, loads idempotently with file access, persists/restores across restarts, caps at 20 and unloads on remove')
+  console.log('PASS: ExtensionManager validates manifests, denies implicit file access, preserves errors and enabled preferences across stop/restore, caps at 20 and unloads on remove')
 } catch (error) {
   failures++
   console.error('FAIL:', error.message)

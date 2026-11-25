@@ -30,6 +30,7 @@ const DENIED_PERMISSIONS = new Set([
 
 /** 需要用户明确点头的权限；集合外仍沿用非拒绝即允许的兼容策略。 */
 const PROMPT_PERMISSIONS = new Set(['media', 'geolocation', 'geolocation-approximate', 'notifications'])
+const ALLOWED_PERMISSIONS = new Set(['clipboard-sanitized-write', 'fullscreen', 'pointerLock'])
 
 const PERMISSION_LABELS: Record<string, string> = {
   media: '摄像头 / 麦克风',
@@ -83,7 +84,7 @@ export function applyPermissionPolicy(ses: Electron.Session, deps?: PermissionPo
 
   ses.setPermissionRequestHandler((wc, permission, callback, details) => {
     if (!PROMPT_PERMISSIONS.has(permission)) {
-      callback(!DENIED_PERMISSIONS.has(permission))
+      callback(ALLOWED_PERMISSIONS.has(permission) && !DENIED_PERMISSIONS.has(permission))
       return
     }
     if (wc.isDestroyed()) {
@@ -180,7 +181,7 @@ export function applyPermissionPolicy(ses: Electron.Session, deps?: PermissionPo
   // 同步检查路径（如 navigator.permissions.query）必须给出一致答案，
   // 否则页面会看到"能查询到权限但请求失败"的矛盾状态。
   ses.setPermissionCheckHandler((wc, permission, requestingOrigin, details) => {
-    if (!PROMPT_PERMISSIONS.has(permission)) return !DENIED_PERMISSIONS.has(permission)
+    if (!PROMPT_PERMISSIONS.has(permission)) return ALLOWED_PERMISSIONS.has(permission) && !DENIED_PERMISSIONS.has(permission)
     const site = originOf(String((permission === 'media' && details?.securityOrigin) || requestingOrigin || wc?.getURL() || ''))
     if (permission === 'media') {
       const mediaType = details?.mediaType

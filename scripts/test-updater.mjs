@@ -111,6 +111,35 @@ try {
     assert.equal([...timers.values()].find((timer) => timer.kind === 'timeout').delay, 5000)
     assert.equal([...timers.values()].find((timer) => timer.kind === 'interval').delay, 15 * 60_000)
   })
+  await test('v0.17 installations discover v0.18 on startup and show the update notice', async () => {
+    const manager = new UpdateManager('0.17.0', () => ({ autoUpdate: true, updateChannel: 'stable' }), true)
+    provider.checkForUpdates = async () => {
+      providerCalls++
+      provider.emit('update-available', {
+        version: '0.18.0',
+        files: [{ url: 'aa-browser-setup-0.18.0.exe', size: 1024, sha512: 'fixture' }],
+        releaseNotes: 'Profiles, recoverable workflows and scoped permissions',
+        releaseDate: '2026-11-25'
+      })
+    }
+    manager.init(() => {})
+    const startup = [...timers.values()].find((timer) => timer.kind === 'timeout' && timer.delay === 5000)
+    assert.ok(startup, 'the installed application must schedule its startup update check')
+    startup.fn()
+    await Promise.resolve()
+    const update = manager.getState()
+    assert.equal(providerCalls, 1)
+    assert.equal(provider.allowPrerelease, false)
+    assert.equal(provider.allowDowngrade, false)
+    assert.equal(update.currentVersion, '0.17.0')
+    assert.equal(update.version, '0.18.0')
+    assert.equal(update.status, 'downloading')
+    assert.equal(update.noticeVisible, true)
+    assert.equal(update.size, 1024)
+    assert.match(update.releaseNotes, /Profiles/)
+    assert.equal(provider.autoInstallOnAppQuit, false)
+    manager.dispose()
+  })
   await test('missing secure download hook is visible and disables updater requests', async () => {
     provider.httpExecutor = undefined
     const manager = new UpdateManager('0.0.2', () => ({ autoUpdate: true, updateChannel: 'stable' }), true)

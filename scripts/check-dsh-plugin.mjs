@@ -26,13 +26,17 @@ assert.ok(pkg.exports?.['./locale/*.json'] && pkg.exports?.['./icon'], 'dsh pack
 
 const patchText = fs.readFileSync(path.join(DSH, 'cordis.patch.yml'), 'utf8')
 const yaml = await import('js-yaml')
-// DSH's Loader dialect adds a `!!js` scalar tag; js-yaml does not know it.
-const jsTag = new yaml.Type('tag:yaml.org,2002:js', {
-  kind: 'scalar',
-  resolve: () => true,
-  construct: (value) => String(value)
-})
-const schema = yaml.DEFAULT_SCHEMA.extend([jsTag])
+// Validate DSH expressions as inert text with either the v4 or v5 custom-tag API.
+const schema = typeof yaml.defineScalarTag === 'function'
+  ? yaml.CORE_SCHEMA.withTags(yaml.defineScalarTag('tag:yaml.org,2002:js', {
+    resolve: (value) => String(value)
+  }))
+  : yaml.DEFAULT_SCHEMA.extend([new yaml.Type('tag:yaml.org,2002:js', {
+    kind: 'scalar',
+    resolve: () => true,
+    construct: (value) => String(value)
+  })])
+assert.equal(yaml.load('!!js process.exit(99)', { schema }), 'process.exit(99)', 'DSH expressions must never execute during validation')
 const patch = yaml.load(patchText, { schema })
 assert.ok(Array.isArray(patch) && patch.length === 1 && Array.isArray(patch[0].insert), 'patch must be one insert list')
 const rows = patch[0].insert

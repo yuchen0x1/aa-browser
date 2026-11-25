@@ -1,9 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { DownloadInfo, HistoryEntry, AppSettings, SettingsView, AgentInfo, UpdateState, PagePointerForward, ExtensionInfo, BackgroundMode, MonitorState } from '@shared/types'
+import type { PlatformState, PlatformActionResult, ExtensionUpdateResult } from '@shared/platform-types'
 
 /** 浏览器外壳 UI 与主进程的桥（chromeView 专用，页面视图不带 preload） */
 contextBridge.exposeInMainWorld('aa', {
   getState: (): Promise<unknown> => ipcRenderer.invoke('aa:get-state'),
+  platformState: (): Promise<PlatformState> => ipcRenderer.invoke('aa:platform-state'),
+  platformAction: (action: string, input: Record<string, unknown> = {}): Promise<PlatformActionResult> => ipcRenderer.invoke('aa:platform-action', action, input),
   tabNew: (url?: string): Promise<void> => ipcRenderer.invoke('aa:tab-new', url),
   tabClose: (id: string): Promise<void> => ipcRenderer.invoke('aa:tab-close', id),
   tabReopen: (): Promise<boolean> => ipcRenderer.invoke('aa:tab-reopen'),
@@ -30,7 +33,7 @@ contextBridge.exposeInMainWorld('aa', {
   interruptAgent: (): Promise<boolean> => ipcRenderer.invoke('aa:agent-interrupt'),
   resumeAgent: (): Promise<boolean> => ipcRenderer.invoke('aa:agent-resume'),
   cancelAgentCall: (id: number, client?: number): Promise<boolean> => ipcRenderer.invoke('aa:agent-cancel-call', id, client),
-  downloadsList: (): Promise<unknown> => ipcRenderer.invoke('aa:downloads-list'),
+  downloadsList: (): Promise<DownloadInfo[]> => ipcRenderer.invoke('aa:downloads-list'),
   downloadOpen: (id: string): Promise<{ ok: boolean; reason?: string }> => ipcRenderer.invoke('aa:download-open', id),
   downloadShow: (id: string): Promise<void> => ipcRenderer.invoke('aa:download-show', id),
   downloadCancel: (id: string): Promise<boolean> => ipcRenderer.invoke('aa:download-cancel', id),
@@ -41,9 +44,11 @@ contextBridge.exposeInMainWorld('aa', {
   settingsSet: (patch: Partial<AppSettings>): Promise<AppSettings | null> => ipcRenderer.invoke('aa:settings-set', patch),
   settingsOpen: (open: boolean): Promise<void> => ipcRenderer.invoke('aa:settings-open', open),
   extensionPick: (): Promise<string> => ipcRenderer.invoke('aa:extension-pick'),
-  extensionList: (): Promise<ExtensionInfo[]> => ipcRenderer.invoke('aa:extension-list'),
-  extensionLoad: (dir: string): Promise<{ ok: boolean; error?: string; extension?: ExtensionInfo }> => ipcRenderer.invoke('aa:extension-load', dir),
-  extensionRemove: (key: string): Promise<{ ok: boolean; error?: string; extension?: ExtensionInfo }> => ipcRenderer.invoke('aa:extension-remove', key),
+  extensionList: (profileId?: string): Promise<ExtensionInfo[]> => ipcRenderer.invoke('aa:extension-list', profileId),
+  extensionLoad: (dir: string, profileId?: string): Promise<{ ok: boolean; error?: string; extension?: ExtensionInfo }> => ipcRenderer.invoke('aa:extension-load', dir, profileId),
+  extensionRemove: (key: string, profileId?: string): Promise<{ ok: boolean; error?: string; extension?: ExtensionInfo }> => ipcRenderer.invoke('aa:extension-remove', key, profileId),
+  extensionEnable: (key: string, enabled: boolean, profileId?: string): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke('aa:extension-enable', key, enabled, profileId),
+  extensionCheckUpdates: (profileId?: string): Promise<ExtensionUpdateResult> => ipcRenderer.invoke('aa:extension-check-updates', profileId),
   agentInfo: (): Promise<AgentInfo | null> => ipcRenderer.invoke('aa:agent-info'),
   copyConnectionDiagnostics: (): Promise<boolean> => ipcRenderer.invoke('aa:connection-diagnostics-copy'),
   clientsDetect: (): Promise<unknown> => ipcRenderer.invoke('aa:clients-detect'),

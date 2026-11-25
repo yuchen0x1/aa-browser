@@ -46,6 +46,13 @@ const recovering = center.requestRecovery(risky.id, 'user confirmed', true)
 assert.equal(recovering.state, 'recovering')
 assert.equal(recovering.retryCount, 1)
 
+for (const state of ['interrupted', 'failed']) {
+  const recoverable = center.create({ id: `risky-${state}`, highRisk: true })
+  center.transition(recoverable.id, 'running')
+  center.transition(recoverable.id, state)
+  assert.equal(center.requestRecovery(recoverable.id, 'inspect side effects').state, 'waiting', `${state} writes must enter the approval wait state`)
+}
+
 center.addStep('normal', { label: 'step-1', status: 'ok' })
 assert.equal(center.get('normal').currentStep, 'step-1')
 center.persist(true)

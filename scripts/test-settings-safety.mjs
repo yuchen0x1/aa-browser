@@ -51,6 +51,10 @@ async function testRenderer() {
     fs.mkdirSync(profile, { recursive: true })
     app.setPath('userData', profile)
     app.setPath('sessionData', profile)
+    // Match the real main process so Windows occlusion cannot discard the capture surface.
+    app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
+    app.commandLine.appendSwitch('disable-renderer-backgrounding')
+    app.commandLine.appendSwitch('disable-background-timer-throttling')
     stage = 'Electron startup'
     await app.whenReady()
     session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
@@ -100,6 +104,8 @@ async function testRenderer() {
     }
     const handlers = {
       'aa:get-state': () => state,
+      'aa:platform-state': () => ({ profiles: [], defaultProfileId: 'default', activeProfileId: 'default', workflows: [], templates: [], network: {}, permissions: { grants: [], audit: [] }, diagnostics: {} }),
+      'aa:platform-action': () => ({ ok: false, error: 'Platform actions are outside this settings race fixture' }),
       'aa:settings-open': () => undefined,
       'aa:settings-get': () => view(),
       'aa:settings-set': (patch) => { settings = { ...settings, ...patch }; return structuredClone(settings) },

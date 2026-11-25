@@ -1,6 +1,6 @@
 # Aa Browser
 
-**为 AI Agent 而生的开源桌面浏览器。**
+**为 AI Agent 提供独立登录身份、可恢复工作流与人工审批的开源桌面浏览器运行平台。**
 
 ![License](https://img.shields.io/badge/license-MIT-blue) ![CI](https://github.com/yuchen0x1/aa-browser/actions/workflows/ci.yml/badge.svg) ![Platform](https://img.shields.io/badge/platform-Windows%20x64%20%7C%20Linux%20x86_64-lightgrey) ![MCP](https://img.shields.io/badge/protocol-MCP-purple) [![M8ven Score](https://m8ven.ai/badge/mcp/yuchen0x1-aa-browser-135ffo?v=5eaaa577bc85b8b59b5e327efd51d38c)](https://m8ven.ai/mcp/yuchen0x1-aa-browser-135ffo?s=readme)
 
@@ -42,11 +42,11 @@ GitHub Release 更新支持官方线路优先、代理回退、断点续传和�
 
 从旧版本升级：打开「设置 → 软件更新」检查、下载并重启安装；升级后新功能才会生效。完整版本历史见[发布说明](./docs/releases/release-notes.md)与 [CHANGELOG](./CHANGELOG.md)。
 
-传统浏览器是为「人眼看像素」设计的；AI Agent 需要的是**结构化页面数据**。Aa Browser 是一个完整的 Chromium 桌面浏览器，任何人都可以正常使用它上网；同时它通过本地 MCP 桥把页面能力开放给任何支持 [MCP](https://modelcontextprotocol.io)（Model Context Protocol）的 Agent：读取**结构化快照**（可访问性树 + 元素 ref 编号），并执行点击、输入、选择、滚动、提取、抓包等操作——不看截图、不猜坐标。
+Aa Browser 是一个完整的 Chromium 桌面浏览器，任何人都可以正常使用它上网；同时它通过本地 MCP 桥把页面能力开放给支持 [MCP](https://modelcontextprotocol.io)（Model Context Protocol）的 Agent：优先读取**结构化快照**（可访问性树 + 元素 ref 编号），执行点击、输入、选择、滚动、提取和抓包。Canvas、图表等结构化信息不足的页面可使用截图与受保护的坐标操作补充。
 
-它适合把**真实登录态**交给 Agent 的场景：后台运营、数据采集、回归验证、抓包排障，以及把重复的网页操作交给模型。浏览器本体照常使用，Agent 只是多出来的一个「遥控器」。
+它适合后台运营、数据采集、回归验证、抓包排障，以及把重复的网页操作交给模型。工作账号、个人账号与测试账号可以放在独立 Profile 中，Agent 和工作流显式绑定对应环境；有副作用的中断步骤需要先检查页面，再由人批准重试。
 
-一句话概括：**47 个 MCP 工具、增量快照、真实输入、本地 token 鉴权，而浏览器本体也照常上网。**
+当前源码面向 **v0.18.0**：保留原有 **47 个 MCP 工具**，增加 6 个平台入口，共 **53 个工具**。已发布版本与安装包以顶部正式发行链接为准。
 
 ## 目录
 
@@ -63,6 +63,7 @@ GitHub Release 更新支持官方线路优先、代理回退、断点续传和�
 - [接入你的 Agent](#接入你的-agent)
   - [客户端配置位置](#客户端配置位置)
   - [连接状态与验证](#连接状态与验证)
+- [Profile 与工作流](#profile-与工作流)
 - [MCP 工具](#mcp-工具)
 - [界面与快捷键](#界面与快捷键)
 - [安全说明](#安全说明)
@@ -89,7 +90,10 @@ GitHub Release 更新支持官方线路优先、代理回退、断点续传和�
 - 📊 **性能诊断**：`browser_performance` 一次返回导航耗时、首绘、资源体积与慢资源、JS 堆和 DOM 规模，Agent 不开 DevTools 也能解释慢页面
 - 🌐 **中英双语界面**：跟随系统 / 浏览器语言，也可在设置里固定简体中文或 English
 - 🧭 **地址栏历史补全**：本地记录最近 1000 条访问，按域名 / URL 前缀 / 标题补全并加权排序；隔离标签不写入
-- 🧩 **已解压扩展**：支持从本地目录加载 MV2 / MV3 扩展，跨重启恢复到共享会话；可用地址栏 `chrome://extensions` 快速打开扩展管理区
+- 🧩 **已解压扩展**：按 Profile 加载本地 MV2 / MV3 扩展，查看版本、权限、来源，启用、禁用、卸载并检查本地版本变化；一次性隔离标签不加载扩展
+- **独立浏览器身份**：Profile 使用独立的持久化 Chromium Session，分开 Cookie、Storage、IndexedDB、登录态、缓存、历史、下载目录、代理和扩展登记；旧版默认环境保留原分区
+- **可恢复工作流**：复用既有工具执行依赖步骤，持久化步骤状态、重试计数、检查点与审计事件；只读失败有界重试，不自动重放中断的写操作
+- **网络与故障诊断**：按 Profile 设置系统、直连或 HTTP/HTTPS/SOCKS5 代理，检测真实路由、连通性与本机 DNS；诊断面板汇总 Renderer、MCP、任务、CPU 和内存
 - 🗂️ **标签与会话恢复**：`Ctrl+Shift+T` 恢复本次运行中最近关闭的标签（最多 20 个）；重启后按上次顺序恢复普通网页标签与活动标签，隔离标签、内部页和非 HTTP(S) 地址不恢复，地址中的账号密码会被剥离
 - 🛡️ **Agent 可观测、可中断**：工具栏实时显示连接状态，Agent 操作浏览器时窗口四周显示闪烁光圈、右下角显示当前工具；活动日志保留最近 30 条操作；敏感输入由用户亲自填写，高危操作走浏览器内审批。点击「中断」会立即取消所有调用并暂停 30 秒，随后自动恢复接管能力，也可随时手动恢复。长操作（导航 / 等待 / 整页截图 / 多视口矩阵 / 视觉对比）会按 MCP 规范回传 `notifications/progress`；多客户端并发时 HUD 列出每个调用及其进度，并可「停止」单个调用而不影响其他客户端
 - 🧩 **长页面与证据治理**：超长页面可用 `browser_snapshot {maxNodes, cursor}` 分页且跨页 ref 仍有效；closed shadow DOM 内的元素也能被快照与点击；截图 / HAR / PDF / 视觉基线自动登记 sha256、大小与 TTL，按配额清理临时证据而保留用户数据
@@ -346,15 +350,15 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 
 ## MCP 工具
 
-共 **47 个**工具，按能力分为五类：导航与快照 5 个、交互 9 个、读取与状态 20 个、网络与 Mock 6 个、诊断与标签 7 个。工具名在客户端可能带 `mcp__aa-browser__` 前缀（如 `mcp__aa-browser__browser_tabs`），以客户端实际展示为准。
+共 **53 个**工具：原有 47 个名称与核心参数保留，新增 6 个平台管理入口。工具名在客户端可能带 `mcp__aa-browser__` 前缀（如 `mcp__aa-browser__browser_tabs`），以客户端实际展示为准。
 
 共享行为：
 
 - 导航与多数动作工具默认在结果里附带一份快照；`snapshot: false` 可跳过，`browser_snapshot { full: true }` 强制完整树。
-- 除 `browser_resize`（调整整个窗口视口）和 `browser_downloads`（全局下载列表）外，工具都接受 `tabId`，默认作用于活动标签。
+- 所有工具新增可选 `profileId`。省略时使用当前 MCP 客户端绑定的 Profile，否则使用默认 Profile；`tabId` 只对声明了该参数的页面工具生效。`browser_resize` 仍调整共享桌面窗口尺寸。
 - 浏览器未运行时，桥返回 `isError` 工具结果而不是挂起；桥每 5 秒重试连接，启动浏览器后无需重启客户端。
 - 单次调用超时 180 秒；等待人工审批最长 120 秒，超时按拒绝处理。
-- 网络详情与 HAR 默认脱敏；响应体额外对 JSON、表单和常见授权文本做内容级脱敏，并在 MCP 边界限制为最多 1 MiB。开启「高危操作人工确认」后，`includeSensitive: true` 需要用户在浏览器里批准。
+- 网络详情与 HAR 默认脱敏；响应体额外对 JSON、表单和常见授权文本做内容级脱敏，并在 MCP 边界限制为最多 1 MiB。敏感读取、坐标写操作和平台配置修改使用明确的权限或人工审批，调用参数不能自行授权。
 
 **导航与快照**
 
@@ -425,7 +429,18 @@ Aa Browser 工具栏「设置」→「连接 AI 客户端」→ 勾选 → 写�
 | `browser_tabs` | 列表 / 新建 / 切换 / 关闭标签页；列表附带浏览器实例、PID、版本、启动时间、标签创建时间与恢复标记；`isolated: true` 新建隔离标签；`select` 可加 `bringToFront: true` 同时恢复窗口并聚焦页面 |
 | `browser_window` | 统一窗口策略：`visible`、`background`（显示但不抢焦点）、`minimized`、`hidden`、`background-visual`；可启动只捕获指定标签的独立实时预览，并用 `takeover` / `release` 锁定或交还 AI 操作权 |
 | `browser_tasks` | 后台任务中心：列出多客户端并发调用、按客户端与调用 id 取消、暂停 / 恢复自动化；人工接管时 AI 输入会被锁定 |
-| `browser_extensions` | **加载已解压扩展**：`action=load` 传入含 `manifest.json` 的目录绝对路径（等价 Chrome「加载已解压的扩展程序」），装载到共享会话并跨重启保留；`action=list` / `action=remove` 查看（id/名称/版本/路径）与卸载。扩展对之后打开或刷新的页面生效，隔离标签不装载 |
+| `browser_extensions` | 按 Profile 加载本地解压扩展、列出版本/权限/来源、启用/禁用、检查本地版本变化与卸载；扩展对之后打开或刷新的页面生效，一次性隔离标签不装载 |
+
+**平台管理**
+
+| 工具 | 说明 |
+| --- | --- |
+| `browser_profiles` | 创建、编辑、启动、关闭、绑定、设为默认与删除独立身份；离线复制及加密导入/导出受生命周期与审批保护 |
+| `browser_workflows` | 模板或自定义步骤创建工作流，运行、暂停、继续、取消、定向重试、补充受保护输入；返回持久化状态与审计事件 |
+| `browser_network` | 按 Profile 读取/应用代理配置，解析真实代理路由，测试连通性、出口 IP 与本机 DNS |
+| `browser_visual` | 获取短期截图凭据，在像素与视口仍有效时进行坐标点击、拖拽或裁剪；修改操作必须批准并留下前后证据 |
+| `browser_permissions` | 查看授权与审批记录，申请有范围和期限的权限、撤销授权；敏感和高危授权单次使用 |
+| `browser_diagnostics` | 汇总真实进程、页面、Profile、MCP、任务和资源状态；经批准刷新页面、重新连接或仅清理 HTTP 缓存 |
 
 Cloudflare 验证辅助的完整流程与边界见 [`docs/CLOUDFLARE.md`](./docs/CLOUDFLARE.md)。
 
@@ -447,6 +462,34 @@ Aa Browser 的页面理解不是单一路径，而是**结构化快照引擎**�
 > 开发者注意：工具的名称、说明、参数 schema 与 MCP annotations 只维护在 [`src/shared/tool-defs.mjs`](./src/shared/tool-defs.mjs)。主进程只写 `name` + `handler`，桥直接导入同一份定义。`npm run check` 会断言唯一来源、主进程、桥与文档四方一致，并阻止任何一方重新手写 schema。
 
 完整参数与返回示例见上方工具表；名称、schema 与 annotations 以 [`src/shared/tool-defs.mjs`](./src/shared/tool-defs.mjs) 为准。
+
+## Profile 与工作流
+
+在「设置 → 配置文件」创建“工作”或“测试”身份，再从工具栏选择 Profile 打开页面并登录。每个持久化 Profile 有独立 Session 分区；同一 Profile 内的普通标签共享该身份，`isolated:true` 标签仍是关闭即清理的临时环境。
+
+Agent 先列出配置文件，复制真实返回的 `id`，再绑定自己的 MCP 连接：
+
+```json
+{"name":"browser_profiles","arguments":{"action":"list"}}
+```
+
+```json
+{"name":"browser_profiles","arguments":{"action":"bind","profileId":"从列表返回的配置文件ID"}}
+```
+
+后续普通调用无需重复传 Profile；也可以在单次调用里使用 `profileId`。不同账号应使用不同 Profile。工作流运行期间持有 Profile 租约，避免其他任务插入该环境。完整规则、目录布局与加密备份见 [Profile 使用指南](./docs/PROFILES.md)。
+
+在「设置 → 工作流」选择模板、Profile 和目标 URL 创建任务，也可以通过 MCP 创建自定义步骤。例如先创建网站巡检，再用返回的 `id` 运行：
+
+```json
+{"name":"browser_workflows","arguments":{"action":"create","name":"网站巡检","templateId":"inspection","url":"https://example.com","profileId":"default"}}
+```
+
+```json
+{"name":"browser_workflows","arguments":{"action":"run","workflowId":"从创建结果返回的工作流ID"}}
+```
+
+任务中心保留每次工具调用记录；工作流面板显示跨步骤状态、耗时、检查点、结果元数据和错误。程序重启后不会自动重放写操作；出现 `uncertain` 时先检查真实页面，再定向重试并处理审批。涉及 Cookie、Storage、凭据或文件时，在「安全与权限」查看申请范围与撤销授权。详见 [工作流指南](./docs/WORKFLOWS.md)、[权限与安全模型](./docs/SECURITY_MODEL.md)和 [MCP 参数示例](./docs/MCP_TOOLS.md)。
 
 ## 界面与快捷键
 
@@ -485,16 +528,18 @@ Aa Browser 的页面理解不是单一路径，而是**结构化快照引擎**�
 
 ### 加载已解压扩展
 
-Aa Browser 不提供 Chrome 的原生 `chrome://extensions` 页面；在地址栏输入 `chrome://extensions` 会打开设置里的「扩展」管理区，功能等价于开发者模式中的「加载已解压的扩展程序」。点击该按钮选择包含 `manifest.json` 的扩展目录即可；扩展装载到共享会话，对之后打开或刷新的普通标签页生效，隔离标签页不会注入。已加载目录会写入 `~/.aabrowser/extensions.json`，下次启动自动恢复。也可以让 Agent 调用 `browser_extensions`，用 `action=load` 和绝对路径直接装载。
+在地址栏输入 `chrome://extensions` 会打开设置里的「扩展」管理区。选择包含 `manifest.json` 的本地目录，装载到当前 Profile，对之后打开或刷新的普通标签页生效；一次性隔离标签不会注入。默认 Profile 保留 `~/.aabrowser/extensions.json`，其他 Profile 使用独立登记文件。界面可查看版本、声明权限和本地来源，启用、禁用与卸载；更新检查只比较本地目录版本，不连接扩展商店。扩展源码目录本身仍由用户管理，备份不替代对外部扩展目录的维护。
 
 ## 安全说明
 
 - **连接面很小**：Agent 服务只监听 `127.0.0.1`，每次启动随机生成 token，并拒绝非本机来源的连接；端口与 token 写入用户目录 `~/.aabrowser/connection.json`（正常退出时删除）。
 - **页面视图不挂 preload**：快照与动作脚本由主进程注入；导航只允许 `http:` / `https:`（内部新标签页除外），`file:`、`data:`、`devtools:` 等协议会被拒绝。
-- **审批与中断**：敏感输入框一律要求用户亲自填写——Agent 提供的文本不会被写入、读取或回传；开启「高危操作人工确认」后，提交表单 / 输入后回车、查看或导出未脱敏网络数据也会等待批准，120 秒未确认按拒绝处理。工具栏或右下角 HUD 可随时中断 Agent：所有在途调用会立即取消，30 秒后自动恢复接管能力，也可以提前点击「恢复」。多客户端并发时 HUD 会逐个显示调用与进度，每个调用旁的「停止」只取消该调用（其他调用与其他客户端不受影响）。长操作通过 MCP `notifications/progress` 把进度回传给客户端，进度通知不会提前结束工具调用。
-- **网络数据脱敏**：网络详情与 HAR 默认脱敏认证头和凭据类参数；开启「高危操作人工确认」后，`includeSensitive: true` 查看或导出未脱敏数据需要先批准。
+- **审批与中断**：敏感输入框要求用户亲自填写；被识别的高危对象、提交动作和敏感数据读取强制审批，不再由旧版偏好开关关闭，120 秒未确认按拒绝处理。工具栏或右下角 HUD 可中断调用，单个调用也可独立停止。取消不会撤销已发生的网页或网络副作用，恢复后必须检查真实状态。
+- **网络数据脱敏**：网络详情与 HAR 默认脱敏认证头和凭据类参数；`includeSensitive: true` 查看或导出未脱敏数据必须经对应权限或人工审批。Cookie 值和 Storage 敏感值同样区分普通与敏感读取。
 - **站点白名单**：只作用于导航，留空表示关闭；即使白名单为空，`file:`、`data:`、`devtools:` 等非网页协议也不会被放行。
 - **会话隔离**：隔离标签使用独立 session 分区，不共享 Cookie 与登录态，关闭后清理数据；隔离标签不进入全局历史、最近关闭列表与会话恢复记录。
+- **Profile 与文件边界**：持久化身份使用独立分区，文件读取与导出校验所属 Profile、绝对路径和符号链接；导出默认拒绝覆盖。Profile 租约保护工作流期间的 Agent 调用，不能阻止用户手动操作网页。
+- **恢复安全**：调度意图先写检查点再执行；重启后中断步骤需要重新核验，可能产生副作用的步骤不自动重放。工作流输入仅在操作系统加密可用时持久化，否则重启后重新输入；审计不保存工具返回的页面正文。
 - **接入写入**：安装器只改 `aa-browser` 一个条目，写入前自动备份，不写入任何 token / 密码；下载安装包时校验 Release 的 SHA-256 digest 与文件头。
 - **边界提醒**：Agent 能看到页面内容与网络流量，包括可能含秘密的 Cookie、Storage、请求头和响应体。上述措施是缓解手段，不是通用 DLP；不要让不可信 Agent 访问高敏站点。
 
@@ -509,6 +554,10 @@ Aa Browser 不提供 Chrome 的原生 `chrome://extensions` 页面；在地址�
 | `~/.aabrowser/history/history.json` | 最近 1000 条访问（标题 / URL / 次数） | 隔离标签不写入；可用 `AA_BROWSER_HISTORY_DIR` 覆盖 |
 | `~/.aabrowser/session.json` | 上次标签快照（≤20 条，剥离 URL 账号密码） | 可用 `AA_BROWSER_SESSION_FILE` 覆盖 |
 | `~/.aabrowser/extensions.json` | 已加载的已解压扩展目录列表 | 下次启动自动恢复；可用 `AA_BROWSER_EXTENSIONS_FILE` 覆盖 |
+| `~/.aabrowser/profiles.json` | Profile 元数据、默认身份与待清理删除记录 | 默认 Profile 继续使用旧的 `persist:aa-main` |
+| `~/.aabrowser/profiles/<id>/` | 非默认 Profile 的历史、下载、扩展登记和证据文件 | Chromium Cookie/Storage 位于 Electron 用户数据的独立分区目录 |
+| `~/.aabrowser/workflows.json` | 工作流状态、检查点、脱敏审计与加密输入 | 无 OS 安全存储时不持久化实际输入，重启需补充 |
+| `~/.aabrowser/network-environments.json` | Profile 代理配置和 OS 保护的凭据 | 读取 API 不回传代理密码 |
 | `~/.aabrowser/downloads/` | 浏览器下载与 PDF | 可在设置中修改下载目录；可用 `AA_BROWSER_DOWNLOAD_DIR` 覆盖 |
 | `~/.aabrowser/screenshots/` | MCP 截图 | 可用 `AA_BROWSER_SCREENSHOT_DIR` 覆盖 |
 | `~/.aabrowser/har/` | `browser_har` 导出的 HAR 文件 | 默认路径 `aa-<时间戳>.har` |
@@ -544,6 +593,8 @@ Aa Browser 不提供 Chrome 的原生 `chrome://extensions` 页面；在地址�
 - **安装与更新依赖 GitHub Releases**：访问受限时需要手动下载安装包；旧版 AppImage 原地更新要求当前文件目录可写。
 - **不伪造页面可见性**：后台模式下页面拿到的 `document.visibilityState` 仍是真实值。少数站点会在不可见时暂停视频、轮询或渲染，这类站点请显式选择 `visible` 或 `background`；Aa Browser 不会用伪造状态绕过站点的安全检查。
 - **后台拖放有平台差异**：原生 HTML5 拖放在窗口最小化或完全隐藏时，部分平台（实测 Linux/X11）不会建立系统级拖放会话。此时 `browser_drag` 会改用页面内 DataTransfer 事件序列完成拖放，并在返回结果中标注「DOM 事件回退」；这条路径的事件不是 `isTrusted`，对强制校验可信输入的站点可能无效。
+- **视觉定位由 Agent 判断**：坐标引擎提供真实截图、几何校验与人工审批，没有内置 OCR、图像语义检索或视觉模型。像素变化只能证明画面不同，不能证明支付、提交等业务成功。
+- **备份与系统保护有约束**：完整 Profile 备份仅支持本进程尚未初始化 Session 的非旧版默认身份，至少 12 字符密码，解包数据最多 128 MiB / 10000 个文件。Chromium 的系统绑定凭据不保证跨操作系统或跨账号可解密；Linux 无安全存储时不保存代理密码，工作流输入重启后需重新提供。
 
 ## 故障排查
 
@@ -604,6 +655,7 @@ npm run test:extensions # 已解压扩展清单校验、持久化与卸载回归
 npm run test:update-ui # 更新提示 / 后台下载 / 重试交互（模拟 provider）
 npm run test:stores    # 设置 / 历史 / 会话恢复记录的持久化回归
 npm run test:security  # 安全相关回归
+node scripts/test-workflows.mjs # 真实工作流引擎：依赖、恢复、审批、输入保护与定时执行
 npm run test:installer # 安装器纯函数：平台资产选择、稳定路径、digest/文件头校验
 npm run test:bridge    # MCP 桥离线行为与错误返回
 npm run test:bridge-autolaunch # 浏览器未运行时桥自动启动并完成 browser_tabs
@@ -626,6 +678,11 @@ Ubuntu 24.04 执行 `check`、工具与客户端接入校验、构建、Node/Web
 | [通用安装与接入](./docs/CONNECT.md) | 平台与客户端矩阵、安装器参数、手动步骤、排查 |
 | [平台指南](./docs/PLATFORMS.md) | 发行矩阵、Linux 依赖、卸载与数据恢复 |
 | [自动更新](./docs/AUTO_UPDATE.md) | 检查、下载、重启安装、SHA-512 与回滚 |
+| [Profile 使用指南](./docs/PROFILES.md) | 独立身份、默认兼容、生命周期、目录与加密备份 |
+| [工作流指南](./docs/WORKFLOWS.md) | 依赖步骤、模板、检查点、恢复、重试与定时任务 |
+| [权限与安全模型](./docs/SECURITY_MODEL.md) | 敏感读取、人工审批、文件边界和已知限制 |
+| [架构说明](./docs/ARCHITECTURE.md) | 主进程模块、Session、工作流与兼容设计 |
+| [MCP 工具与示例](./docs/MCP_TOOLS.md) | 53 个工具的组织方式、新增上下文与平台参数示例 |
 | [插件市场接入](./docs/MARKETPLACE.md) | DeepSeek Harness 插件安装与验证 |
 | [维护状态](./docs/MAINTENANCE.md) | 发行证据、回归记录与维护边界 |
 | [后台控制与实时预览](./docs/BACKGROUND_CONTROL.md) | 窗口模式、后台操控审计、预览与接管、竞品取舍与许可证审查 |
@@ -639,7 +696,7 @@ Ubuntu 24.04 执行 `check`、工具与客户端接入校验、构建、Node/Web
 
 **它和 Playwright MCP 有什么区别？**
 
-快照格式与 ref 交互范式对齐 Playwright MCP，所以 Agent 不需要重新学习。区别在于 Aa Browser 是一个完整的桌面浏览器：共享你的登录态、标签页与会话，原生带抓包 / Mock / HAR、Cookie / Storage 与性能诊断，不需要为每个任务启动无头实例。
+快照格式与 ref 交互范式对齐 Playwright MCP。Aa Browser 同时是一个桌面浏览器：可保留默认登录态，也可为不同账号建立独立 Profile，原生带抓包、Mock、HAR、可恢复工作流与运行诊断。
 
 **需要会写代码吗？**
 

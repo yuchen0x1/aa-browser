@@ -115,10 +115,10 @@ const transitions: Record<TaskState, readonly TaskState[]> = {
   running: ['waiting', 'paused', 'interrupted', 'recovering', 'completed', 'failed', 'cancelled'],
   waiting: ['running', 'paused', 'interrupted', 'recovering', 'failed', 'cancelled'],
   paused: ['running', 'interrupted', 'cancelled'],
-  interrupted: ['running', 'recovering', 'cancelled', 'failed'],
+  interrupted: ['running', 'waiting', 'recovering', 'cancelled', 'failed'],
   recovering: ['running', 'waiting', 'completed', 'failed', 'cancelled'],
   completed: [],
-  failed: ['recovering', 'cancelled'],
+  failed: ['waiting', 'recovering', 'cancelled'],
   cancelled: []
 }
 

@@ -15,6 +15,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 import { spawn } from 'node:child_process'
 import { WebSocket } from 'ws'
+import { startOperationApprovalDriver } from './trusted-approval-driver.mjs'
 
 const file = fileURLToPath(import.meta.url)
 const root = path.resolve(path.dirname(file), '..')
@@ -135,6 +136,7 @@ void (async () => {
   if (phase === '1') {
     try {
       const shell = await shellRenderer()
+      const approvalDriver = startOperationApprovalDriver((script) => shell.executeJavaScript(script, true))
       const connection = JSON.parse(fs.readFileSync(process.env.AA_BROWSER_CONNECTION_FILE, 'utf8'))
       const ws = new WebSocket(`ws://127.0.0.1:${connection.port}/?token=${connection.token}`)
       await new Promise((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject) })
@@ -160,8 +162,13 @@ void (async () => {
       const list = api.getAllExtensions()
       assert.ok(list.some((e) => e.id === loaded.id), 'loaded extension must appear in getAllExtensions()')
       assert.equal(list.find((e) => e.id === loaded.id).name, 'AA Fixture Extension')
-      assert.deepEqual(JSON.parse(fs.readFileSync(path.join(runDir, 'extensions.json'), 'utf8')), [path.resolve(extDir)], 'manager load must persist the extension registry')
+      const registry = JSON.parse(fs.readFileSync(path.join(runDir, 'extensions.json'), 'utf8'))
+      const entries = Array.isArray(registry) ? registry.map((entry) => ({ path: entry, enabled: true })) : registry.entries
+      assert.deepEqual(entries, [{ path: path.resolve(extDir), enabled: true }], 'manager load must persist the extension registry')
       await assertMarker('phase 1')
+      approvalDriver.assertHealthy()
+      assert.ok(approvalDriver.approved > 0, 'MCP extension installation requires a real native decision')
+      await approvalDriver.stop()
       ws.close()
       console.log(`PASS: phase 1 — MCP/UI ExtensionManager loaded (${loaded.id}), persisted the registry and injected content script`)
       app.exit(0)

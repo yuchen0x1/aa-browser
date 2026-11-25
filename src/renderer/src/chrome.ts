@@ -1,5 +1,6 @@
 import type { TabInfo, UiState, DownloadInfo, HistoryEntry, AppSettings, SettingsView, AgentInfo, UpdateState, PagePointerForward, ExtensionInfo, BackgroundMode, MonitorState, AgentTaskRecord } from '@shared/types'
 import { resolveLocale, translate, type Locale, type LocaleKey } from '@shared/locale'
+import type { PlatformState, PlatformActionResult, PlatformWorkflow, ProfileView, ExtensionUpdateResult } from '@shared/platform-types'
 
 /** 与主进程 clients.ts 的 ClientDetectResult / ClientSetupResult 对应 */
 interface ClientDetectResult {
@@ -39,6 +40,8 @@ declare global {
   interface Window {
     aa: {
       getState: () => Promise<UiState>
+      platformState: () => Promise<PlatformState>
+      platformAction: (action: string, input?: Record<string, unknown>) => Promise<PlatformActionResult>
       tabNew: (url?: string) => Promise<void>
       tabClose: (id: string) => Promise<void>
       tabReopen: () => Promise<boolean>
@@ -76,9 +79,11 @@ declare global {
       settingsSet: (patch: Partial<AppSettings>) => Promise<AppSettings | null>
       settingsOpen: (open: boolean) => Promise<void>
       extensionPick: () => Promise<string>
-      extensionList: () => Promise<ExtensionInfo[]>
-      extensionLoad: (dir: string) => Promise<{ ok: boolean; error?: string; extension?: ExtensionInfo }>
-      extensionRemove: (key: string) => Promise<{ ok: boolean; error?: string; extension?: ExtensionInfo }>
+      extensionList: (profileId?: string) => Promise<ExtensionInfo[]>
+      extensionLoad: (dir: string, profileId?: string) => Promise<{ ok: boolean; error?: string; extension?: ExtensionInfo }>
+      extensionRemove: (key: string, profileId?: string) => Promise<{ ok: boolean; error?: string; extension?: ExtensionInfo }>
+      extensionEnable: (key: string, enabled: boolean, profileId?: string) => Promise<{ ok: boolean; error?: string }>
+      extensionCheckUpdates: (profileId?: string) => Promise<ExtensionUpdateResult>
       agentInfo: () => Promise<AgentInfo | null>
       copyConnectionDiagnostics: () => Promise<boolean>
       clientsDetect: () => Promise<ClientDetectResult[]>
@@ -231,16 +236,16 @@ const uiText = (zh: string, en: string): string => activeLocale === 'en-US' ? en
 
 type ThemeSetting = AppSettings['theme']
 const cachedTheme = cachedAppearance('aa.theme')
-let activeThemeSetting: ThemeSetting = 'light'
+let activeThemeSetting: ThemeSetting = 'dark'
 let savedThemeSetting: ThemeSetting =
-  cachedTheme === 'light' || cachedTheme === 'dark' || cachedTheme === 'system' ? cachedTheme : 'light'
+  cachedTheme === 'light' || cachedTheme === 'dark' || cachedTheme === 'system' ? cachedTheme : 'dark'
 const systemThemeMedia = window.matchMedia?.('(prefers-color-scheme: dark)')
-function resolveUiTheme(setting: ThemeSetting = 'light'): 'light' | 'dark' {
+function resolveUiTheme(setting: ThemeSetting = 'dark'): 'light' | 'dark' {
   if (setting === 'dark') return 'dark'
   if (setting === 'system') return systemThemeMedia?.matches ? 'dark' : 'light'
   return 'light'
 }
-function applyTheme(setting: ThemeSetting = 'light'): void {
+function applyTheme(setting: ThemeSetting = 'dark'): void {
   activeThemeSetting = setting
   const resolved = resolveUiTheme(setting)
   document.documentElement.dataset.theme = resolved
@@ -257,7 +262,7 @@ function adoptSavedSettings(settings: AppSettings | null | undefined, operation:
   if (!settings || operation <= adoptedSettingsOperation) return
   adoptedSettingsOperation = operation
   savedLocale = resolveUiLocale(settings.locale)
-  savedThemeSetting = settings.theme || 'light'
+  savedThemeSetting = settings.theme || 'dark'
   if (!settingsModal || settingsModal.hidden || !settingsReady) {
     applyTheme(savedThemeSetting)
     applyLocale(savedLocale)
@@ -344,6 +349,8 @@ function applyLocale(locale: Locale): void {
   setText('settings-theme-light', 'themeLight')
   setText('settings-theme-dark', 'themeDark')
   setText('settings-theme-system', 'themeSystem')
+  const lightTheme = document.getElementById('settings-theme-light'); if (lightTheme) lightTheme.textContent = uiText('浅色', 'Light')
+  const darkTheme = document.getElementById('settings-theme-dark'); if (darkTheme) darkTheme.textContent = uiText('深色（默认）', 'Dark (default)')
   setText('settings-update-channel-label', 'updateChannel')
   setText('settings-engine-hint', 'engineHint')
   setAttr('btn-close-settings', 'aria-label', 'close')
@@ -403,6 +410,8 @@ function applyLocale(locale: Locale): void {
   setText('settings-agent-label', 'agentService')
   setText('settings-extensions-label', 'extensionsLabel')
   setText('settings-extensions-hint', 'extensionsHint')
+  const extensionHint = document.getElementById('settings-extensions-hint')
+  if (extensionHint) extensionHint.textContent = uiText('扩展仅加载到所选配置文件。启用或禁用后，请重新加载受影响的网页。', 'Extensions load only in the selected profile. Reload affected pages after enabling or disabling them.')
   setText('btn-extension-load', 'extensionsLoad')
   setText('btn-extension-rescan', 'extensionsRescan')
   setText('set-agent-details-label', 'connectionDetails')
@@ -435,6 +444,7 @@ function applyLocale(locale: Locale): void {
   if (closeFeed) closeFeed.setAttribute('aria-label', uiText('关闭 Agent 活动记录', 'Close agent activity log'))
   const closeDownloads = document.getElementById('btn-close-dl')
   if (closeDownloads) closeDownloads.setAttribute('aria-label', uiText('关闭下载列表', 'Close download list'))
+  renderPlatformLocale()
 }
 
 function renderFind(): void {
@@ -696,7 +706,7 @@ function revealActiveTab(): void {
   })
 }
 
-/** 活动状态和 Agent 进度不替换标签节点，保留正在使用的键盘焦点。 */
+/** 按 id 复用标签和关闭按钮，迟到的标题/图标更新也不能打断键盘焦点。 */
 function renderTabs(): void {
   const next = state.tabs
   const sameTabs = renderedTabLocale === activeLocale && renderedTabs.length === next.length && next.every((tab, i) => {
@@ -721,87 +731,104 @@ function renderTabs(): void {
     revealActiveTab()
     return
   }
-  tabsEl.textContent = ''
-  for (const t of next) {
-    const el = document.createElement('div')
+  const existing = new Map(Array.from(tabsEl.children, (node) => [(node as HTMLElement).dataset.tabId, node as HTMLElement]))
+  const previousById = new Map(previous.map((tab) => [tab.id, tab]))
+  const keep = new Set(next.map((tab) => tab.id))
+  const focused = document.hasFocus() && tabsEl.contains(document.activeElement) ? document.activeElement as HTMLElement : null
+  for (const [id, node] of existing) if (!id || !keep.has(id)) node.remove()
+  for (const [index, t] of next.entries()) {
+    let el = existing.get(t.id)
+    if (!el) {
+      el = document.createElement('div')
+      el.setAttribute('role', 'tab')
+      el.dataset.tabId = t.id
+      el.dataset.focusKey = `tab:${t.id}`
+      const fav = document.createElement('div')
+      fav.className = 'favicon'
+      const title = document.createElement('span')
+      title.className = 'title'
+      const close = document.createElement('button')
+      close.className = 'close'
+      close.dataset.focusKey = `tab-close:${t.id}`
+      close.textContent = '×'
+      close.addEventListener('click', (e) => {
+        e.stopPropagation()
+        void window.aa.tabClose(t.id)
+      })
+      el.append(fav, title, close)
+      el.addEventListener('mousedown', (e) => {
+        if (e.button === 1) {
+          e.preventDefault()
+          void window.aa.tabClose(t.id)
+        }
+      })
+      el.addEventListener('click', () => void window.aa.tabSelect(t.id))
+    }
     el.className = 'tab' + (t.active ? ' active' : '')
     el.title = `${t.title}\n${t.url}${t.isolated ? `\n${uiText('（隔离会话：不共享登录态）', '(Isolated session: sign-in state is not shared)')}` : ''}${t.agentClientId === undefined ? '' : `\nAgent #${t.agentClientId}`}`
-    el.setAttribute('role', 'tab')
     el.setAttribute('aria-selected', String(t.active))
     el.tabIndex = t.active ? 0 : -1
-    el.dataset['tabId'] = t.id
-    el.dataset['focusKey'] = `tab:${t.id}`
 
-    const fav = document.createElement('div')
-    fav.className = 'favicon'
-    if (t.loading) {
-      const dot = document.createElement('div')
-      dot.className = 'dot'
-      fav.appendChild(dot)
-    } else if (t.favicon && /^https?:|^data:/i.test(t.favicon)) {
-      const img = document.createElement('img')
-      img.src = t.favicon
-      img.onerror = () => {
-        img.remove()
+    const fav = el.querySelector<HTMLElement>('.favicon')
+    const title = el.querySelector<HTMLElement>('.title')
+    const close = el.querySelector<HTMLButtonElement>('.close')
+    if (!fav || !title || !close) throw new Error(`Invalid tab chrome: ${t.id}`)
+    const before = previousById.get(t.id)
+    if (!before || before.loading !== t.loading || before.favicon !== t.favicon) {
+      fav.replaceChildren()
+      fav.className = 'favicon'
+      if (t.loading) {
+        const dot = document.createElement('div')
+        dot.className = 'dot'
+        fav.appendChild(dot)
+      } else if (t.favicon && /^https?:|^data:/i.test(t.favicon)) {
+        const img = document.createElement('img')
+        img.src = t.favicon
+        img.onerror = () => {
+          if (img.parentElement !== fav) return
+          img.remove()
+          fav.textContent = '•'
+          fav.classList.add('favicon-fallback')
+        }
+        fav.appendChild(img)
+      } else {
         fav.textContent = '•'
         fav.classList.add('favicon-fallback')
       }
-      fav.appendChild(img)
-    } else {
-      fav.textContent = '•'
-      fav.classList.add('favicon-fallback')
     }
-    el.appendChild(fav)
 
-    const title = document.createElement('span')
-    title.className = 'title'
     title.textContent = t.title || uiText('无标题', 'Untitled')
-    el.appendChild(title)
+    // 只有活动标签的关闭按钮进入 Tab 顺序；非活动标签仍可鼠标点击。
+    close.tabIndex = el.tabIndex
+    close.title = uiText('关闭标签页 (Ctrl+W)', 'Close tab (Ctrl+W)')
+    close.setAttribute('aria-label', `${uiText('关闭标签页：', 'Close tab: ')}${t.title || uiText('无标题', 'Untitled')}`)
 
+    let owner = el.querySelector<HTMLElement>('.tab-owner')
     if (t.agentClientId !== undefined) {
-      const owner = document.createElement('span')
+      owner ??= document.createElement('span')
       owner.className = 'tab-owner'
       owner.textContent = `A${t.agentClientId}`
       owner.title = uiText(`Agent 会话 ${t.agentClientId}`, `Agent session ${t.agentClientId}`)
       owner.setAttribute('aria-label', owner.title)
-      el.appendChild(owner)
-    }
+      if (!owner.parentElement) el.insertBefore(owner, close)
+    } else owner?.remove()
 
     // 隔离会话标签带锁标识：用户必须能一眼看出哪些标签不共享登录态
+    let lock = el.querySelector<HTMLElement>('.tab-lock')
     if (t.isolated) {
-      const lock = document.createElement('span')
+      lock ??= document.createElement('span')
       lock.className = 'tab-lock'
       lock.textContent = '🔒'
       lock.title = uiText('隔离会话：不共享 Cookie / 登录态，关闭后清除数据', 'Isolated session: cookies and sign-in are not shared and data is cleared on close')
       lock.setAttribute('aria-label', uiText('隔离会话标签', 'Isolated session tab'))
-      el.appendChild(lock)
+      if (!lock.parentElement) el.insertBefore(lock, close)
       el.classList.add('isolated')
-    }
+    } else lock?.remove()
 
-    const close = document.createElement('button')
-    close.className = 'close'
-    close.dataset['focusKey'] = `tab-close:${t.id}`
-    // 只有活动标签的关闭按钮进入 Tab 顺序；非活动标签仍可鼠标点击，方向键切换后自然轮到它。
-    close.tabIndex = t.active ? 0 : -1
-    close.title = uiText('关闭标签页 (Ctrl+W)', 'Close tab (Ctrl+W)')
-    close.setAttribute('aria-label', `${uiText('关闭标签页：', 'Close tab: ')}${t.title || uiText('无标题', 'Untitled')}`)
-    close.textContent = '×'
-    close.addEventListener('click', (e) => {
-      e.stopPropagation()
-      void window.aa.tabClose(t.id)
-    })
-    el.appendChild(close)
-
-    el.addEventListener('mousedown', (e) => {
-      if (e.button === 1) {
-        e.preventDefault()
-        void window.aa.tabClose(t.id)
-      }
-    })
-    el.addEventListener('click', () => void window.aa.tabSelect(t.id))
-
-    tabsEl.appendChild(el)
+    const position = tabsEl.children.item(index)
+    if (position !== el) tabsEl.insertBefore(el, position)
   }
+  if (focused?.isConnected && document.hasFocus() && document.activeElement === document.body) focused.focus()
   revealActiveTab()
 }
 
@@ -967,6 +994,8 @@ let knownApprovalIds = new Set<string>()
 
 function renderApprovals(): void {
   const pending = state.pendingApprovals ?? []
+  approvalPanel.inert = !!settingsModal && !settingsModal.hidden && pending.length === 0
+  if (settingsModal) settingsModal.inert = pending.some((item) => item.kind !== 'sensitive')
   approvalPanel.hidden = pending.length === 0
   approvalPanel.textContent = ''
   for (const [index, item] of pending.entries()) {
@@ -1530,6 +1559,7 @@ function applyState(next: UiState): void {
   renderFeed()
   renderMonitor()
   renderTaskCenter()
+  schedulePlatformRefresh()
   renderDownloads()
   renderUpdate(next.update)
   renderFind()
@@ -1917,6 +1947,12 @@ btnClientSetup?.addEventListener('click', async () => {
 /* ── 设置面板：已解压扩展 ─────────────── */
 let extensionsRequestId = 0
 let lastExtensions: ExtensionInfo[] | null = null
+let extensionUpdates: NonNullable<ExtensionUpdateResult['updates']> = []
+let extensionMutation = false
+
+function extensionProfileId(): string | undefined {
+  return (document.getElementById('extension-profile') as HTMLSelectElement | null)?.value || undefined
+}
 
 function renderExtensionList(): void {
   if (!extensionList) return
@@ -1946,13 +1982,48 @@ function renderExtensionList(): void {
     meta.title = ext.path
     main.appendChild(name)
     main.appendChild(meta)
+    const source = document.createElement('div')
+    source.className = 'extension-meta'
+    source.textContent = `${uiText('来源', 'Source')}: ${ext.source === 'local-unpacked' ? uiText('本地解压目录', 'Local unpacked directory') : ext.source ?? uiText('未知', 'Unknown')} · ${uiText('状态', 'Status')}: ${ext.status ?? uiText('未知', 'Unknown')}`
+    main.append(source)
+    const permissions = document.createElement('details')
+    permissions.className = 'extension-permissions'
+    const permissionTitle = document.createElement('summary')
+    permissionTitle.textContent = `${uiText('权限', 'Permissions')} (${(ext.permissions?.length ?? 0) + (ext.hostPermissions?.length ?? 0)})`
+    const permissionText = document.createElement('div')
+    permissionText.className = 'extension-meta'
+    permissionText.textContent = [...ext.permissions ?? [], ...ext.hostPermissions ?? []].join(', ') || uiText('无声明权限', 'No declared permissions')
+    permissions.append(permissionTitle, permissionText)
+    main.append(permissions)
+    const update = extensionUpdates.find((item) => item.id === ext.id)
+    const error = (ext as ExtensionInfo & { error?: string }).error
+    if (update || error) {
+      const result = document.createElement('div')
+      result.className = update?.error || error ? 'platform-error' : 'extension-meta'
+      result.textContent = error ?? update?.error ?? (update?.changed ? `${uiText('本地版本已变化', 'Local version changed')}: ${update.installedVersion} → ${update.localVersion}` : uiText('本地版本一致', 'Local version matches'))
+      main.append(result)
+    }
+    const toggle = document.createElement('label')
+    toggle.className = 'settings-switch extension-toggle'
+    const enabled = document.createElement('input')
+    enabled.type = 'checkbox'
+    enabled.checked = ext.enabled !== false
+    enabled.disabled = extensionMutation
+    enabled.setAttribute('aria-label', `${uiText('启用扩展', 'Enable extension')}: ${ext.name}`)
+    const track = document.createElement('span')
+    track.className = 'settings-switch-track'
+    track.setAttribute('aria-hidden', 'true')
+    toggle.append(enabled, track)
+    enabled.addEventListener('change', () => { void setExtensionEnabled(ext.id, enabled.checked) })
     const removeBtn = document.createElement('button')
     removeBtn.type = 'button'
     removeBtn.className = 'settings-btn extension-remove'
     removeBtn.dataset['key'] = ext.id
     removeBtn.setAttribute('aria-label', `${uiText('移除扩展', 'Remove extension')}: ${ext.name}`)
     removeBtn.textContent = uiText('移除', 'Remove')
+    removeBtn.disabled = extensionMutation
     row.appendChild(main)
+    row.appendChild(toggle)
     row.appendChild(removeBtn)
     extensionList.appendChild(row)
   }
@@ -1961,11 +2032,12 @@ function renderExtensionList(): void {
 async function refreshExtensions(): Promise<void> {
   if (!extensionList || !settingsReady) return
   const request = settingsRequest
+  const profileId = extensionProfileId()
   const seq = ++extensionsRequestId
   lastExtensions = null
   renderExtensionList()
   try {
-    const list = await window.aa.extensionList()
+    const list = await window.aa.extensionList(profileId)
     if (!currentSettingsRequest(request) || seq !== extensionsRequestId) return
     lastExtensions = Array.isArray(list) ? list : []
     renderExtensionList()
@@ -1978,6 +2050,7 @@ async function refreshExtensions(): Promise<void> {
 btnExtensionLoad?.addEventListener('click', async () => {
   if (!btnExtensionLoad || !settingsReady || !currentSettingsRequest(settingsRequest) || btnExtensionLoad.getAttribute('aria-busy') === 'true') return
   const request = settingsRequest
+  const profileId = extensionProfileId()
   if (setExtensionResult) setExtensionResult.textContent = ''
   btnExtensionLoad.disabled = true
   btnExtensionLoad.setAttribute('aria-busy', 'true')
@@ -1986,8 +2059,8 @@ btnExtensionLoad?.addEventListener('click', async () => {
     if (!currentSettingsRequest(request)) return
     if (!dir) return // 用户取消选择，不算失败
     if (setExtensionResult) setExtensionResult.textContent = uiText('正在装载扩展…', 'Loading the extension…')
-    const result = await window.aa.extensionLoad(dir)
-    if (!currentSettingsRequest(request)) return
+    const result = await window.aa.extensionLoad(dir, profileId)
+    if (!currentSettingsRequest(request) || profileId !== extensionProfileId()) return
     if (result.ok && result.extension) {
       if (setExtensionResult) {
         setExtensionResult.textContent = `${uiText('已装载', 'Loaded')}: ${result.extension.name} v${result.extension.version}`
@@ -2023,12 +2096,13 @@ extensionList?.addEventListener('click', async (event) => {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>('button.extension-remove')
   if (!button || !settingsReady || !currentSettingsRequest(settingsRequest) || button.disabled) return
   const request = settingsRequest
+  const profileId = extensionProfileId()
   const key = button.dataset['key'] ?? ''
   button.disabled = true
   if (setExtensionResult) setExtensionResult.textContent = ''
   try {
-    const result = await window.aa.extensionRemove(key)
-    if (!currentSettingsRequest(request)) return
+    const result = await window.aa.extensionRemove(key, profileId)
+    if (!currentSettingsRequest(request) || profileId !== extensionProfileId()) return
     if (setExtensionResult) {
       if (result.ok) setExtensionResult.textContent = uiText('已移除扩展。', 'Extension removed.')
       else {
@@ -2043,6 +2117,66 @@ extensionList?.addEventListener('click', async (event) => {
     }
   }
   void refreshExtensions()
+})
+
+async function setExtensionEnabled(key: string, enabled: boolean): Promise<void> {
+  if (extensionMutation || !settingsReady || !currentSettingsRequest(settingsRequest)) return
+  extensionMutation = true
+  const request = settingsRequest
+  const profileId = extensionProfileId()
+  const selector = document.getElementById('extension-profile') as HTMLSelectElement
+  selector.disabled = true
+  renderExtensionList()
+  try {
+    const result = await window.aa.extensionEnable(key, enabled, profileId)
+    if (!currentSettingsRequest(request) || profileId !== extensionProfileId()) return
+    if (setExtensionResult) {
+      setExtensionResult.textContent = result.ok ? uiText('扩展状态已更新。请重新加载受影响的网页。', 'Extension status updated. Reload affected pages.') : result.error ?? uiText('扩展状态更新失败', 'Unable to change extension state')
+      setExtensionResult.dataset['state'] = result.ok ? 'ok' : 'error'
+    }
+  } catch (error) {
+    if (currentSettingsRequest(request) && setExtensionResult) {
+      setExtensionResult.textContent = error instanceof Error ? error.message : String(error)
+      setExtensionResult.dataset['state'] = 'error'
+    }
+  } finally {
+    extensionMutation = false
+    selector.disabled = !settingsReady
+    if (currentSettingsRequest(request)) void refreshExtensions()
+  }
+}
+
+document.getElementById('extension-profile')?.addEventListener('change', () => {
+  extensionUpdates = []
+  if (setExtensionResult) setExtensionResult.textContent = ''
+  void refreshExtensions()
+})
+document.getElementById('btn-extension-updates')?.addEventListener('click', async () => {
+  if (!settingsReady || extensionMutation) return
+  const button = document.getElementById('btn-extension-updates') as HTMLButtonElement
+  const request = settingsRequest
+  const profileId = extensionProfileId()
+  button.disabled = true
+  button.setAttribute('aria-busy', 'true')
+  try {
+    const result = await window.aa.extensionCheckUpdates(profileId)
+    if (!currentSettingsRequest(request) || profileId !== extensionProfileId()) return
+    if (!result.ok) throw new Error(result.error ?? uiText('检查失败', 'Check failed'))
+    extensionUpdates = result.updates ?? []
+    renderExtensionList()
+    if (setExtensionResult) {
+      setExtensionResult.textContent = `${uiText('本地文件检查完成', 'Local files checked')}: ${extensionUpdates.filter((item) => item.changed).length} ${uiText('个版本变化', 'version changes')}`
+      setExtensionResult.dataset['state'] = 'ok'
+    }
+  } catch (error) {
+    if (currentSettingsRequest(request) && setExtensionResult) {
+      setExtensionResult.textContent = error instanceof Error ? error.message : String(error)
+      setExtensionResult.dataset['state'] = 'error'
+    }
+  } finally {
+    button.disabled = false
+    button.removeAttribute('aria-busy')
+  }
 })
 
 btnUpdateCheck?.addEventListener('click', () => { void window.aa.updateCheck() })
@@ -2069,7 +2203,7 @@ function isolateSettings(open: boolean): void {
     for (const sibling of Array.from(settingsModal?.parentElement?.children ?? [])) {
       if (!(sibling instanceof HTMLElement) || sibling === settingsModal) continue
       if (!settingsBackground.has(sibling)) settingsBackground.set(sibling, sibling.inert)
-      sibling.inert = true
+      sibling.inert = sibling === approvalPanel ? !!approvalPanel.hidden : true
     }
   } else {
     for (const [element, inert] of settingsBackground) element.inert = inert
@@ -2085,6 +2219,9 @@ function setSettingsReady(ready: boolean): void {
   settingsReady = ready
   for (const control of [setEngine, setEngineUrl, setLocale, setTheme, setFullSnapshot, setOpApproval, setIsolatedSessions, setRestoreSession, setBackgroundMode, setAutoUpdate, setUpdateChannel, setDownloadDir, setAllowedSites]) {
     if (control) control.disabled = !ready
+  }
+  for (const control of document.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>('#settings-body input, #settings-body select, #settings-body textarea')) {
+    if (control.id === 'extension-profile' || control.closest('#settings-section-profiles, #settings-section-workflows, #settings-section-network, #settings-section-security, #settings-section-diagnostics')) control.disabled = !ready
   }
   if (settingsBody) {
     settingsBody.inert = !ready
@@ -2157,7 +2294,7 @@ async function openSettings(): Promise<boolean> {
     setEngine.value = view.presets.some((preset) => preset.url === view.settings.searchEngine) ? view.settings.searchEngine : ''
     if (setEngineUrl) setEngineUrl.value = view.settings.searchEngine
     if (setLocale) setLocale.value = view.settings.locale || 'auto'
-    if (setTheme) setTheme.value = view.settings.theme || 'light'
+    if (setTheme) setTheme.value = view.settings.theme || 'dark'
     if (setFullSnapshot) setFullSnapshot.checked = view.settings.fullSnapshot
     if (setOpApproval) setOpApproval.checked = !!view.settings.requireOperationApproval
     if (setIsolatedSessions) setIsolatedSessions.checked = !!view.settings.isolatedSessions
@@ -2181,6 +2318,7 @@ async function openSettings(): Promise<boolean> {
   }
   void refreshClients()
   renderUpdate(state.update)
+  void refreshPlatform()
   return true
 }
 function closeSettings(): void {
@@ -2399,6 +2537,16 @@ window.addEventListener('keydown', (e) => {
   const ctrl = e.ctrlKey || e.metaKey
   const modal = settingsModal
   const target = e.target instanceof HTMLElement ? e.target : null
+  if (!approvalPanel.hidden && state.pendingApprovals.some((item) => item.kind !== 'sensitive')) {
+    if (e.key === 'Tab') {
+      const controls = Array.from(approvalPanel.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'))
+      const index = controls.indexOf(document.activeElement as HTMLButtonElement)
+      const next = controls[e.shiftKey ? (index <= 0 ? controls.length : index) - 1 : (index + 1) % controls.length]
+      e.preventDefault()
+      next?.focus()
+    }
+    return
+  }
   if (modal && !modal.hidden) {
     // 设置打开时快捷键留在模态内：只处理 Tab 环与 Esc 关闭，不触发背景标签操作。
     if (e.key === 'Escape') {
@@ -2454,6 +2602,564 @@ window.addEventListener('keydown', (e) => {
     void window.aa.devtools()
   }
 })
+
+/* Platform panels consume the same persisted services as MCP; no UI-only task state. */
+let platform: PlatformState | null = null
+let platformRefreshing = false
+let platformBusy = false
+let platformLastRefresh = 0
+let platformRefreshTimer: ReturnType<typeof setTimeout> | undefined
+const platformElement = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T
+const platformInput = (id: string): HTMLInputElement => platformElement<HTMLInputElement>(id)
+const profileSelector = platformElement<HTMLSelectElement>('profile-selector')
+
+function renderPlatformLocale(): void {
+  for (const element of document.querySelectorAll<HTMLElement>('[data-platform-zh]')) {
+    element.textContent = activeLocale === 'en-US' ? element.dataset['platformEn'] ?? '' : element.dataset['platformZh'] ?? ''
+  }
+  const selector = document.getElementById('profile-selector')
+  selector?.setAttribute('aria-label', uiText('当前配置文件', 'Current profile'))
+  selector?.setAttribute('title', uiText('当前配置文件', 'Current profile'))
+  if (document.getElementById('profile-edit-id') && platformInput('profile-edit-id').value) {
+    platformElement('profile-save').textContent = uiText('保存配置文件', 'Save profile')
+  }
+  if (platform) renderPlatform()
+}
+
+function platformMessage(message: string, error = false): void {
+  const elements = [document.getElementById('platform-status'), ...document.querySelectorAll<HTMLElement>('[data-platform-status]')]
+  const activeSection = document.activeElement?.closest('.settings-section') ?? document.getElementById(document.querySelector<HTMLElement>('.settings-nav-item.is-active')?.dataset['target'] ?? '')
+  for (const element of elements) {
+    if (!element) continue
+    element.textContent = activeSection?.contains(element) ? message : ''
+    element.dataset['state'] = error ? 'error' : 'success'
+  }
+}
+
+function platformEmpty(parent: HTMLElement, text: string): void {
+  const empty = document.createElement('p')
+  empty.className = 'platform-empty'
+  empty.textContent = text
+  parent.append(empty)
+}
+
+function platformButton(label: string, callback: () => void, symbol?: string): HTMLButtonElement {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.className = symbol ? 'navbtn platform-icon-button' : 'settings-btn'
+  button.textContent = symbol ?? label
+  button.title = label
+  button.setAttribute('aria-label', label)
+  button.disabled = platformBusy
+  button.addEventListener('click', callback)
+  return button
+}
+
+function platformBadge(status: string): HTMLSpanElement {
+  const badge = document.createElement('span')
+  badge.className = 'platform-badge'
+  badge.dataset['status'] = status
+  const labels: Record<string, [string, string]> = {
+    running: ['运行中', 'Running'], pending: ['待运行', 'Pending'], queued: ['等待中', 'Queued'],
+    completed: ['已完成', 'Completed'], succeeded: ['成功', 'Succeeded'], failed: ['失败', 'Failed'],
+    paused: ['已暂停', 'Paused'], interrupted: ['已中断', 'Interrupted'], cancelled: ['已取消', 'Cancelled'], waiting: ['等待确认', 'Waiting for confirmation'], draft: ['待运行', 'Draft'],
+    skipped: ['已跳过', 'Skipped'], waiting_approval: ['等待审批', 'Awaiting approval'],
+    'waiting-approval': ['等待审批', 'Awaiting approval'], stopped: ['已关闭', 'Stopped']
+  }
+  badge.textContent = labels[status]?.[activeLocale === 'en-US' ? 1 : 0] ?? status
+  return badge
+}
+
+function selectProfiles(id: string, selected?: string): void {
+  if (!platform) return
+  const select = platformElement<HTMLSelectElement>(id)
+  const wanted = selected ?? select.value ?? platform.activeProfileId
+  const signature = platform.profiles.map((profile) => `${profile.id}:${profile.name}:${profile.isDefault}`).join('|')
+  if (select.dataset['profiles'] !== signature) {
+    select.replaceChildren(...platform.profiles.map((profile) => {
+      const option = document.createElement('option')
+      option.value = profile.id
+      option.textContent = `${profile.name}${profile.isDefault ? ' ★' : ''}`
+      return option
+    }))
+    select.dataset['profiles'] = signature
+  }
+  select.value = platform.profiles.some((profile) => profile.id === wanted) ? wanted : platform.activeProfileId || platform.defaultProfileId
+  select.disabled = platformBusy || !platform.profiles.length || id !== 'profile-selector' && !settingsReady || id === 'extension-profile' && extensionMutation
+}
+
+function renderProfiles(): void {
+  if (!platform) return
+  selectProfiles('profile-selector', platform.activeProfileId)
+  for (const id of ['workflow-profile', 'network-profile', 'diagnostics-profile']) selectProfiles(id)
+  const extensionProfileBefore = extensionProfileId()
+  selectProfiles('extension-profile')
+  if (settingsReady && extensionProfileBefore !== extensionProfileId()) void refreshExtensions()
+  const list = platformElement('profile-list')
+  const signature = JSON.stringify([platform.profiles, platformBusy, activeLocale])
+  if (list.dataset['signature'] === signature) return
+  list.dataset['signature'] = signature
+  list.replaceChildren()
+  for (const profile of platform.profiles) {
+    const row = document.createElement('article')
+    row.className = 'platform-row'
+    const dot = document.createElement('span')
+    dot.className = 'profile-swatch'
+    if (/^#[a-f0-9]{6}$/i.test(profile.color)) dot.style.backgroundColor = profile.color
+    const content = document.createElement('div')
+    content.className = 'platform-row-content'
+    const title = document.createElement('strong')
+    title.textContent = `${profile.name}${profile.isDefault ? ' ★' : ''}`
+    const detail = document.createElement('span')
+    detail.className = 'platform-detail'
+    detail.textContent = [profile.description, profile.id, profile.tabCount !== undefined ? `${profile.tabCount} ${uiText('个标签页', 'tabs')}` : ''].filter(Boolean).join(' · ')
+    content.append(title, detail)
+    if (profile.downloadDir) {
+      const directory = document.createElement('span')
+      directory.className = 'platform-detail'
+      directory.textContent = profile.downloadDir
+      content.append(directory)
+    }
+    const actions = document.createElement('div')
+    actions.className = 'platform-row-actions'
+    actions.append(platformButton(profile.running ? uiText('关闭', 'Stop') : uiText('启动', 'Start'), () => {
+      if (profile.running && !window.confirm(uiText('关闭此配置文件的全部标签页？未保存的网页内容可能丢失。', 'Close all tabs in this profile? Unsaved page content may be lost.'))) return
+      void platformAction(profile.running ? 'profile.stop' : 'profile.start', { profileId: profile.id })
+    }, profile.running ? '■' : '▶'))
+    actions.append(platformButton(uiText('编辑', 'Edit'), () => editProfile(profile), '✎'))
+    actions.append(platformButton(uiText('复制配置文件', 'Clone profile'), () => {
+      void platformAction('profile.clone', { profileId: profile.id, name: `${profile.name} ${uiText('副本', 'copy')}` })
+    }, '⧉'))
+    if (!profile.isDefault) actions.append(platformButton(uiText('设为默认', 'Make default'), () => { void platformAction('profile.default', { profileId: profile.id }) }, '☆'))
+    actions.append(platformButton(uiText('导出加密备份', 'Export encrypted backup'), () => { void profileArchive('profile.export', profile.id) }, '↓'))
+    if (profile.id !== 'default' && !profile.isDefault) actions.append(platformButton(uiText('删除配置文件', 'Delete profile'), () => {
+      if (window.confirm(uiText(`永久删除“${profile.name}”及其全部浏览器数据？`, `Permanently delete “${profile.name}” and all its browser data?`))) void platformAction('profile.remove', { profileId: profile.id })
+    }, '×'))
+    row.append(dot, content, platformBadge(profile.running ? 'running' : 'stopped'), actions)
+    list.append(row)
+  }
+}
+
+function editProfile(profile?: ProfileView): void {
+  platformInput('profile-edit-id').value = profile?.id ?? ''
+  platformInput('profile-name').value = profile?.name ?? ''
+  platformInput('profile-description').value = profile?.description ?? ''
+  platformInput('profile-color').value = profile?.color ?? '#78cbb9'
+  platformElement<HTMLSelectElement>('profile-icon').value = profile?.icon ?? 'circle'
+  platformElement('profile-save').textContent = profile ? uiText('保存配置文件', 'Save profile') : uiText('创建配置文件', 'Create profile')
+  platformElement('profile-reset').hidden = !profile
+  if (profile) platformInput('profile-name').focus()
+}
+
+function renderWorkflows(): void {
+  if (!platform) return
+  const templates = platformElement<HTMLSelectElement>('workflow-template')
+  const selected = templates.value
+  const templateSignature = JSON.stringify(platform.templates)
+  if (templates.dataset['signature'] !== templateSignature) {
+    templates.replaceChildren(...platform.templates.map((template) => {
+      const option = document.createElement('option')
+      option.value = template.id
+      option.textContent = template.name
+      if (template.description) option.title = template.description
+      return option
+    }))
+    if (platform.templates.some((template) => template.id === selected)) templates.value = selected
+    templates.dataset['signature'] = templateSignature
+    renderTemplateParameters()
+  }
+  const workflows = platform.workflows
+  platformElement('workflow-summary').textContent = `${workflows.filter((workflow) => workflow.status === 'running').length} ${uiText('运行中', 'running')} · ${workflows.length} ${uiText('个工作流', 'workflows')}`
+  const list = platformElement('workflow-list')
+  const signature = JSON.stringify([workflows.map((workflow) => [workflow.id, workflow.updatedAt, workflow.status, workflow.steps]), platformBusy, activeLocale])
+  if (list.dataset['signature'] === signature || list.contains(document.activeElement) && document.activeElement?.matches('input,textarea')) return
+  const open = new Set(Array.from(list.querySelectorAll<HTMLDetailsElement>('details[open]')).map((detail) => detail.dataset['detailKey']))
+  list.replaceChildren()
+  list.dataset['signature'] = signature
+  if (!workflows.length) platformEmpty(list, uiText('暂无工作流', 'No workflows'))
+  for (const workflow of [...workflows].reverse()) list.append(renderWorkflow(workflow))
+  for (const detail of list.querySelectorAll<HTMLDetailsElement>('details')) if (open.has(detail.dataset['detailKey'])) detail.open = true
+}
+
+function renderTemplateParameters(): void {
+  const id = platformElement<HTMLSelectElement>('workflow-template').value
+  const multiple = id === 'multi-page' || id === 'compare'
+  const parameters = id === 'form' || id === 'page-test'
+  platformElement('workflow-url-label').hidden = multiple
+  platformInput('workflow-url').required = !multiple
+  platformElement('workflow-urls-label').hidden = !multiple
+  platformElement<HTMLTextAreaElement>('workflow-urls').required = multiple
+  platformElement('workflow-parameters-label').hidden = !parameters
+  platformElement<HTMLTextAreaElement>('workflow-parameters').required = parameters
+  platformElement('workflow-parameters-title').textContent = id === 'form' ? uiText('表单字段（JSON 数组）', 'Form fields (JSON array)') : uiText('断言（JSON 数组）', 'Assertions (JSON array)')
+  platformElement('workflow-schedule-label').hidden = id !== 'scheduled'
+  platformInput('workflow-schedule').required = id === 'scheduled'
+}
+
+function renderWorkflow(workflow: PlatformWorkflow): HTMLElement {
+  const container = document.createElement('article')
+  container.className = 'workflow-record'
+  const header = document.createElement('div')
+  header.className = 'platform-row'
+  const content = document.createElement('div')
+  content.className = 'platform-row-content'
+  const name = document.createElement('strong')
+  name.textContent = workflow.name
+  const meta = document.createElement('span')
+  meta.className = 'platform-detail'
+  const profileName = platform?.profiles.find((profile) => profile.id === workflow.profileId)?.name ?? workflow.profileId
+  const started = workflow.startedAt ?? workflow.createdAt
+  const duration = started ? Math.max(0, ((workflow.finishedAt ?? Date.now()) - started) / 1000).toFixed(1) : null
+  const completed = workflow.steps.filter((step) => ['completed', 'succeeded', 'skipped'].includes(step.status)).length
+  meta.textContent = `${profileName} · ${completed}/${workflow.steps.length}${duration ? ` · ${duration}s` : ''}`
+  content.append(name, meta)
+  const actions = document.createElement('div')
+  actions.className = 'platform-row-actions'
+  const action = (verb: string): void => {
+    const stepId = verb === 'retry' ? workflow.steps.find((step) => ['failed', 'interrupted', 'waiting'].includes(step.status))?.id : undefined
+    void platformAction(`workflow.${verb}`, { workflowId: workflow.id, id: workflow.id, ...(stepId ? { stepId } : {}) })
+  }
+  if (['pending', 'draft', 'queued'].includes(workflow.status)) actions.append(platformButton(uiText('运行工作流', 'Run workflow'), () => action('run'), '▶'))
+  if (workflow.status === 'running') actions.append(platformButton(uiText('暂停工作流', 'Pause workflow'), () => action('pause'), 'Ⅱ'))
+  if (['paused', 'interrupted', 'waiting', 'waiting_approval', 'waiting-approval', 'waiting_confirmation'].includes(workflow.status)) actions.append(platformButton(uiText('继续工作流', 'Resume workflow'), () => action('resume'), '▶'))
+  if (workflow.status === 'failed') actions.append(platformButton(uiText('重试失败步骤', 'Retry failed step'), () => action('retry'), '↻'))
+  if (!['completed', 'succeeded', 'cancelled'].includes(workflow.status)) actions.append(platformButton(uiText('取消工作流', 'Cancel workflow'), () => action('cancel'), '×'))
+  if (['completed', 'cancelled', 'failed'].includes(workflow.status)) actions.append(platformButton(uiText('删除工作流', 'Delete workflow'), () => action('remove'), '×'))
+  header.append(content, platformBadge(workflow.status), actions)
+  container.append(header)
+  const progress = document.createElement('progress')
+  progress.max = Math.max(1, workflow.steps.length)
+  progress.value = completed
+  progress.setAttribute('aria-label', uiText('工作流进度', 'Workflow progress'))
+  container.append(progress)
+  const steps = document.createElement('ol')
+  steps.className = 'workflow-steps'
+  for (const step of workflow.steps) {
+    const item = document.createElement('li')
+    const title = document.createElement('span')
+    title.textContent = step.name || step.tool || step.id
+    item.append(title, platformBadge(step.status))
+    const details = [step.tool, `${uiText('尝试', 'Attempts')}: ${step.attempts ?? 0}`, step.checkpointAt ? uiText('检查点已保存', 'Checkpoint saved') : '', step.requiresApproval ? uiText('需要人工确认', 'Human approval required') : '', step.sideEffect && step.sideEffect !== 'none' ? `${uiText('操作风险', 'Effect risk')}: ${step.sideEffect}` : '', step.error].filter(Boolean)
+    if (details.length) {
+      const detail = document.createElement('small')
+      detail.textContent = details.join(' · ')
+      item.append(detail)
+    }
+    if (['failed', 'waiting', 'interrupted'].includes(step.status)) item.append(platformButton(uiText('重试此步骤', 'Retry this step'), () => {
+      void platformAction('workflow.retry', { workflowId: workflow.id, id: workflow.id, stepId: step.id })
+    }, '↻'))
+    steps.append(item)
+    if (step.input || step.result) {
+      const detail = document.createElement('details')
+      detail.dataset['detailKey'] = `${workflow.id}:${step.id}:result`
+      const summary = document.createElement('summary')
+      summary.textContent = uiText('输入与结果', 'Input and result')
+      const output = document.createElement('pre')
+      output.className = 'platform-output'
+      output.textContent = JSON.stringify({ input: step.input, result: step.result }, null, 2)
+      detail.append(summary, output)
+      item.append(detail)
+    }
+    if (step.needsInput) {
+      const field = document.createElement('textarea')
+      field.className = 'settings-input workflow-step-input'
+      field.rows = 3
+      field.placeholder = '{}'
+      field.setAttribute('aria-label', uiText('重新提供此步骤的输入参数', 'Provide step input again'))
+      const restore = platformButton(uiText('保存步骤输入', 'Save step input'), () => {
+        try {
+          const input: unknown = JSON.parse(field.value)
+          if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error(uiText('步骤输入必须为 JSON 对象', 'Step input must be a JSON object'))
+          field.value = ''
+          void platformAction('workflow.input', { workflowId: workflow.id, stepId: step.id, input })
+        } catch (error) { platformMessage(error instanceof Error ? error.message : String(error), true) }
+      })
+      item.append(field, restore)
+    }
+  }
+  container.append(steps)
+  if (workflow.error) {
+    const error = document.createElement('p')
+    error.className = 'platform-error'
+    error.textContent = workflow.error
+    container.append(error)
+  }
+  if (workflow.logs?.length || workflow.events?.length) {
+    const detail = document.createElement('details')
+    detail.dataset['detailKey'] = `${workflow.id}:log`
+    const summary = document.createElement('summary')
+    summary.textContent = uiText('执行日志', 'Execution log')
+    const log = document.createElement('pre')
+    log.className = 'platform-output'
+    const lines = workflow.logs ?? workflow.events?.map((event) => ({ at: event.at, message: `${event.event}${event.stepId ? ` (${event.stepId})` : ''}${event.detail ? `: ${event.detail}` : ''}` })) ?? []
+    log.textContent = lines.slice(-50).map((line) => `${line.at ? new Date(line.at).toLocaleTimeString() : ''} ${line.message ?? ''}`).join('\n')
+    detail.append(summary, log)
+    container.append(detail)
+  }
+  return container
+}
+
+function loadNetworkForm(): void {
+  const id = platformElement<HTMLSelectElement>('network-profile').value
+  const network = platform?.network[id]
+  platformElement<HTMLSelectElement>('network-mode').value = network?.mode === 'proxy' ? 'fixed_servers' : network?.mode ?? 'system'
+  platformInput('network-rules').value = network?.host ? `${network.protocol ?? 'http'}://${network.host.includes(':') ? `[${network.host}]` : network.host}:${network.port}` : ''
+  platformInput('network-bypass').value = network?.bypass?.join(';') ?? ''
+  platformInput('network-enabled').checked = network?.enabled !== false
+  platformElement<HTMLTextAreaElement>('network-sites').value = network?.rules?.map((rule) => `${rule.site}=${rule.protocol}://${rule.host.includes(':') ? `[${rule.host}]` : rule.host}:${rule.port}`).join('\n') ?? ''
+  platformInput('network-username').value = ''
+  platformInput('network-password').value = ''
+}
+
+function renderPermissions(): void {
+  if (!platform) return
+  for (const [id, records] of [['permission-grants', platform.permissions.grants], ['permission-audit', platform.permissions.audit.slice(-40).reverse()]] as const) {
+    const list = platformElement(id)
+    list.replaceChildren()
+    if (!records.length) platformEmpty(list, id === 'permission-grants' ? uiText('暂无有效授权', 'No active grants') : uiText('暂无审批记录', 'No approval records'))
+    for (const record of records) {
+      const row = document.createElement('div')
+      row.className = 'platform-row'
+      const content = document.createElement('div')
+      content.className = 'platform-row-content'
+      const title = document.createElement('strong')
+      title.textContent = String(record['level'] ?? record['permission'] ?? record['capability'] ?? record['kind'] ?? record['action'] ?? '')
+      const details = document.createElement('span')
+      details.className = 'platform-detail'
+      details.textContent = ['profileId', 'taskId', 'clientId', 'action', 'allowed', 'remainingUses', 'decision', 'status', 'reason'].filter((key) => record[key] !== undefined).map((key) => `${key}: ${String(record[key])}`).join(' · ')
+      if (typeof record['expiresAt'] === 'number') details.textContent += ` · ${uiText('有效期至', 'Expires')}: ${new Date(record['expiresAt']).toLocaleTimeString()}`
+      if (typeof record['at'] === 'number') details.textContent += ` · ${new Date(record['at']).toLocaleTimeString()}`
+      content.append(title, details)
+      row.append(content)
+      if (id === 'permission-grants' && typeof record['id'] === 'string') row.append(platformButton(uiText('撤销授权', 'Revoke grant'), () => {
+        void platformAction('permission.revoke', { grantId: record['id'], id: record['id'] })
+      }, '×'))
+      list.append(row)
+    }
+  }
+}
+
+function renderDiagnostics(): void {
+  if (!platform) return
+  const metrics = platformElement('diagnostics-metrics')
+  metrics.replaceChildren()
+  const values: Array<[string, string]> = [
+    [uiText('MCP 连接', 'MCP clients'), String(state.agentCount)],
+    [uiText('运行配置文件', 'Running profiles'), String(platform.profiles.filter((profile) => profile.running).length)],
+    [uiText('标签页', 'Tabs'), String(state.tabs.length)],
+    [uiText('工作流运行中', 'Running workflows'), String(platform.workflows.filter((workflow) => workflow.status === 'running').length)]
+  ]
+  for (const [label, value] of values) {
+    const metric = document.createElement('div')
+    const title = document.createElement('span')
+    const number = document.createElement('strong')
+    title.textContent = label
+    number.textContent = value
+    metric.append(title, number)
+    metrics.append(metric)
+  }
+  const details = platformElement('diagnostics-details')
+  details.replaceChildren()
+  if (Object.keys(platform.diagnostics).length) {
+    const output = document.createElement('pre')
+    output.className = 'platform-output'
+    output.textContent = JSON.stringify(platform.diagnostics, null, 2)
+    details.append(output)
+  }
+  for (const tab of state.tabs) {
+    if (!tab.recovery || tab.recovery.status === 'healthy') continue
+    const item = document.createElement('p')
+    item.className = 'platform-detail'
+    item.textContent = `${tab.title}: ${tab.recovery.status} · ${tab.recovery.attempts}${tab.recovery.error ? ` · ${tab.recovery.error}` : ''}`
+    details.append(item)
+  }
+}
+
+function renderPlatform(): void {
+  if (!platform) return
+  renderProfiles()
+  if (!settingsModal?.hidden) {
+    renderWorkflows()
+    renderPermissions()
+    renderDiagnostics()
+  }
+}
+
+async function refreshPlatform(): Promise<void> {
+  if (platformRefreshing) return
+  platformRefreshing = true
+  try {
+    const value = await window.aa.platformState()
+    if (!value || !Array.isArray(value.profiles)) throw new Error(uiText('平台服务尚未就绪', 'Platform services are not ready'))
+    platform = value
+    platformLastRefresh = Date.now()
+    renderPlatform()
+    if (!platformElement<HTMLSelectElement>('network-profile').dataset['loaded']) {
+      loadNetworkForm()
+      platformElement<HTMLSelectElement>('network-profile').dataset['loaded'] = 'true'
+    }
+  } catch (error) {
+    platformMessage(error instanceof Error ? error.message : String(error), true)
+  } finally {
+    platformRefreshing = false
+  }
+}
+
+function schedulePlatformRefresh(): void {
+  const activeProfileId = state.tabs.find((tab) => tab.active)?.profileId
+  if (!platform || activeProfileId && activeProfileId !== platform.activeProfileId || (!settingsModal?.hidden && Date.now() - platformLastRefresh > 1500)) {
+    clearTimeout(platformRefreshTimer)
+    platformRefreshTimer = undefined
+    void refreshPlatform()
+  } else if (!settingsModal?.hidden && !platformRefreshTimer) {
+    platformRefreshTimer = setTimeout(() => {
+      platformRefreshTimer = undefined
+      void refreshPlatform()
+    }, Math.max(50, 1500 - (Date.now() - platformLastRefresh)))
+  }
+}
+
+async function platformAction(action: string, input: Record<string, unknown> = {}): Promise<PlatformActionResult> {
+  if (action !== 'profile.select' && settingsModal && !settingsModal.hidden && !settingsReady) return { ok: false, error: uiText('设置尚未就绪', 'Settings are not ready') }
+  if (platformBusy) return { ok: false, error: uiText('操作正在进行', 'An operation is in progress') }
+  platformBusy = true
+  platformMessage(uiText('正在执行…', 'Working…'))
+  for (const section of document.querySelectorAll<HTMLElement>('[id^="settings-section-"]')) {
+    if (section.querySelector('.platform-form, .platform-list, .platform-metrics')) section.setAttribute('aria-busy', 'true')
+  }
+  renderPlatform()
+  try {
+    const result = await window.aa.platformAction(action, input)
+    if (!result?.ok) throw new Error(result?.error ?? uiText('操作失败', 'Operation failed'))
+    platformMessage(uiText('操作已完成', 'Done'))
+    await refreshPlatform()
+    return result
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    platformMessage(message, true)
+    return { ok: false, error: message }
+  } finally {
+    platformBusy = false
+    for (const section of document.querySelectorAll<HTMLElement>('[aria-busy="true"][id^="settings-section-"]')) section.removeAttribute('aria-busy')
+    renderPlatform()
+  }
+}
+
+async function profileArchive(action: 'profile.import' | 'profile.export', profileId?: string): Promise<void> {
+  const password = platformInput('profile-passphrase')
+  const passphrase = password.value
+  password.value = ''
+  if (passphrase.length < 12) {
+    platformMessage(uiText('备份密码至少需要 12 个字符。', 'Backup password must contain at least 12 characters.'), true)
+    password.focus()
+    return
+  }
+  await platformAction(action, { profileId, passphrase })
+}
+
+for (const section of document.querySelectorAll<HTMLElement>('#settings-section-workflows, #settings-section-network, #settings-section-security, #settings-section-diagnostics')) {
+  const message = document.createElement('div')
+  message.className = 'platform-status'
+  message.dataset['platformStatus'] = ''
+  message.setAttribute('role', 'status')
+  message.setAttribute('aria-live', 'polite')
+  section.prepend(message)
+}
+profileSelector.addEventListener('change', () => {
+  void platformAction('profile.select', { profileId: profileSelector.value })
+})
+platformElement('profile-form').addEventListener('submit', (event) => {
+  event.preventDefault()
+  const profileId = platformInput('profile-edit-id').value
+  void platformAction(profileId ? 'profile.update' : 'profile.create', {
+    profileId: profileId || undefined,
+    name: platformInput('profile-name').value.trim(), description: platformInput('profile-description').value.trim(),
+    color: platformInput('profile-color').value, icon: platformElement<HTMLSelectElement>('profile-icon').value
+  }).then((result) => { if (result.ok) editProfile() })
+})
+platformElement('profile-reset').addEventListener('click', () => editProfile())
+platformElement('profile-import').addEventListener('click', () => { void profileArchive('profile.import') })
+platformElement('platform-refresh').addEventListener('click', () => { void refreshPlatform() })
+platformElement('workflow-form').addEventListener('submit', (event) => {
+  event.preventDefault()
+  try {
+    const templateId = platformElement<HTMLSelectElement>('workflow-template').value
+    const input: Record<string, unknown> = {
+      name: platformInput('workflow-name').value.trim(), profileId: platformElement<HTMLSelectElement>('workflow-profile').value,
+      templateId, url: platformInput('workflow-url').value.trim()
+    }
+    if (templateId === 'multi-page' || templateId === 'compare') input['urls'] = platformElement<HTMLTextAreaElement>('workflow-urls').value.split(/\r?\n/).map((url) => url.trim()).filter(Boolean)
+    if (templateId === 'form' || templateId === 'page-test') {
+      const parameters: unknown = JSON.parse(platformElement<HTMLTextAreaElement>('workflow-parameters').value)
+      if (!Array.isArray(parameters)) throw new Error(uiText('模板参数必须为 JSON 数组', 'Template parameters must be a JSON array'))
+      input[templateId === 'form' ? 'fields' : 'checks'] = parameters
+    }
+    if (templateId === 'scheduled') input['scheduleAt'] = new Date(platformInput('workflow-schedule').value).getTime()
+    void platformAction('workflow.create', input).then((result) => {
+      if (result.ok) {
+        platformInput('workflow-name').value = ''
+        platformElement<HTMLTextAreaElement>('workflow-parameters').value = ''
+      }
+    })
+  } catch (error) { platformMessage(error instanceof Error ? error.message : String(error), true) }
+})
+platformElement('workflow-template').addEventListener('change', renderTemplateParameters)
+platformElement('network-profile').addEventListener('change', loadNetworkForm)
+platformElement('network-form').addEventListener('submit', (event) => {
+  event.preventDefault()
+  const profileId = platformElement<HTMLSelectElement>('network-profile').value
+  const mode = platformElement<HTMLSelectElement>('network-mode').value
+  const config: Record<string, unknown> = { enabled: platformInput('network-enabled').checked, mode: mode === 'fixed_servers' ? 'proxy' : mode, bypass: platformInput('network-bypass').value.split(/[;,\n]/).map((item) => item.trim()).filter(Boolean), rules: [] }
+  try {
+    if (mode === 'fixed_servers') {
+      const endpoint = new URL(platformInput('network-rules').value.trim())
+      if (!['http:', 'https:', 'socks5:'].includes(endpoint.protocol) || endpoint.username || endpoint.password || endpoint.pathname !== '/' && endpoint.pathname !== '' || endpoint.search || endpoint.hash) throw new Error(uiText('请输入无凭据的 HTTP、HTTPS 或 SOCKS5 代理地址。', 'Enter an HTTP, HTTPS or SOCKS5 proxy URL without embedded credentials.'))
+      config['protocol'] = endpoint.protocol.slice(0, -1)
+      config['host'] = endpoint.hostname.replace(/^\[|\]$/g, '')
+      config['port'] = Number(endpoint.port || (endpoint.protocol === 'https:' ? 443 : endpoint.protocol === 'http:' ? 80 : 1080))
+      config['rules'] = platformElement<HTMLTextAreaElement>('network-sites').value.split(/\r?\n/).map((line) => line.trim()).filter(Boolean).map((line) => {
+        const separator = line.indexOf('=')
+        if (separator < 1) throw new Error(uiText('站点规则格式应为：站点=代理网址', 'Use site=proxy URL for each rule'))
+        const proxy = new URL(line.slice(separator + 1).trim())
+        if (!['http:', 'https:', 'socks5:'].includes(proxy.protocol) || proxy.username || proxy.password || proxy.search || proxy.hash || proxy.pathname !== '/' && proxy.pathname !== '') throw new Error(uiText('站点代理规则无效', 'Invalid per-site proxy URL'))
+        return { site: line.slice(0, separator).trim(), protocol: proxy.protocol.slice(0, -1), host: proxy.hostname.replace(/^\[|\]$/g, ''), port: Number(proxy.port || (proxy.protocol === 'https:' ? 443 : proxy.protocol === 'http:' ? 80 : 1080)) }
+      })
+    }
+    const username = platformInput('network-username').value
+    const password = platformInput('network-password').value
+    if (username || password) { config['username'] = username; config['password'] = password }
+    platformInput('network-password').value = ''
+    platformInput('network-username').value = ''
+    void platformAction('network.set', { profileId, config }).then((result) => { if (result.ok) loadNetworkForm() })
+  } catch (error) {
+    platformMessage(error instanceof Error ? error.message : String(error), true)
+  }
+})
+for (const action of ['test', 'diagnose'] as const) platformElement(`network-${action}`).addEventListener('click', () => {
+  void platformAction(`network.${action}`, { profileId: platformElement<HTMLSelectElement>('network-profile').value }).then((result) => {
+    const output = platformElement('network-result')
+    output.hidden = false
+    output.textContent = result.ok ? JSON.stringify(result.data ?? {}, null, 2) : result.error ?? ''
+  })
+})
+platformElement('diagnostics-refresh').addEventListener('click', () => { void platformAction('diagnostics.refresh') })
+platformElement('network-clear-auth').addEventListener('click', () => {
+  if (!window.confirm(uiText('移除此配置文件保存的代理凭据？', 'Remove the proxy credentials saved for this profile?'))) return
+  void platformAction('network.set', { profileId: platformElement<HTMLSelectElement>('network-profile').value, config: { password: null } })
+})
+platformElement('diagnostics-repair').addEventListener('click', () => {
+  const action = platformElement<HTMLSelectElement>('diagnostics-repair-action').value
+  const profileId = platformElement<HTMLSelectElement>('diagnostics-profile').value
+  const tab = state.tabs.find((tab) => tab.profileId === profileId && tab.active) ?? state.tabs.find((tab) => tab.profileId === profileId)
+  if (action === 'reload' && !window.confirm(uiText('重新加载页面可能丢失未保存的表单。继续？', 'Reloading pages may lose unsaved form data. Continue?'))) return
+  void platformAction('diagnostics.repair', { profileId, action, ...(tab ? { tabId: tab.id } : {}) })
+})
+const workflowShortcut = platformButton(uiText('管理工作流', 'Manage workflows'), () => {
+  void openSettings().then((ready) => { if (ready) scrollToSettingsSection('settings-section-workflows') })
+})
+workflowShortcut.id = 'btn-manage-workflows'
+document.querySelector('.task-center-toolbar')?.append(workflowShortcut)
+void refreshPlatform()
 
 /* 初始化读取也参与保存基线排序，不因打开/关闭过模态而丢失有效外观。 */
 // 先用同步缓存（上次选择或系统语言）套一次文案，避免首帧中文再跳到英文。

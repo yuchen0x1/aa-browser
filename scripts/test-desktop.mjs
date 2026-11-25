@@ -8,6 +8,7 @@ import Module, { createRequire } from 'node:module'
 import { EventEmitter } from 'node:events'
 import { spawn } from 'node:child_process'
 import { BOUNDS_TOLERANCE, MIN_WINDOW_HEIGHT, MIN_WINDOW_WIDTH, fitWindowToDisplay } from './display-fit.mjs'
+import { startOperationApprovalDriver } from './trusted-approval-driver.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const require = createRequire(import.meta.url)
@@ -28,14 +29,16 @@ if (!process.versions.electron) {
   }
   delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(require('electron'), [fileURLToPath(import.meta.url), ...process.argv.slice(2)], { cwd: ROOT, env, stdio: 'inherit' })
-  const timer = setTimeout(() => { console.error('FAIL: desktop suite timed out'); child.kill() }, 120_000)
+  let timedOut = false
+  const timer = setTimeout(() => { timedOut = true; console.error('FAIL: desktop suite timed out'); child.kill() }, 120_000)
   child.once('error', (error) => { clearTimeout(timer); console.error(error); process.exitCode = 1 })
-  child.once('exit', (code) => {
+  child.once('exit', (code, signal) => {
     clearTimeout(timer)
     const exitCode = code ?? 1
     const resultFile = path.join(runDir, 'result.json')
     const result = fs.existsSync(resultFile) ? JSON.parse(fs.readFileSync(resultFile, 'utf8')) : { checks: [] }
-    fs.writeFileSync(resultFile, JSON.stringify({ ...result, status: exitCode === 0 ? 'PASS' : 'FAIL', exitCode }, null, 2))
+    fs.writeFileSync(resultFile, JSON.stringify({ ...result, status: exitCode === 0 ? 'PASS' : 'FAIL', exitCode, signal, timedOut }, null, 2))
+    if (exitCode !== 0) console.error(`FAIL: desktop Electron exited ${JSON.stringify({ code, signal, timedOut, checks: result.checks.length, resultFile })}`)
     process.exitCode = exitCode
   })
 } else {
@@ -160,6 +163,7 @@ if (!process.versions.electron) {
     ]
   }))
   let chrome
+  let approvalDriver
   const ui = (code) => chrome.executeJavaScript(code, true)
   const state = () => ui('window.aa.getState()')
   // 注入脚本里的数据字面量统一走 jsLiteral：JSON.stringify 之外再转义 `<` `>` `/` 与
@@ -201,6 +205,7 @@ if (!process.versions.electron) {
     await app.whenReady()
     chrome = await until(() => webContents.getAllWebContents().find((wc) => wc.getURL().endsWith('/renderer/index.html')), 'chrome view')
     await until(() => ui('!!window.aa && !!document.querySelector("#btn-find")'), 'preload + renderer')
+    approvalDriver = startOperationApprovalDriver(ui)
     chrome.setBackgroundThrottling(false)
     BaseWindow.getAllWindows()[0].show()
     const errors = []
@@ -290,9 +295,9 @@ if (!process.versions.electron) {
     )
     pass('startup restores the previous session tabs, saved active tab and stable tab ids')
     const initialSettings = await ui('window.aa.settingsGet()')
-    assert.equal(initialSettings.settings.theme, 'light')
-    assert.equal(await ui('document.documentElement.dataset.theme'), 'light')
-    pass('new desktop profiles default to the light browser shell theme')
+    assert.equal(initialSettings.settings.theme, 'dark')
+    assert.equal(await ui('document.documentElement.dataset.theme'), 'dark')
+    pass('new desktop profiles default to the dark browser shell theme')
 
     // Agent activity HUD: a live MCP call expands the chrome view over the window,
     // interrupt pauses/aborts the call, and explicit resume releases the overlay.
@@ -482,12 +487,12 @@ if (!process.versions.electron) {
     await click('#btn-save-settings')
     assert.equal((await ui('window.aa.settingsGet()')).settings.searchEngine, 'https://duckduckgo.com/?q=')
     pass('search preset selection is saved instead of the old custom URL')
-    await ui('document.querySelector("#set-theme").value="dark"; document.querySelector("#set-theme").dispatchEvent(new Event("change"))')
-    await until(() => ui('document.documentElement.dataset.theme === "dark"'), 'dark theme preview')
-     assert.match(await ui('getComputedStyle(document.documentElement).getPropertyValue("--surface-settings").trim()'), /#171b20/)
-    await click('#btn-close-settings')
-    await until(() => ui('document.documentElement.dataset.theme === "light"'), 'unsaved theme rollback')
+    await ui('document.querySelector("#set-theme").value="light"; document.querySelector("#set-theme").dispatchEvent(new Event("change"))')
+    await until(() => ui('document.documentElement.dataset.theme === "light"'), 'light theme preview')
      assert.match(await ui('getComputedStyle(document.documentElement).getPropertyValue("--surface-settings").trim()'), /#ffffff/)
+    await click('#btn-close-settings')
+    await until(() => ui('document.documentElement.dataset.theme === "dark"'), 'unsaved theme rollback')
+     assert.match(await ui('getComputedStyle(document.documentElement).getPropertyValue("--surface-settings").trim()'), /#171c1f/)
      assert.equal(await ui('document.activeElement?.id'), 'btn-settings')
      const originalWindowSize = browserWindow.getSize()
      browserWindow.setSize(960, 720)
@@ -501,7 +506,7 @@ if (!process.versions.electron) {
      pass('settings remain usable at the 960px desktop minimum and collapse the side navigation')
     pass('theme preview rolls back when settings close without saving')
     await click('#btn-settings')
-    await until(() => ui('document.querySelector("#set-theme").value === "light"'), 'theme setting reopened')
+    await until(() => ui('document.querySelector("#set-theme").value === "dark"'), 'theme setting reopened')
     await ui('document.querySelector("#set-theme").value="dark"; document.querySelector("#set-theme").dispatchEvent(new Event("change"))')
     await click('#btn-save-settings')
     await until(() => ui('document.documentElement.dataset.theme === "dark"'), 'saved dark theme')
@@ -908,7 +913,7 @@ if (!process.versions.electron) {
 
     await ui(`window.aa.submit(${jsLiteral(base + '/normal')})`)
     await until(async () => (await state()).tabs.some((t) => t.active && t.url === base + '/normal' && !t.loading), 'restore normal fixture after address checks')
-    await ui('window.aa.settingsSet({requireOperationApproval:true})')
+    await approvalDriver.pause()
     const captured = await tool('browser_network_requests', { tabId: normalId })
     const capturedId = /\[([^\]]+)\]/.exec(toolText(captured))?.[1]
     assert.ok(capturedId, 'desktop fixture should have a captured request')
@@ -922,7 +927,7 @@ if (!process.versions.electron) {
     await click(`[data-focus-key="approval-deny:${approvalId}"]`)
     const denied = await sensitiveCall
     assert.match(denied?.message ?? '', /高危操作已取消/)
-    await ui('window.aa.settingsSet({requireOperationApproval:false})')
+    approvalDriver.resume()
     pass('sensitive network disclosure is blocked until the user approves it')
     const reloadResult = await tool('browser_reload', { tabId: normalId, snapshot: false })
     assert.match(toolText(reloadResult), /已刷新:/)
@@ -1176,6 +1181,7 @@ if (!process.versions.electron) {
     await pause(500)
     await until(() => webContents.getAllWebContents().filter((wc) => wc !== chrome).every((wc) => !wc.isLoading()), 'all pages settle before shutdown')
     assert.equal(errors.length, 0, errors.join('\n'))
+    approvalDriver.assertHealthy()
     pass('chrome renderer reports no console errors')
 
     const finalUrl = base + '/shutdown-final'
@@ -1187,6 +1193,7 @@ if (!process.versions.electron) {
     const orderedUrls = [...new Set(beforeClose.tabs.filter((tab) => !tab.isolated && tab.url.startsWith(base + '/')).map((tab) => tab.url))]
     const activeUrl = beforeClose.tabs.find((tab) => tab.active)?.url
     assert.ok(orderedUrls.indexOf(activeUrl) > 0, 'shutdown fixture must have a non-first active tab')
+    await approvalDriver.stop()
     await new Promise((resolve) => { app.once('will-quit', resolve); window.close() })
     const saved = JSON.parse(fs.readFileSync(sessionFile, 'utf8'))
     assert.deepEqual(saved.tabs.map((tab) => tab.url), orderedUrls)
@@ -1201,6 +1208,7 @@ if (!process.versions.electron) {
     ws.close()
     server.close()
   } catch (error) {
+    await approvalDriver?.stop()
     // 同步写 stderr：管道上的 console.error 是异步的，紧跟其后的 app.exit(1)
     // 会直接把缓冲区丢掉，CI 里就只剩一个没有原因的「exit code 1」。
     try {

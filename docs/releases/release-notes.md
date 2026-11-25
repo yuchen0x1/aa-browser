@@ -1,11 +1,12 @@
 # Aa Browser 发布说明
 
-> 本文件保留精简版变更摘要；完整 GitHub Release 正文以 `bodies/` 下对应版本的归档为准。归档内容已与线上正文逐字核对（仅忽略换行格式和末尾换行）。新版本请按 [`release-notes-template.md`](./release-notes-template.md) 编写；发布后将 GitHub 上的实际正文同步到 `bodies/v<版本号>.md`，并更新本页摘要。运行 `npm run check:release-bodies` 检查本地归档与索引；发布后运行 `npm run check:release-bodies:remote` 对照 GitHub，发现漂移时先同步再合并。
+> 本文件保留精简版变更摘要；完整 GitHub Release 正文以 `bodies/` 下对应版本的归档为准。待发布版本先随源码归档，发布后核对线上正文（仅忽略换行格式和末尾换行）。新版本请按 [`release-notes-template.md`](./release-notes-template.md) 编写。运行 `npm run check:release-bodies` 检查本地归档与索引；发布后运行 `npm run check:release-bodies:remote` 对照 GitHub，发现漂移时先同步。
 
 ## 已发布正文归档
 
 | 版本 | 完整 Release 正文 |
 | --- | --- |
+| v0.18.0 | [bodies/v0.18.0.md](./bodies/v0.18.0.md) |
 | v0.17.0 | [bodies/v0.17.0.md](./bodies/v0.17.0.md) |
 | v0.16.0 | [bodies/v0.16.0.md](./bodies/v0.16.0.md) |
 | v0.15.0 | [bodies/v0.15.0.md](./bodies/v0.15.0.md) |
@@ -38,6 +39,12 @@
 | v0.0.3 | [bodies/v0.0.3.md](./bodies/v0.0.3.md) |
 | v0.0.2 | [bodies/v0.0.2.md](./bodies/v0.0.2.md) |
 | v0.0.1 | [bodies/v0.0.1.md](./bodies/v0.0.1.md) |
+
+## v0.18.0 — 2026-11-25
+
+- 多 Profile 持久化隔离、工作流检查点与安全恢复、强制审批和敏感数据/文件边界，保留原 47 个工具并新增 6 个分组入口。
+- 新增真实 Profile、工作流、网络、扩展、安全和诊断面板，截图绑定的视觉坐标操作及双 Profile 集成验证。
+- 离线备份、系统安全存储、单次定时、未签名安装包和视觉识别能力的实际限制均在完整说明中列明。
 
 ## v0.17.0 — 2026-11-24
 

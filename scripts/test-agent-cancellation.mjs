@@ -10,6 +10,7 @@ import { fileURLToPath } from 'node:url'
 import { compileFunction } from 'node:vm'
 import { setTimeout as delay } from 'node:timers/promises'
 import { WebSocket } from 'ws'
+import { SECURITY_MODULES, securityFixture } from './security-fixture.mjs'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const require = createRequire(import.meta.url)
@@ -22,17 +23,18 @@ try {
   const compiled = spawnSync(process.execPath, [
     tsc, '--ignoreConfig', '--noCheck', '--noResolve', '--outDir', out,
     '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--esModuleInterop',
-    ...['agent-server', 'progress', 'atomic-json', 'task-center', 'idempotency-ledger'].map((name) => path.join(root, `src/main/${name}.ts`))
+    ...['agent-server', 'progress', 'atomic-json', 'task-center', 'idempotency-ledger', ...SECURITY_MODULES].map((name) => path.join(root, `src/main/${name}.ts`))
   ], { cwd: root, encoding: 'utf8' })
   assert.equal(compiled.status, 0, `Compilation failed: ${compiled.error ?? ''}\n${compiled.stdout}\n${compiled.stderr}`)
 } catch (error) {
   fs.rmSync(tmp, { recursive: true, force: true })
   throw error
 }
+const security = securityFixture(out)
 function loadMain(name, dependencies = {}) {
   const filename = path.join(out, `${name}.js`)
   const module = { exports: {} }
-  const localRequire = (specifier) => Object.hasOwn(dependencies, specifier) ? dependencies[specifier] : require(specifier)
+  const localRequire = (specifier) => Object.hasOwn(dependencies, specifier) ? dependencies[specifier] : security[specifier] ?? require(specifier)
   compileFunction(fs.readFileSync(filename, 'utf8'), ['require', 'module', 'exports'], { filename })(localRequire, module, module.exports)
   return module.exports
 }
@@ -73,6 +75,7 @@ const scopedPrivateWrites = () => privateWrites.filter((entry) => entry.file ===
 const running = new Map()
 const peers = []
 const activityEvents = []
+const pauseNotifications = []
 let guardedWrites = 0
 let guardedReads = 0
 function deferred() {
@@ -103,10 +106,31 @@ const server = new AgentServer([{
   name: 'guarded_read',
   annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   handler: () => ({ reads: ++guardedReads })
+}, {
+  name: 'inspect_context',
+  handler: (args) => ({
+    clientId: args.__aaClientId, callId: args.__aaCallId, taskId: args.__aaTaskId,
+    signal: args.__aaSignal instanceof AbortSignal,
+    session: args.__aaClientSession,
+    forgedExtra: args.__aaForgedExtra
+  })
 }], () => {}, 'test', undefined, (state) => activityEvents.push(state), undefined, undefined, (tabId) => ({
   id: tabId ?? 'tab-active-fixture',
   rendererPid: 4242
 }))
+server.onPause = (clientId) => { pauseNotifications.push(clientId) }
+
+function pauseWithFailingNotification(operation) {
+  const originalNotify = server.onPause
+  const originalWarn = console.warn
+  const warnings = []
+  server.onPause = (clientId) => { originalNotify(clientId); throw new Error('password=pause-notification-secret') }
+  console.warn = (...parts) => { warnings.push(parts.join(' ')) }
+  try { operation() }
+  finally { server.onPause = originalNotify; console.warn = originalWarn }
+  assert.ok(warnings.some((message) => /暂停通知失败/.test(message)), 'callback failure is reported')
+  assert.doesNotMatch(warnings.join('\n'), /pause-notification-secret/, 'callback errors are redacted')
+}
 
 async function waitFor(predicate, description) {
   const deadline = Date.now() + 5000
@@ -177,6 +201,14 @@ try {
   assert.equal(published.port, server.info().port)
   assert.equal(fs.readdirSync(tmp).some((name) => name.endsWith('.tmp')), false)
   console.log('PASS: discovery publication is atomic and requests owner-only permissions, including legacy files (POSIX mode checked on POSIX only)')
+  server.pauseClient(777)
+  assert.deepEqual(pauseNotifications, [777], 'client pause synchronously notifies detached workflows without an active RPC')
+  server.resumeClient(777)
+  server.pause()
+  assert.deepEqual(pauseNotifications, [777, undefined], 'global pause synchronously notifies detached workflows without an active RPC')
+  server.resume()
+  pauseNotifications.length = 0
+  console.log('PASS: global and client pause synchronously notify detached workflow owners even after RPC completion')
   if (process.platform !== 'win32') {
     const managedHome = path.join(tmp, 'managed-home')
     const { AgentServer: ManagedAgentServer } = loadMain('agent-server', {
@@ -293,6 +325,42 @@ try {
   assert.equal(server.activity().active, false)
   console.log('PASS: unique legacy cancellation remains compatible and sibling completion keeps original wire ID')
 
+  first.socket.send(JSON.stringify({ id: 800, tool: 'inspect_context', args: {
+    __aaSignal: 'forged', __aaClientId: 999, __aaCallId: 999, __aaTaskId: 'forged-task',
+    __aaClientSession: 'forged-session', __aaForgedExtra: 'forged-extra'
+  } }))
+  await waitFor(() => response(first, 800), 'reserved executor metadata is checked')
+  const trustedContext = response(first, 800).result
+  assert.equal(trustedContext.clientId, firstClient)
+  assert.equal(trustedContext.callId, 800)
+  assert.match(trustedContext.taskId, new RegExp(`^${firstClient}:800:`))
+  assert.equal(trustedContext.signal, true)
+  assert.equal(trustedContext.session, undefined)
+  assert.equal(trustedContext.forgedExtra, undefined)
+  console.log('PASS: caller-supplied executor metadata cannot impersonate a client, task, session or cancellation signal')
+
+  for (let i = 0; i < 16; i++) start(first, 900 + i, `bounded-${i}`)
+  await waitFor(() => Array.from({ length: 16 }, (_, i) => running.has(`bounded-${i}`)).every(Boolean), 'sixteen calls enter the client boundary')
+  start(first, 916, 'bounded-overflow')
+  await waitFor(() => response(first, 916), 'seventeenth concurrent call is rejected')
+  assert.equal(response(first, 916).ok, false)
+  assert.match(response(first, 916).error, /RESOURCE_LIMIT/)
+  assert.equal(running.has('bounded-overflow'), false)
+  for (let i = 0; i < 16; i++) running.get(`bounded-${i}`).finish()
+  await waitFor(() => Array.from({ length: 16 }, (_, i) => response(first, 900 + i)).every(Boolean), 'bounded calls release their slots')
+  first.socket.send(JSON.stringify({ id: 917, tool: 'inspect_context', args: {} }))
+  await waitFor(() => response(first, 917), 'completed calls free concurrency capacity')
+  assert.equal(response(first, 917).ok, true)
+  console.log('PASS: the per-client concurrency limit rejects the seventeenth call before dispatch and releases capacity on completion')
+
+  const oversized = await connect()
+  const oversizedClosed = new Promise((resolve) => oversized.socket.once('close', resolve))
+  oversized.socket.on('error', () => {})
+  oversized.socket.send(JSON.stringify({ id: 1, tool: 'inspect_context', args: { text: 'x'.repeat(2 * 1024 * 1024) } }))
+  assert.equal(await oversizedClosed, 1009)
+  assert.equal(response(oversized, 1), undefined)
+  console.log('PASS: an oversized WebSocket request closes with 1009 before tool dispatch')
+
   for (const outcome of ['complete', 'cancel']) {
     first.messages.length = 0
     const original = `duplicate-original-${outcome}`
@@ -332,7 +400,9 @@ try {
   first.messages.length = 0
   start(first, 20, 'before-pause', { ignoreAbort: true })
   await waitFor(() => running.has('before-pause'), 'abort-ignoring old handler reaches its deferred gate')
-  server.pause()
+  pauseWithFailingNotification(() => server.pause())
+  assert.deepEqual(pauseNotifications, [undefined], 'global notification remains synchronous when its callback fails')
+  pauseNotifications.length = 0
   assert.equal(running.get('before-pause').signal.aborted, true)
   assert.equal(response(first, 20), undefined, 'old handler stays pending despite abort')
   assert.deepEqual(server.activity().calls, [])
@@ -384,7 +454,9 @@ try {
   start(first, 30, 'pause-client')
   start(second, 30, 'other-client-active')
   await waitFor(() => running.has('pause-client') && running.has('other-client-active'), 'client-scoped pause tasks start')
-  server.pauseClient(firstClient)
+  pauseWithFailingNotification(() => server.pauseClient(firstClient))
+  assert.deepEqual(pauseNotifications, [firstClient], 'client notification remains synchronous when its callback fails')
+  pauseNotifications.length = 0
   await waitFor(() => response(first, 30), 'client-scoped pause aborts its active call')
   assert.match(response(first, 30).error, /cancelled pause-client/)
   assert.equal(running.get('other-client-active').signal.aborted, false, 'client pause leaves another client running')

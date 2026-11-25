@@ -4,7 +4,7 @@
  */
 ;(() => {
   const root = document.documentElement
-  let theme = 'light'
+  let theme = 'dark'
   let locale = ''
   try {
     const savedTheme = localStorage.getItem('aa.theme')

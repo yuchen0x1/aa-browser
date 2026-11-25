@@ -39,7 +39,7 @@ export interface AppSettings {
 
 const DEFAULTS: AppSettings = {
   locale: 'auto',
-  theme: 'light',
+  theme: 'dark',
   searchEngine: 'https://www.bing.com/search?q=',
   fullSnapshot: false,
   downloadDir: '',

@@ -2,6 +2,14 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
+## v0.18.0 — 2026-11-25
+
+- 独立持久化 Profile、客户端绑定、并发租约与加密离线备份；保留旧默认 Session 和所有 47 个工具，新增 6 个分组入口。
+- 复用现有执行器的工作流引擎，持久化依赖步骤与检查点；崩溃恢复不盲目重放副作用，重新检查页面并要求人工审批。
+- 强制高风险审批、敏感数据默认脱敏、Profile 文件边界和传输限额；限定范围授权不能替代具体动作确认。
+- 截图绑定的视觉坐标操作、实际生效的 Profile 代理、扩展管理及统一诊断；桌面面板连接真实状态。
+- 升级依赖并补充双 Profile、真实工作流恢复、安全、视觉网络和桌面回归。完整范围、测试证据及限制见交付报告与本版发布说明。
+
 ## v0.17.0 — 2026-11-24
 
 - **GitHub Release 智能下载**：公开更新先走 GitHub 官方线路；连接失败、持续低速或传输中断后，按线路评分尝试 GH-Proxy 和备用线路。支持有界重试、退避、冷却和 HTTP Range 断点续传，继续使用现有更新进度界面。

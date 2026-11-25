@@ -104,7 +104,10 @@ export class NetworkCapture {
   private entries: NetRequest[] = []
   private byId = new Map<string, NetRequest>()
   private listener: ((_e: unknown, method: string, params: Record<string, unknown>) => void) | null = null
+  private generation = 0
+  private enabling?: Promise<void>
   private fetchAttached = false
+  private fetchEnabling?: Promise<void>
   private mocks: MockRule[] = []
   private mockSeq = 0
 
@@ -116,56 +119,69 @@ export class NetworkCapture {
     return this.attached
   }
 
+  private assertCurrent(generation: number): void {
+    if (generation !== this.generation || this.wc.isDestroyed() || !this.wc.debugger.isAttached()) {
+      throw new ActionError('页面已关闭或调试通道已释放，抓包初始化已取消。')
+    }
+  }
+
   /** 惰性启用：attach 调试器并开启 Network 域（幂等） */
   async ensure(): Promise<void> {
-    if (this.attached) return
+    if (this.wc.isDestroyed()) throw new ActionError('页面已关闭，无法开启抓包。')
     const dbg = this.wc.debugger
-    // 对话框守卫会先一步 attach 同一个 debugger；此时不应再 attach，直接复用。
-    if (!dbg.isAttached()) {
+    if (this.attached && dbg.isAttached()) return
+    if (this.attached) this.dispose()
+    if (this.enabling) return this.enabling
+    const generation = this.generation
+    const pending = (async () => {
+      // 对话框守卫会先一步 attach 同一个 debugger；此时不应再 attach，直接复用。
+      const attachedHere = !dbg.isAttached()
+      if (attachedHere) {
+        try {
+          dbg.attach('1.3')
+        } catch (err) {
+          throw new ActionError(
+            `无法开启抓包：调试通道被占用（通常是 DevTools 已打开，请先关闭后重试）。(${(err as Error).message})`
+          )
+        }
+      }
       try {
-        dbg.attach('1.3')
+        await dbg.sendCommand('Network.enable', { maxResourceBufferSize: 5000000 })
       } catch (err) {
-        throw new ActionError(
-          `无法开启抓包：调试通道被占用（通常是 DevTools 已打开，请先关闭后重试）。(${(err as Error).message})`
-        )
+        this.assertCurrent(generation)
+        if (attachedHere) {
+          try { dbg.detach() } catch { /* 调试通道可能已经关闭。 */ }
+        }
+        throw new ActionError(`无法开启抓包：Network.enable 失败。(${(err as Error).message})`)
       }
-    }
-    try {
-      await dbg.sendCommand('Network.enable', { maxResourceBufferSize: 5000000 })
-    } catch (err) {
-      try {
-        dbg.detach()
-      } catch {
-        /* 忽略 */
-      }
-      throw new ActionError(`无法开启抓包：Network.enable 失败。(${(err as Error).message})`)
-    }
-    this.listener = (_e, method, params) => this.onMessage(method, params)
-    dbg.on('message', this.listener)
-    this.attached = true
+      this.assertCurrent(generation)
+      this.listener = (_e, method, params) => this.onMessage(method, params)
+      dbg.on('message', this.listener)
+      this.attached = true
+    })()
+    this.enabling = pending
+    try { await pending }
+    finally { if (this.enabling === pending) this.enabling = undefined }
   }
 
   dispose(): void {
-    if (!this.attached) return
+    const wasEnabling = this.attached || this.enabling !== undefined
+    // Invalidate pending enables too; this instance may be reused after DevTools closes.
+    this.generation++
+    this.enabling = undefined
+    this.disableMockInterception()
     if (this.listener) {
-      try {
-        this.wc.debugger.removeListener('message', this.listener)
-      } catch {
-        /* 忽略 */
-      }
-    }
-    // 只关闭 Network 域，不 detach 调试器：
-    // 调试通道现在由对话框守卫与抓包共用，detach 会让守卫在后续导航中失效。
-    try {
-      void this.wc.debugger.sendCommand('Network.disable').catch(() => {})
-    } catch {
-      /* 忽略 */
+      try { this.wc.debugger.removeListener('message', this.listener) } catch { /* 页面可能已销毁。 */ }
     }
     this.attached = false
     this.listener = null
-    if (this.fetchAttached) {
-      this.fetchAttached = false
-      // 规则本身留在内存里：DevTools 关闭后可以重新安装拦截，不应静默丢失。
+    // 只关闭 Network 域，不 detach 对话框守卫共享的调试通道。
+    try {
+      if (wasEnabling && !this.wc.isDestroyed()) {
+        void this.wc.debugger.sendCommand('Network.disable').catch(() => {})
+      }
+    } catch {
+      /* 忽略 */
     }
   }
 
@@ -236,31 +252,46 @@ export class NetworkCapture {
    */
   async ensureMockInterception(): Promise<void> {
     if (!this.mocks.length) {
-      if (this.fetchAttached) this.disableMockInterception()
+      if (this.fetchAttached || this.fetchEnabling) this.disableMockInterception()
       return
     }
-    const dbg = this.wc.debugger
-    if (!this.attached) await this.ensure()
+    const generation = this.generation
+    await this.ensure()
+    this.assertCurrent(generation)
+    if (!this.mocks.length) return
     if (this.fetchAttached) return
-    try {
-      await dbg.sendCommand('Fetch.enable', {
-        patterns: [{ urlPattern: '*', requestStage: 'Request' }],
-        handleAuthRequests: false
-      })
-      dbg.on('message', this.onFetchMessage)
-      this.fetchAttached = true
-    } catch (err) {
-      throw new ActionError(`无法开启请求拦截：${(err as Error).message}（需先关闭 DevTools）`)
-    }
+    if (this.fetchEnabling) return this.fetchEnabling
+    const dbg = this.wc.debugger
+    const pending: Promise<void> = Promise.resolve().then(async () => {
+      try {
+        this.assertCurrent(generation)
+        if (this.fetchEnabling !== pending) throw new ActionError('请求拦截初始化已取消。')
+        await dbg.sendCommand('Fetch.enable', {
+          patterns: [{ urlPattern: '*', requestStage: 'Request' }],
+          handleAuthRequests: false
+        })
+        this.assertCurrent(generation)
+        if (this.fetchEnabling !== pending) throw new ActionError('请求拦截初始化已取消。')
+        if (!this.mocks.length) { this.disableMockInterception(); return }
+        dbg.on('message', this.onFetchMessage)
+        this.fetchAttached = true
+      } catch (err) {
+        throw new ActionError(`无法开启请求拦截：${(err as Error).message}（需先关闭 DevTools）`)
+      }
+    })
+    this.fetchEnabling = pending
+    try { await pending }
+    finally { if (this.fetchEnabling === pending) this.fetchEnabling = undefined }
   }
 
   private disableMockInterception(): void {
-    if (!this.fetchAttached) return
+    const wasEnabling = this.fetchAttached || this.fetchEnabling !== undefined
     this.fetchAttached = false
-    const dbg = this.wc.debugger
+    this.fetchEnabling = undefined
     try {
+      const dbg = this.wc.debugger
       dbg.removeListener('message', this.onFetchMessage)
-      dbg.sendCommand('Fetch.disable').catch(() => {})
+      if (wasEnabling && !this.wc.isDestroyed()) void dbg.sendCommand('Fetch.disable').catch(() => {})
     } catch {
       /* 忽略 */
     }

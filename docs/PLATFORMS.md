@@ -8,7 +8,9 @@
 | Ubuntu 桌面 x86_64 | v0.17.0 AppImage | MCP 需要系统 Node.js 22.12+；CI 验证 Ubuntu 24.04 + Xvfb，其他发行版需实机确认 | AppImage 可检查、下载及确认重启；替换前保留本机旧 AppImage |
 | 其他发行版和架构 | 见评估表 | 兼容性需要实机验证 | 暂无独立发行渠道 |
 
-浏览、查找、共享登录态与隔离标签、下载、历史、权限确认、跨会话标签恢复和 47 个 MCP 工具来自同一内核。v0.17.0 的正式包覆盖 Windows x64 和 Linux x86_64。Windows 安装助手 `install.mjs` 负责 NSIS 安装和 WorkBuddy Connector 生成。Linux AppImage 可直接启动，再在「设置 → 连接 AI 客户端」中写入配置；Linux 证据仅限 Ubuntu 24.04 CI/Xvfb。独立 MCP 配置写入完成后需要重启客户端并成功调用 `browser_tabs`。
+浏览、查找、下载、历史、权限确认与跨会话标签恢复来自同一内核。v0.18.0 源码目标包含 53 个 MCP 工具，保留原有 47 个工具，新增六个 Profile、工作流、网络、视觉、权限及诊断管理入口。普通标签只在同一 Profile 内共享登录态；不同持久化 Profile 使用独立 Session，原有一次性隔离标签继续保留。源码能力不代表该版本安装包已经公开或跨平台门禁已经通过。
+
+v0.17.0 的正式包覆盖 Windows x64 和 Linux x86_64。Windows 安装助手 `install.mjs` 负责 NSIS 安装和 WorkBuddy Connector 生成。Linux AppImage 可直接启动，再在「设置 → 连接 AI 客户端」中写入配置；Linux 证据仅限 Ubuntu 24.04 CI/Xvfb。独立 MCP 配置写入完成后需要重启客户端并成功调用 `browser_tabs`。
 
 ## 安装、卸载与恢复
 
@@ -25,9 +27,17 @@ chmod u+x ~/Applications/AaBrowser.AppImage
 
 如果系统没有可用的 FUSE 挂载，可在保持 Chromium 沙箱启用的情况下，通过 `APPIMAGE_EXTRACT_AND_RUN=1 ~/Applications/AaBrowser.AppImage` 启动。遇到沙箱错误，检查发行版对 Chromium 用户命名空间的应用级策略。MCP 写入路径使用 Electron 用户数据下的 `mcp/bridge.cjs`，更新后浏览器重启会刷新桥文件。
 
-Linux 卸载时关闭应用并移除 AppImage 以及自行添加的启动器。Windows 和 Linux 用户都可以选择保留或备份 Electron 用户数据。Linux 为 XDG 配置目录下的 Aa Browser 用户数据，Windows 为用户 AppData。站点登录态及关键设置保存在 Chromium profile，临时连接描述文件默认位于 `~/.aabrowser/connection.json`。跨会话标签记录默认位于 `~/.aabrowser/session.json`（可用 `AA_BROWSER_SESSION_FILE` 覆盖），只保存普通网页地址，不含 Cookie、请求头或账号密码。移除程序后，如需移除 MCP 配置，只从各客户端中删除 `aa-browser` 条目。
+Linux 卸载时关闭应用并移除 AppImage 以及自行添加的启动器。Windows 和 Linux 用户都可以选择保留或备份 Electron 用户数据。Linux 为 XDG 配置目录下的 Aa Browser 用户数据，Windows 为用户 AppData。站点登录态及关键设置保存在 Chromium profile，临时连接描述文件默认位于 `~/.aabrowser/connection.json`。跨会话标签记录默认位于 `~/.aabrowser/session.json`（可用 `AA_BROWSER_SESSION_FILE` 覆盖）；v0.18.0 使用 v3 格式，保存普通 HTTP(S) 地址、标签 id 与 `profileId`，兼容读取 v1/v2，旧记录归属原始 `default`。该文件不保存 Cookie、Storage、请求头或账号密码，并移除地址中的账号密码与常见敏感参数。移除程序后，如需移除 MCP 配置，只从各客户端中删除 `aa-browser` 条目。
 
 Linux AppImage 的应用内更新旧文件保存在用户数据下的 `previous-versions/<版本>.AppImage`。新版本无法启动时，关闭残留进程，把需要的旧文件复制回安装目录，赋予执行权限并启动。Windows 可以重新安装原来的官方安装器。最好在尝试降级前复制用户数据。已登录会话可能受 Chromium 跨版本格式约束。
+
+## v0.18.0 Profile 与恢复
+
+旧 `default` 身份继续使用 `persist:aa-main`，保留原登录态和数据位置。新 Profile 使用独立 `persist:aa-profile-<id>`，历史、下载与证据等业务文件放在 `.aabrowser/profiles/<id>/` 的独立目录。网站权限、代理认证与扩展按对应 Profile 管理。未传 `profileId` 的旧 MCP 调用继续有效；可绑定当前客户端或在单次调用中指定身份，绑定仅影响对应客户端。未绑定且不传参数时使用当前默认项，需要原始身份时明确指定 `profileId:"default"`。
+
+停止 Profile 会关闭页面并清理其运行资源，但不能销毁 Electron Session，也不保证释放全部数据库句柄或 Service Worker。完整归档和复制要求该身份在当前进程从未初始化；先关闭目标页面并退出，再重启并在启动该身份前备份。原始 `default` 使用共享应用目录，须退出后整体备份，不能直接归档。导入始终生成新身份，不覆盖已有身份；系统绑定凭据跨机器或系统账号恢复时可能需要重新登录。
+
+Linux 若没有可用的安全密钥后端，代理密码不能持久化；工作流参数也不会回退为明文存储，重启后可能需要重录。工作流恢复不会自动重放不确定的写操作。Profile 操作、敏感读取与高危动作仍受原生审批约束；范围授权不能替代具体动作审批。详细操作与边界见 [Profile 指南](PROFILES.md)、[工作流指南](WORKFLOWS.md)、[权限安全模型](SECURITY_MODEL.md) 和 [自动更新](AUTO_UPDATE.md)。
 
 ## 平台可行性
 
