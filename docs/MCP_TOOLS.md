@@ -19,11 +19,13 @@
 | 工具 | 动作 |
 | --- | --- |
 | `browser_profiles` | `list/get/create/update/remove/start/stop/default/bind/clone/export/import` |
-| `browser_workflows` | `list/get/templates/create/run/pause/resume/cancel/retry/input` |
+| `browser_workflows` | `list/get/templates/create/run/pause/resume/cancel/retry/input/remove` |
 | `browser_network` | `get/set/apply/test/resolve/diagnose` |
 | `browser_visual` | `capture/click/drag/crop` |
 | `browser_permissions` | `list/audit/request/revoke` |
 | `browser_diagnostics` | `get/repair` |
+
+`browser_workflows action=remove` 仅删除当前 MCP 会话拥有的已完成、已取消或失败记录，必须通过原生人工确认，并按工作流实际所属 Profile 校验访问。草稿或暂停记录先取消；在途资源未释放时不能删除。删除释放 100 条历史容量，但不撤回网站副作用，也不删除已导出文件。
 
 `export/import` 名称保留在 Profile 枚举中，但当前只允许在桌面 Profile 面板使用密码输入与原生文件选择器；MCP 调用会明确拒绝，不能把密码或归档内容放在工具参数与日志里。复制同样必须满足离线条件。各参数以实际 schema 为准，不要添加不存在的授权布尔值。
 

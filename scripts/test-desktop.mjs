@@ -29,14 +29,16 @@ if (!process.versions.electron) {
   }
   delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(require('electron'), [fileURLToPath(import.meta.url), ...process.argv.slice(2)], { cwd: ROOT, env, stdio: 'inherit' })
-  const timer = setTimeout(() => { console.error('FAIL: desktop suite timed out'); child.kill() }, 120_000)
+  let timedOut = false
+  const timer = setTimeout(() => { timedOut = true; console.error('FAIL: desktop suite timed out'); child.kill() }, 120_000)
   child.once('error', (error) => { clearTimeout(timer); console.error(error); process.exitCode = 1 })
-  child.once('exit', (code) => {
+  child.once('exit', (code, signal) => {
     clearTimeout(timer)
     const exitCode = code ?? 1
     const resultFile = path.join(runDir, 'result.json')
     const result = fs.existsSync(resultFile) ? JSON.parse(fs.readFileSync(resultFile, 'utf8')) : { checks: [] }
-    fs.writeFileSync(resultFile, JSON.stringify({ ...result, status: exitCode === 0 ? 'PASS' : 'FAIL', exitCode }, null, 2))
+    fs.writeFileSync(resultFile, JSON.stringify({ ...result, status: exitCode === 0 ? 'PASS' : 'FAIL', exitCode, signal, timedOut }, null, 2))
+    if (exitCode !== 0) console.error(`FAIL: desktop Electron exited ${JSON.stringify({ code, signal, timedOut, checks: result.checks.length, resultFile })}`)
     process.exitCode = exitCode
   })
 } else {

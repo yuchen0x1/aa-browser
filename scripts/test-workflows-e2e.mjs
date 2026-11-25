@@ -102,7 +102,7 @@ async function runParent() {
         }
       } catch { /* The child publishes this marker only after the real request reaches the fixture. */ }
     }, 20) : undefined
-    const timer = setTimeout(() => { child.kill(); reject(new Error(`Workflow phase ${phase} timed out`)) }, 100_000)
+    const timer = setTimeout(() => { child.kill(); reject(new Error(`Workflow phase ${phase} timed out`)) }, 150_000)
     child.once('error', (error) => { clearTimeout(timer); clearInterval(crashProbe); reject(error) })
     child.once('exit', (code) => { clearTimeout(timer); clearInterval(crashProbe); resolve({ code, forcedCrash }) })
   })
@@ -212,7 +212,7 @@ async function runApplication() {
   const pageFor = (url) => until(() => webContents.getAllWebContents().find((wc) => wc !== chrome && wc.getURL() === url), `page ${url}`)
   const ready = (page) => page.executeJavaScript(`document.querySelector('#gate').innerHTML='<span id="ready">Ready</span>'`)
   const identity = (page) => page.executeJavaScript('({cookie:document.cookie,local:localStorage.getItem("identity"),session:sessionStorage.getItem("identity")})')
-  const create = (peer, name, steps) => peer.json('browser_workflows', { action: 'create', name, steps })
+  const create = (peer, name, steps, options = {}) => peer.json('browser_workflows', { action: 'create', name, steps, ...options })
   const command = (peer, action, workflow, extra = {}) => peer.json('browser_workflows', { action, workflowId: workflow.id, ...extra })
   const waitStatus = (workflow, status) => until(async () => {
     const current = await record(workflow.id)
@@ -289,6 +289,71 @@ async function runApplication() {
       const continued = await waitStatus(paused, 'completed')
       assert.equal(continued.steps[0].attempts, 2)
       pass('manual pause releases resources and resume verifies fresh page state before retrying a read-only step')
+
+      const clientPaused = await create(peerA, 'Client pause detached workflow', [step('client-gate', 'browser_wait', { selector: '#client-resumed', timeoutMs: 30_000 })])
+      const sibling = await create(peerB, 'Sibling survives client pause', [step('sibling-gate', 'browser_wait', { selector: '#sibling-ready', timeoutMs: 30_000 })])
+      await Promise.all([command(peerA, 'run', clientPaused), command(peerB, 'run', sibling)])
+      await until(async () => (await Promise.all([record(clientPaused.id), record(sibling.id)])).every((workflow) => workflow.steps[0].status === 'running'), 'both detached workflows running before client pause')
+      await peerA.call('browser_tasks', { action: 'pause' })
+      await until(async () => {
+        const snapshot = await platformState()
+        const workflow = snapshot.workflows.find((item) => item.id === clientPaused.id)
+        return workflow.status === 'paused' && workflow.steps[0].status === 'interrupted' && !snapshot.profiles.find((item) => item.id === a.id).leased
+      }, 'client pause aborts its detached wait and releases its Profile lease')
+      assert.equal((await record(sibling.id)).steps[0].status, 'running')
+      assert.equal((await platformState()).profiles.find((item) => item.id === b.id).leased, true)
+      await assert.rejects(peerA.call('browser_page_state'), /客户端已暂停/)
+      const pausedDesktopResume = await platform('workflow.resume', { workflowId: clientPaused.id })
+      assert.equal(pausedDesktopResume.ok, false)
+      assert.match(pausedDesktopResume.error, /CLIENT_PAUSED/)
+      await pageB.executeJavaScript('document.querySelector("#gate").insertAdjacentHTML("beforeend", \'<span id="sibling-ready">Sibling ready</span>\')')
+      assert.equal((await waitStatus(sibling, 'completed')).steps[0].attempts, 1)
+      await pageA.executeJavaScript('document.querySelector("#gate").insertAdjacentHTML("beforeend", \'<span id="client-resumed">Client ready</span>\')')
+      await peerA.call('browser_tasks', { action: 'resume' })
+      await delay(1100)
+      const stillClientPaused = await record(clientPaused.id)
+      assert.equal(stillClientPaused.status, 'paused', 'resuming a client must not automatically resume its detached workflow')
+      assert.equal(stillClientPaused.steps[0].attempts, 1)
+      assert.equal((await platformState()).profiles.find((item) => item.id === a.id).leased, false)
+      await command(peerA, 'resume', clientPaused)
+      assert.equal((await waitStatus(clientPaused, 'completed')).steps[0].attempts, 2)
+      pass('client task pause aborts an accepted workflow and releases its lease without affecting another client; client resume never replays it')
+
+      for (const scenario of [
+        { name: 'Global interrupt', selector: 'global-resume', interrupt: () => ui('window.aa.interruptAgent()'), release: () => ui('window.aa.resumeAgent()') },
+        { name: 'Monitor takeover', selector: 'takeover-resume', interrupt: () => peerB.call('browser_window', { action: 'takeover' }), release: () => peerB.call('browser_window', { action: 'release' }) }
+      ]) {
+        const running = await create(peerA, `${scenario.name} running workflow`, [step('global-gate', 'browser_wait', { selector: `#${scenario.selector}`, timeoutMs: 30_000 })])
+        await command(peerA, 'run', running)
+        await until(async () => (await record(running.id)).steps[0].status === 'running', `${scenario.name} detached wait is running`)
+        const scheduleAt = Date.now() + 2000
+        const scheduled = await create(peerB, `${scenario.name} scheduled draft`, [step('scheduled-read', 'browser_page_state')], { scheduleAt })
+        assert.equal(scheduled.status, 'draft')
+        await scenario.interrupt()
+        await until(async () => {
+          const snapshot = await platformState()
+          const active = snapshot.workflows.find((item) => item.id === running.id)
+          const draft = snapshot.workflows.find((item) => item.id === scheduled.id)
+          return active.status === 'paused' && active.steps[0].status === 'interrupted' && draft.status === 'paused' && !snapshot.profiles.find((item) => item.id === a.id).leased
+        }, `${scenario.name} pauses in-flight and scheduled workflows`)
+        if (scenario.selector === 'takeover-resume') assert.equal((await state()).monitor.control, 'human')
+        await pageA.executeJavaScript(`document.querySelector("#gate").insertAdjacentHTML("beforeend", '<span id="${scenario.selector}">Ready</span>')`)
+        await until(() => Date.now() >= scheduleAt + 1100, `${scenario.name} schedule passes while paused`)
+        assert.equal((await record(scheduled.id)).steps[0].attempts, 0, 'a paused scheduled draft must not execute at its deadline')
+        await assert.rejects(peerA.call('browser_page_state'), /中断|人工接管/)
+        await scenario.release()
+        await delay(1100)
+        const [stillRunning, stillScheduled] = await Promise.all([record(running.id), record(scheduled.id)])
+        assert.equal(stillRunning.status, 'paused')
+        assert.equal(stillRunning.steps[0].attempts, 1)
+        assert.equal(stillScheduled.status, 'paused', 'releasing global control must not re-enable a paused schedule')
+        assert.equal(stillScheduled.steps[0].attempts, 0)
+        await Promise.all([command(peerA, 'resume', running), command(peerB, 'resume', scheduled)])
+        const [finishedRunning, finishedScheduled] = await Promise.all([waitStatus(running, 'completed'), waitStatus(scheduled, 'completed')])
+        assert.equal(finishedRunning.steps[0].attempts, 2)
+        assert.equal(finishedScheduled.steps[0].attempts, 1)
+        pass(`${scenario.name} aborts detached execution and pauses future drafts; neither deadline nor control release can restart them without explicit workflow resume`)
+      }
 
       const disconnected = await create(peerB, 'Disconnected owner', [step('disconnect-point', 'browser_wait', { selector: '#reconnected', timeoutMs: 30_000 })])
       await command(peerB, 'run', disconnected)

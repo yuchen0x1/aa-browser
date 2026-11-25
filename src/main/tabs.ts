@@ -177,6 +177,7 @@ export class TabManager {
   private recentlyClosed: { url: string; profileId: string }[] = []
   activeId: string | null = null
   private renderUsers = new WeakMap<WebContents, number>()
+  private initializingPages = new WeakSet<WebContents>()
   private agentClientContext = new AsyncLocalStorage<number>()
   private agentActiveTabs = new Map<number, string>()
   private primaryAgentClientId: number | undefined
@@ -334,7 +335,7 @@ export class TabManager {
     this.assertUrlAllowed(target)
     const profiles = getProfileManager()
     const selectedProfile = profileId ?? profiles.currentProfileId()
-    profiles.get(selectedProfile)
+    profiles.assertLeaseAccess(selectedProfile)
     if (profiles.hasContext() && selectedProfile !== profiles.currentProfileId()) throw new Error('PROFILE_CONTEXT_MISMATCH: Cannot create a tab outside the bound profile')
     const reusable = restoreId !== undefined && /^t[a-z0-9]{1,32}$/.test(restoreId) && !this.tabs.some((tab) => tab.id === restoreId)
     const id = reusable ? restoreId : genId()
@@ -365,10 +366,15 @@ export class TabManager {
       }
     }
     const net = new NetworkCapture(wc)
+    this.initializingPages.add(wc)
     const ready = Promise.resolve().then(async () => {
-      if (!useIsolated) await profiles.start(selectedProfile)
-      await this.onSession?.(ses, selectedProfile)
-      await this.prepareTab(wc, net, id)
+      try {
+        if (!useIsolated) await profiles.start(selectedProfile)
+        await this.onSession?.(ses, selectedProfile)
+        await this.prepareTab(wc, net, id)
+        // close() can precede WebContents destruction; never navigate a removed tab.
+        if (wc.isDestroyed() || !this.tabs.some((entry) => entry.id === id)) throw new Error('页面已关闭')
+      } finally { this.initializingPages.delete(wc) }
     })
     const tab: Tab = {
       id,
@@ -382,7 +388,7 @@ export class TabManager {
       agentClientId: this.agentClientContext.getStore(),
       title: '新建标签页',
       url: target,
-      loading: false,
+      loading: true,
       consoleBuf: [],
       net,
       ready,
@@ -456,8 +462,10 @@ export class TabManager {
     try {
       await withTimeout(net.ensure(), 3000, 'Network.enable 初始化')
     } catch (error) {
+      if (wc.isDestroyed()) return
       console.warn(`[aa-browser] 标签 ${id} 抓包初始化失败: ${error instanceof Error ? error.message : String(error)}`)
     }
+    if (wc.isDestroyed()) return
     // 打开 DevTools 会抢占调试通道并 detach，对话框守卫、closed-shadow 捕获和抓包
     // 都随调试会话一起失效（守卫尤其危险：后续页面的 alert() 会让 Agent 永久卡死）。
     // 关闭 DevTools 后按同样顺序重新安装，恢复到打开前的状态。
@@ -470,8 +478,10 @@ export class TabManager {
           await withTimeout(installClosedShadowCapture(wc), 2500, 'closed shadow 捕获恢复')
           if (wc.isDestroyed()) return
           await withTimeout(net.ensure(), 3000, 'Network.enable 恢复')
+          if (wc.isDestroyed()) return
           if (net.mockEnabled) await net.ensureMockInterception()
         } catch (error) {
+          if (wc.isDestroyed()) return
           console.warn(`[aa-browser] 标签 ${id} DevTools 关闭后恢复页面守卫失败: ${error instanceof Error ? error.message : String(error)}`)
         }
       })()
@@ -700,8 +710,10 @@ export class TabManager {
       this.onChange()
     })
     wc.on('did-stop-loading', () => {
+      const url = wc.getURL()
+      if (this.initializingPages.has(wc) && url === 'about:blank') return
       tab.loading = false
-      tab.url = wc.getURL() || tab.url
+      tab.url = url || tab.url
       // 只移除用于初始化渲染上下文的历史项，保留真实页面的前进和后退记录。
       const history = wc.navigationHistory
       if (history.getActiveIndex() > 0 && history.getEntryAtIndex(0)?.url === 'about:blank') {
@@ -721,6 +733,7 @@ export class TabManager {
     })
     wc.on('did-navigate', (_e, url) => {
       noteNavigation(wc)
+      if (this.initializingPages.has(wc) && url === 'about:blank') return
       tab.url = url
       this.onChange()
       if (!tab.isolated) this.onNavigate?.(url, tab.title, tab.profileId)

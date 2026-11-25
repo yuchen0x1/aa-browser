@@ -6,6 +6,7 @@ import { createRequire } from 'node:module'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
+import { compileFunction } from 'node:vm'
 
 const require = createRequire(import.meta.url)
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -14,7 +15,7 @@ const out = path.join(temp, 'compiled')
 const tsc = path.join(path.dirname(require.resolve('typescript/package.json')), 'bin/tsc')
 const compiled = spawnSync(process.execPath, [tsc, '--ignoreConfig', '--noCheck', '--noResolve', '--outDir', out,
   '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--esModuleInterop',
-  ...['workflows', 'atomic-json', 'redaction'].map((name) => path.join(root, `src/main/${name}.ts`))], { cwd: root, encoding: 'utf8' })
+  ...['workflows', 'atomic-json', 'redaction', 'platform'].map((name) => path.join(root, `src/main/${name}.ts`))], { cwd: root, encoding: 'utf8' })
 assert.equal(compiled.status, 0, `Compilation failed: ${compiled.stdout}\n${compiled.stderr}`)
 const { WorkflowEngine } = require(path.join(out, 'workflows.js'))
 const key = randomBytes(32)
@@ -194,6 +195,85 @@ try {
   assert.equal(templateEngine.get(scheduled.id).status, 'completed')
   assert.equal(templateEngine.runDue(scheduleAt + 2).length, 0)
   console.log('PASS: eight templates reuse existing tools; scheduled one-shot execution runs only once')
+
+  const lifecycleConfig = options({ execute: async () => { throw new Error('failed fixture') } })
+  const lifecycle = new WorkflowEngine(lifecycleConfig)
+  const archived = lifecycle.create(definition([step('done', { maxRetries: 0 })]), 'owner-a')
+  assert.throws(() => lifecycle.remove(archived.id, 'owner-a'), /Only finished/)
+  await lifecycle.run(archived.id, 'owner-a')
+  assert.throws(() => lifecycle.remove(archived.id, 'owner-b'), /not found/)
+  assert.equal(lifecycle.get(archived.id).status, 'failed')
+  assert.equal(lifecycle.remove(archived.id, 'owner-a'), true)
+  const lifecycleReload = new WorkflowEngine(lifecycleConfig)
+  lifecycleReload.load()
+  assert.equal(lifecycleReload.get(archived.id), null, 'removal must persist across restart')
+  const capacity = new WorkflowEngine(options())
+  const full = Array.from({ length: 100 }, () => capacity.create(definition([step('read')]), 'owner-a'))
+  assert.throws(() => capacity.create(definition([step('read')]), 'owner-a'), /100 entries/)
+  capacity.cancel(full[0].id, 'owner-a')
+  capacity.remove(full[0].id, 'owner-a')
+  assert.ok(capacity.create(definition([step('replacement')]), 'owner-a').id)
+  let enteredRemoval
+  let releaseRemoval
+  const removalStarted = new Promise((resolve) => { enteredRemoval = resolve })
+  const pendingRemoval = new WorkflowEngine(options({ execute: async () => { enteredRemoval(); await new Promise((resolve) => { releaseRemoval = resolve }); return result } }))
+  const busy = pendingRemoval.create(definition([step('wait')]), 'owner-a')
+  const pendingRun = pendingRemoval.run(busy.id, 'owner-a')
+  await removalStarted
+  assert.throws(() => pendingRemoval.remove(busy.id, 'owner-a'), /still running/)
+  pendingRemoval.cancel(busy.id, 'owner-a')
+  assert.throws(() => pendingRemoval.remove(busy.id, 'owner-a'), /still running/)
+  releaseRemoval()
+  await pendingRun
+  assert.equal(pendingRemoval.remove(busy.id, 'owner-a'), true)
+  console.log('PASS: only owned idle terminal workflows can be deleted; deletion persists and releases the 100-record capacity')
+
+  const identities = []
+  const platformModule = { exports: {} }
+  const platformFile = path.join(out, 'platform.js')
+  compileFunction(fs.readFileSync(platformFile, 'utf8'), ['require', 'module', 'exports'], { filename: platformFile })(
+    (name) => name.startsWith('node:') ? require(name) : name === './actions' ? {
+      throwIfAborted: (signal) => { if (signal?.aborted) throw new Error('cancelled') }
+    } : name === './permissions' ? {
+      authorizeProfileAccess: async (profileId, clientId, approve) => {
+        identities.push({ profileId, clientId })
+        if (!await approve()) throw new Error('[PERMISSION_ERROR] Profile access was denied')
+      }
+    } : {}, platformModule, platformModule.exports)
+  const adapter = Object.create(platformModule.exports.BrowserPlatform.prototype)
+  const managed = new WorkflowEngine(options())
+  const terminal = managed.create(definition([step('read')]), 'owner-a')
+  await managed.run(terminal.id, 'owner-a')
+  const confirmations = []
+  let allowedDelete = false
+  adapter.workflows = managed
+  adapter.ownerClients = new Map()
+  adapter.desktopWorkflows = new Set()
+  adapter.profiles = {
+    currentProfileId: () => 'bound-other-profile',
+    get: (id) => ({ id }),
+    withUse: async (id, operation) => { assert.equal(id, 'profile-a'); return operation() }
+  }
+  adapter.deps = { changed() {}, isClientConnected: () => true, controlAllowed() {} }
+  adapter.approve = async (action, profileId) => {
+    confirmations.push({ action, profileId })
+    return action !== 'Delete workflow' || allowedDelete
+  }
+  const caller = { owner: 'owner-a', clientId: 7 }
+  await assert.rejects(adapter.invoke('workflow', 'remove', { workflowId: terminal.id }, { owner: 'owner-b', clientId: 8 }), /WORKFLOW_NOT_FOUND/)
+  assert.equal(confirmations.length, 0, 'a foreign owner cannot request deletion approval')
+  await assert.rejects(adapter.invoke('workflow', 'remove', { workflowId: terminal.id, profileId: 'other' }, caller), /PERMISSION_DENIED/)
+  assert.equal(confirmations.length, 0, 'an explicit wrong Profile is rejected before approval')
+  await assert.rejects(adapter.invoke('workflow', 'remove', { workflowId: terminal.id, approved: true }, caller), /APPROVAL_DENIED/)
+  assert.equal(managed.get(terminal.id).status, 'completed', 'native denial must retain the workflow')
+  assert.deepEqual(identities.at(-1), { profileId: 'profile-a', clientId: 7 }, 'authorization uses the saved Profile, not the client binding')
+  allowedDelete = true
+  assert.equal(await adapter.invoke('workflow', 'remove', { workflowId: terminal.id }, caller), true)
+  assert.equal(managed.get(terminal.id), null)
+  assert.equal(confirmations.filter((entry) => entry.action === 'Delete workflow').length, 2, 'every deletion attempt needs a concrete native decision')
+  const draft = managed.create(definition([step('read')]), 'owner-a')
+  await assert.rejects(adapter.invoke('workflow', 'remove', { workflowId: draft.id }, caller), /WORKFLOW_CONFLICT/)
+  console.log('PASS: workflow deletion dispatcher enforces owner, actual Profile access and fresh native approval; denial cannot be bypassed')
 } finally {
   fs.rmSync(temp, { recursive: true, force: true })
 }

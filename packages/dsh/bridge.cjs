@@ -5214,7 +5214,7 @@ const TOOL_DEFS = [
 	{
 		name: "browser_workflows",
 		title: "可恢复工作流",
-		description: "Execute durable, Profile-bound workflows using existing browser tools. Steps retain dependencies, checkpoints and results. Restart never automatically replays side effects; recovery verifies current page state and requests fresh native approval. Mutating interrupted steps require targeted review/retry. Inputs are encrypted where OS storage is available; unavailable secrets require reentry.",
+		description: "Execute durable, Profile-bound workflows using existing browser tools. Steps retain dependencies, checkpoints and results. Restart never automatically replays side effects; recovery verifies current page state and requests fresh native approval. Mutating interrupted steps require targeted review/retry. Inputs are encrypted where OS storage is available; unavailable secrets require reentry. remove deletes only completed, cancelled or failed workflows after native desktop approval; cancel drafts first. Website changes and exported files are retained.",
 		inputSchema: {
 			type: "object",
 			properties: {
@@ -5230,7 +5230,8 @@ const TOOL_DEFS = [
 						"resume",
 						"cancel",
 						"retry",
-						"input"
+						"input",
+						"remove"
 					]
 				},
 				workflowId: { type: "string" },

@@ -2777,7 +2777,7 @@ function renderWorkflows(): void {
   list.replaceChildren()
   list.dataset['signature'] = signature
   if (!workflows.length) platformEmpty(list, uiText('暂无工作流', 'No workflows'))
-  for (const workflow of [...workflows].reverse().slice(0, 50)) list.append(renderWorkflow(workflow))
+  for (const workflow of [...workflows].reverse()) list.append(renderWorkflow(workflow))
   for (const detail of list.querySelectorAll<HTMLDetailsElement>('details')) if (open.has(detail.dataset['detailKey'])) detail.open = true
 }
 
@@ -2824,6 +2824,7 @@ function renderWorkflow(workflow: PlatformWorkflow): HTMLElement {
   if (['paused', 'interrupted', 'waiting', 'waiting_approval', 'waiting-approval', 'waiting_confirmation'].includes(workflow.status)) actions.append(platformButton(uiText('继续工作流', 'Resume workflow'), () => action('resume'), '▶'))
   if (workflow.status === 'failed') actions.append(platformButton(uiText('重试失败步骤', 'Retry failed step'), () => action('retry'), '↻'))
   if (!['completed', 'succeeded', 'cancelled'].includes(workflow.status)) actions.append(platformButton(uiText('取消工作流', 'Cancel workflow'), () => action('cancel'), '×'))
+  if (['completed', 'cancelled', 'failed'].includes(workflow.status)) actions.append(platformButton(uiText('删除工作流', 'Delete workflow'), () => action('remove'), '×'))
   header.append(content, platformBadge(workflow.status), actions)
   container.append(header)
   const progress = document.createElement('progress')

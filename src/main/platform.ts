@@ -262,7 +262,13 @@ export class BrowserPlatform implements PlatformAdapter {
   async invoke(domain: PlatformDomain, action: string, input: Record<string, unknown>, context: PlatformCallContext): Promise<unknown> {
     throwIfAborted(context.signal)
     if (context.clientId !== undefined) this.ownerClients.set(context.owner, context.clientId)
-    const id = typeof input.profileId === 'string' ? input.profileId : this.profiles.currentProfileId()
+    let id = typeof input.profileId === 'string' ? input.profileId : this.profiles.currentProfileId()
+    if (domain === 'workflow' && action === 'remove') {
+      const target = this.workflows.get(String(input.workflowId ?? ''), context.desktop ? undefined : context.owner)
+      if (!target) throw new Error('[WORKFLOW_NOT_FOUND] Workflow was not found')
+      if (typeof input.profileId === 'string' && input.profileId !== target.profileId) throw new Error('[PERMISSION_DENIED] Workflow belongs to another Profile')
+      id = target.profileId
+    }
     this.profiles.get(id)
     if (context.clientId !== undefined && !(domain === 'profile' && ['list', 'create', 'bind'].includes(action))) {
       await authorizeProfileAccess(id, context.clientId, () => this.approve('Access browser identity', id, 'This MCP client will access this Profile login state.', context.signal))
@@ -396,6 +402,16 @@ export class BrowserPlatform implements PlatformAdapter {
     if (!record) throw new Error('[WORKFLOW_NOT_FOUND] Workflow was not found')
     if (action === 'get') return record
     const runOwner = context.desktop ? record.owner : owner
+    if (action === 'remove') {
+      if (!['completed', 'cancelled', 'failed'].includes(record.status)) throw new Error('[WORKFLOW_CONFLICT] Only finished workflows can be removed; cancel drafts or paused work first')
+      return this.profiles.withUse(record.profileId, async () => {
+        await this.requireApproval('Delete workflow', record.profileId, `Permanently delete workflow ${record.name} (${record.id}), including its checkpoints and saved inputs. Exported files and website changes are retained.`, context)
+        const removed = this.workflows.remove(workflowId, runOwner)
+        this.desktopWorkflows.delete(workflowId)
+        this.deps.changed()
+        return removed
+      })
+    }
     if (action === 'pause') return this.workflows.pause(workflowId, runOwner)
     if (action === 'cancel') return this.workflows.cancel(workflowId, runOwner)
     if (action === 'input') return this.workflows.setStepInput(workflowId, String(input.stepId), input.input as Record<string, unknown>, runOwner)

@@ -158,6 +158,7 @@ async function run() {
     }, work.id, url)
     const workflow = await until(async () => (await platform()).workflows.find((item) => item.name === 'UI inspection'), 'workflow created')
     await until(() => ui(() => !!document.querySelector('#workflow-list [aria-label="Run workflow"]')), 'run button')
+    assert.equal(await ui(() => !!document.querySelector('#workflow-list [aria-label="Delete workflow"]')), false, 'draft workflows must be cancelled before deletion')
     await click('#workflow-list [aria-label="Run workflow"]')
     await approve()
     await until(async () => (await platform()).workflows.find((item) => item.id === workflow.id)?.status === 'completed', 'workflow completion')
@@ -181,6 +182,17 @@ async function run() {
       fs.writeFileSync(path.join(directory, name), image.toPNG())
     }
     await screenshot('workflows.png')
+    await until(() => ui(() => !!document.querySelector('#workflow-list [aria-label="Delete workflow"]:not(:disabled)')), 'completed workflow delete control')
+    await click('#workflow-list [aria-label="Delete workflow"]')
+    await until(async () => (await state()).pendingApprovals.some((item) => item.fieldLabel === 'Delete workflow'), 'workflow deletion native confirmation')
+    await click('.approval-deny')
+    await until(() => ui(() => !!document.querySelector('#workflow-list [aria-label="Delete workflow"]:not(:disabled)')), 'denied workflow deletion settles')
+    assert.equal((await platform()).workflows.some((item) => item.id === workflow.id), true)
+    await click('#workflow-list [aria-label="Delete workflow"]')
+    await approve()
+    await until(async () => !(await platform()).workflows.some((item) => item.id === workflow.id), 'approved workflow removal')
+    await until(() => ui(() => !document.querySelector('#workflow-list [aria-label="Delete workflow"]')), 'deleted workflow row removed')
+    pass('Only terminal workflows expose deletion; native denial preserves records and approval removes them')
     await section('network')
     await ui((id) => {
       document.querySelector('#network-profile').value = id

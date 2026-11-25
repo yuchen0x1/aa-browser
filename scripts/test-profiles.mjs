@@ -253,21 +253,22 @@ try {
   })
   await test('desktop workflow context selects only its Profile and popups inherit client and identity', async () => {
     class Contents extends EventEmitter {
-      constructor(partition) { super(); this.session = sessionProvider(partition); this.url = ''; this.destroyed = false; this.navigationHistory = { getActiveIndex: () => 0, canGoBack: () => false, canGoForward: () => false } }
+      constructor(partition) { super(); this.session = sessionProvider(partition); this.url = ''; this.loads = []; this.destroyed = false; this.navigationHistory = { getActiveIndex: () => 0, canGoBack: () => false, canGoForward: () => false } }
       isDestroyed() { return this.destroyed }
       getURL() { return this.url }
       getTitle() { return 'Fixture' }
-      async loadURL(url) { this.url = url }
+      async loadURL(url) { this.loads.push(url); this.url = url }
       setWindowOpenHandler(handler) { this.popup = handler }
       setBackgroundThrottling() {}
-      close() { this.destroyed = true }
+      close() { this.closeRequested = true; if (!this.deferDestruction) this.destroyed = true }
     }
     class View { constructor(options) { this.webContents = new Contents(options.webPreferences.partition) } }
+    let ensureNetwork = async () => {}
     const redaction = load('redaction', {})
     const { TabManager } = load('tabs', {
       electron: { app, session: { fromPartition: sessionProvider }, WebContentsView: View },
       'node:async_hooks': { AsyncLocalStorage }, './profiles': profiles, './redaction': redaction,
-      './network': { NetworkCapture: class { async ensure() {} releaseDebugger() {} } },
+      './network': { NetworkCapture: class { async ensure() { await ensureNetwork() } releaseDebugger() {} } },
       './dialogs': { async installDialogGuard() {} }, './closed-shadow': { async installClosedShadowCapture() {} },
       './ref-context': { noteNavigation() {}, noteRendererRestart() {} }
     })
@@ -298,6 +299,53 @@ try {
     assert.equal(tabs.activeForUi().partition, work.partition)
     tabs.closeProfile(one.id)
     assert.equal(tabs.tabs.length, 0, 'closing a Profile must not reopen its last tab')
+    const releaseLease = manager.acquireLease(one.id, 'tab-creation-workflow')
+    try {
+      assert.throws(() => tabs.createTab(undefined, true, false, false, undefined, one.id), /PROFILE_BUSY/)
+      assert.equal(tabs.tabs.length, 0, 'a rejected tab must not allocate a view or enter the tab list')
+      const leasedTab = manager.runWithLease(one.id, 'tab-creation-workflow', () => tabs.createTab(undefined, true, false, false, undefined, one.id))
+      await leasedTab.initialNavigation
+      assert.equal(leasedTab.profileId, one.id, 'a workflow may create tabs inside its own lease')
+      tabs.closeProfile(one.id)
+    } finally { releaseLease() }
+    let finishCleanup, announceCleanup
+    const cleanupEntered = new Promise((resolve) => { announceCleanup = resolve })
+    manager.onStop = async () => { announceCleanup(); await new Promise((resolve) => { finishCleanup = resolve }) }
+    const stopping = manager.stop(one.id)
+    try {
+      await cleanupEntered
+      assert.throws(() => tabs.createTab(undefined, true, false, false, undefined, one.id), /PROFILE_BUSY/)
+      assert.equal(tabs.tabs.length, 0, 'stopping a Profile must synchronously reject replacement tabs')
+    } finally { finishCleanup(); await stopping; manager.onStop = null }
+    for (const destroyedOnClose of [true, false]) {
+      for (const rejected of [false, true]) {
+        let finishNetwork, announceNetwork
+        const networkEntered = new Promise((resolve) => { announceNetwork = resolve })
+        ensureNetwork = () => new Promise((resolve, reject) => { finishNetwork = rejected ? () => reject(new Error('Target closed')) : resolve; announceNetwork() })
+        const target = 'https://fixture.test/must-not-load-after-close'
+        const closing = tabs.createTab(target, true, false, false, undefined, one.id)
+        const readyRejected = assert.rejects(closing.ready, /页面已关闭/)
+        const navigationRejected = assert.rejects(closing.initialNavigation, /页面已关闭/)
+        const contents = closing.view.webContents
+        contents.deferDestruction = !destroyedOnClose
+        await networkEntered
+        assert.equal(contents.getURL(), 'about:blank')
+        contents.emit('did-navigate', {}, 'about:blank')
+        assert.equal(closing.url, target, 'the temporary context navigation must not overwrite the requested URL')
+        contents.emit('did-stop-loading')
+        assert.equal(closing.url, target, 'the temporary context completion must not overwrite the requested URL')
+        assert.deepEqual(tabs.sessionTabs().tabs, [{ url: target, title: closing.title, id: closing.id, profileId: one.id }], 'a pending initial navigation must retain its requested URL in the session snapshot')
+        tabs.closeTab(closing.id, false)
+        assert.equal(contents.closeRequested, true)
+        assert.equal(contents.isDestroyed(), destroyedOnClose, 'close and native destruction may complete at different times')
+        finishNetwork()
+        await Promise.all([readyRejected, navigationRejected])
+        assert.deepEqual(contents.loads, ['about:blank'], 'a removed tab must never start its target navigation after initialization settles')
+        if (destroyedOnClose) assert.equal(contents.listenerCount('devtools-closed'), 0, 'late Network.enable must not register events on a destroyed page')
+        assert.equal(tabs.tabs.length, 0)
+      }
+    }
+    ensureNetwork = async () => {}
   })
   await test('a custom default restores its extensions only into its own partition, preserving the legacy default', async () => {
     const customRoot = path.join(fixture, 'custom-default')

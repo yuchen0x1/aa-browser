@@ -365,8 +365,13 @@ export class WorkflowEngine {
     this.assertIdle(id)
     if (!['completed', 'cancelled', 'failed'].includes(stored.record.status)) throw new WorkflowError('WORKFLOW_CONFLICT', 'Only finished workflows can be removed')
     this.workflows.delete(id)
-    for (const step of stored.record.steps) this.inputs.delete(this.inputKey(id, step.id))
-    this.persist()
+    try { this.persist() }
+    catch (error) { this.workflows.set(id, stored); throw error }
+    for (const step of stored.record.steps) {
+      this.inputs.delete(this.inputKey(id, step.id))
+      this.approvedRetries.delete(this.inputKey(id, step.id))
+    }
+    try { this.options.onChange?.(copy(stored.record)) } catch { /* Removal is already durable. */ }
     return true
   }
 

@@ -28,6 +28,7 @@ async function run() {
   const directory = process.env.AA_PROFILE_E2E_DIR
   const checks = [], sockets = [], pending = new Set()
   const errors = []
+  const crashDiagnostics = { events: [] }
   process.on('unhandledRejection', (error) => { errors.push(String(error?.stack ?? error)); console.error(error) })
   let nextId = 0, proxyRequests = 0, chrome
   const pass = (label) => { checks.push(label); console.log(`PASS: ${label}`) }
@@ -186,22 +187,88 @@ async function run() {
     await a('browser_navigate', { tabId: tabA.id, url: `${base}/account`, snapshot: false })
     pass('actual Chromium HTTP proxy routing applies to one Profile and switching back restores direct connections')
     const siblingPid = pageB.getOSProcessId()
-    pageA.forcefullyCrashRenderer()
-    await until(async () => (await state()).tabs.find((tab) => tab.id === tabA.id)?.recovery?.status === 'recovered', 'renderer crash recovery', 30_000)
+    const targetPid = pageA.getOSProcessId()
+    assert.equal(pageA.session, sesA, 'crash injection must target the work Profile Session')
+    assert.equal(pageA.getURL(), `${base}/account`, 'crash injection must target the restored account page')
+    assert.ok(targetPid > 0 && siblingPid > 0, 'both Profile renderers must have live OS process ids')
+    assert.notEqual(targetPid, siblingPid, 'independent Profile Sessions must use separate renderer processes')
+    assert.notEqual(targetPid, process.pid, 'crash injection must never target the main process')
+    assert.notEqual(targetPid, chrome.getOSProcessId(), 'crash injection must never target the privileged renderer')
+    Object.assign(crashDiagnostics, { targetPid, siblingPid, method: process.platform === 'linux' ? 'SIGKILL' : 'forcefullyCrashRenderer' })
+    let gone
+    const observeGone = (source, details) => {
+      const record = { source, reason: details.reason, exitCode: details.exitCode, at: Date.now() }
+      crashDiagnostics.events.push(record)
+      gone ??= record
+    }
+    const onContentsGone = (_event, details) => observeGone('webContents', details)
+    const onAppGone = (_event, crashed, details) => { if (crashed === pageA) observeGone('app', details) }
+    pageA.on('render-process-gone', onContentsGone)
+    app.on('render-process-gone', onAppGone)
+    const recoveryState = async () => {
+      const tabs = (await state()).tabs
+      const target = tabs.find((tab) => tab.id === tabA.id)
+      const sibling = tabs.find((tab) => tab.id === tabB.id)
+      const summarize = (tab) => tab ? { id: tab.id, profileId: tab.profileId, loading: tab.loading, recovery: tab.recovery } : null
+      return { target: summarize(target), sibling: summarize(sibling), targetPid: pageA.isDestroyed() ? null : pageA.getOSProcessId(), siblingPid: pageB.isDestroyed() ? null : pageB.getOSProcessId() }
+    }
+    try {
+      // Match the Linux injection already exercised by test-renderer-crash:
+      // forcefullyCrashRenderer can enter Chromium's hung-crash path there.
+      if (process.platform === 'linux') process.kill(targetPid, 'SIGKILL')
+      else pageA.forcefullyCrashRenderer()
+      await until(() => gone, 'target renderer render-process-gone event', 12_000)
+      assert.ok(['crashed', 'killed', 'abnormal-exit'].includes(gone.reason), `unexpected target renderer exit: ${JSON.stringify(gone)}`)
+      await until(async () => {
+        const current = await recoveryState()
+        crashDiagnostics.lastState = current
+        assert.notEqual(current.target?.recovery?.status, 'failed', `renderer recovery failed: ${JSON.stringify(current)}`)
+        return current.target?.recovery?.status === 'recovered' ? current : null
+      }, 'renderer crash recovery', 30_000)
+      assert.equal(crashDiagnostics.lastState.target.recovery.reason, 'crash')
+      assert.equal(crashDiagnostics.lastState.target.recovery.attempts, 1)
+      assert.ok(crashDiagnostics.lastState.targetPid > 0, 'recovered renderer must have a live process')
+      assert.notEqual(crashDiagnostics.lastState.targetPid, targetPid, 'recovery must replace the crashed renderer process')
+      assert.equal(pageA.getURL(), `${base}/account`, 'recovery must preserve the account URL')
+    } catch (error) {
+      crashDiagnostics.lastState = await recoveryState().catch((failure) => ({ error: String(failure) }))
+      console.error(`Profile renderer crash diagnostics: ${JSON.stringify(crashDiagnostics)}`)
+      throw error
+    } finally {
+      pageA.removeListener('render-process-gone', onContentsGone)
+      app.removeListener('render-process-gone', onAppGone)
+    }
     assert.equal(pageB.getOSProcessId(), siblingPid)
+    assert.match(text(await a('browser_extract', { tabId: tabA.id })), /alice/)
     assert.match(text(await b('browser_extract', { tabId: tabB.id })), /bob/)
     assert.equal((await sesA.cookies.get({ url: base })).find((cookie) => cookie.name === 'fixture_identity').value, 'alice')
     pass('a renderer crash recovers without changing the other Profile renderer or clearing either login')
     const sessionSnapshot = await until(() => { try { const value = JSON.parse(fs.readFileSync(process.env.AA_BROWSER_SESSION_FILE, 'utf8')); return value.version === 3 && value.tabs.some((tab) => tab.profileId === one.id) && value.tabs.some((tab) => tab.profileId === two.id) ? value : null } catch { return null } }, 'profile restore snapshot')
     assert.equal(sessionSnapshot.tabs.filter((tab) => tab.url === `${base}/account`).length, 2)
     pass('session persistence records both Profiles when they show the same URL')
+    await approved(a('browser_extensions', { action: 'enable', id: extensionId }))
+    assert.equal(sesA.extensions.getAllExtensions().length, 1)
+    await approved(a('browser_profiles', { action: 'stop', profileId: one.id }))
+    assert.equal((await state()).tabs.some((tab) => tab.profileId === one.id), false)
+    assert.equal(sesA.extensions.getAllExtensions().length, 0)
+    assert.equal((await sesA.cookies.get({ url: base })).find((cookie) => cookie.name === 'fixture_identity').value, 'alice')
+    assert.equal(pageB.getOSProcessId(), siblingPid)
+    assert.match(text(await b('browser_extract', { tabId: tabB.id })), /bob/)
+    await approved(a('browser_profiles', { action: 'start', profileId: one.id }))
+    await a('browser_navigate', { url: `${base}/account`, newTab: true, snapshot: false })
+    pageA = await until(() => pageFor(sesA, '/account'), 'work account after Profile restart')
+    await until(() => pageA.executeJavaScript('document.body.dataset.profileExtension === "active"'), 'enabled extension after Profile restart')
+    assert.match(text(await a('browser_extract')), /alice/)
+    assert.equal(sesA.extensions.getAllExtensions().length, 1)
+    assert.equal(sesB.extensions.getAllExtensions().length, 0)
+    pass('Profile stop closes owned pages and unloads extensions; restart restores enabled extensions and login without disturbing another Profile')
     assert.deepEqual(errors, [])
     success = true
   } finally {
     for (const item of pending) { clearTimeout(item.timer); item.reject(new Error('Fixture shutdown')) }
     for (const socket of sockets) socket.terminate()
     server.closeAllConnections(); proxy.closeAllConnections(); server.close(); proxy.close()
-    fs.writeFileSync(path.join(directory, 'result.json'), JSON.stringify({ status: success ? 'PASS' : 'FAIL', checks, errors }, null, 2))
+    fs.writeFileSync(path.join(directory, 'result.json'), JSON.stringify({ status: success ? 'PASS' : 'FAIL', checks, errors, crashDiagnostics }, null, 2))
     app.exit(success ? 0 : 1)
   }
 }
