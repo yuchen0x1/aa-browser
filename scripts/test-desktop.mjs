@@ -613,7 +613,7 @@ if (!process.versions.electron) {
     assert.equal(await hudPage.executeJavaScript('window.scrollY', false), 0, 'wheel must not scroll the page while AI owns it')
     const hudActiveUi = await ui(`({takeoverHidden:document.querySelector('#agent-activity-takeover')?.hidden, action:document.querySelector('#agent-activity-action')?.textContent})`)
     assert.equal(hudActiveUi.takeoverHidden, false, 'active HUD offers an explicit takeover')
-    assert.ok(hudActiveUi.action?.includes('中断'), `active HUD keeps the interrupt action: ${JSON.stringify(hudActiveUi)}`)
+    assert.ok(/中断|Interrupt/.test(hudActiveUi.action ?? ''), `active HUD keeps the interrupt action: ${JSON.stringify(hudActiveUi)}`)
     await clickPage()
     await until(async () => (await state()).agentActivity?.paused === true, 'first page click takes over', 5000)
     assert.equal(await hudPage.executeJavaScript('window.__hudClicks', false), 0, 'takeover click must not reach the webpage')
@@ -621,8 +621,8 @@ if (!process.versions.electron) {
     assert.equal(takeoverState.monitor?.control, 'human', 'page click locks the browser to human control')
     const hudPausedUi = await ui(`({takeoverHidden:document.querySelector('#agent-activity-takeover')?.hidden, action:document.querySelector('#agent-activity-action')?.textContent, detail:document.querySelector('#agent-activity-detail')?.textContent})`)
     assert.equal(hudPausedUi.takeoverHidden, true, 'takeover action is hidden while paused')
-    assert.ok(hudPausedUi.action?.includes('继续 AI'), `paused HUD offers resume: ${JSON.stringify(hudPausedUi)}`)
-    assert.ok(hudPausedUi.detail?.includes('接管'), `paused HUD explains the handover: ${JSON.stringify(hudPausedUi)}`)
+    assert.ok(/继续 AI|Resume AI/.test(hudPausedUi.action ?? ''), `paused HUD offers resume: ${JSON.stringify(hudPausedUi)}`)
+    assert.ok(/接管|control/i.test(hudPausedUi.detail ?? ''), `paused HUD explains the handover: ${JSON.stringify(hudPausedUi)}`)
     // 接管后第二次点击才落到网页；点击同时把焦点交给页面，键盘输入才能继续。
     let forwarded = false
     for (let attempt = 0; attempt < 4 && !forwarded; attempt++) {
