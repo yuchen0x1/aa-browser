@@ -2,6 +2,13 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
+## v0.18.1 — 2026-11-26
+
+- 新增维护命令 `npm run clean:artifacts`：默认只预览清理计划；显式传入 `--apply` 后，才会移除可重建的 `out/` 和未被文档引用的本地验证运行目录。
+- 清理过程保留旧版更新测试夹具、成功的真实旧版更新提示证据、维护文档提及的验证目录、根级日志、依赖和发布产物；新增回归测试覆盖这些保护边界。
+- 删除已归档的旧版根目录 Release Notes 副本，统一由 `docs/releases/bodies/` 保存历史正文，根目录只留当前发布候选。
+- 不改变浏览器运行行为、用户数据格式或更新流程。
+
 ## v0.18.0 — 2026-11-25
 
 - 独立持久化 Profile、客户端绑定、并发租约与加密离线备份；保留旧默认 Session 和所有 47 个工具，新增 6 个分组入口。

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Verify the real v0.17.0 packaged client can discover v0.18.0 after publication.
+ * Verify the real v0.17.0 packaged client can discover the current stable release.
  * Preparation only: node scripts/test-old-version-update.mjs
  * Live check:       node scripts/test-old-version-update.mjs --run-live
  * Never downloads an update or launches an installer. The preserved package is read-only.
@@ -22,7 +22,7 @@ const packageDirectory = path.join(root, '.local-verification', 'old-v017')
 const archive = path.join(packageDirectory, 'resources', 'app.asar')
 const executable = path.join(packageDirectory, 'Aa Browser.exe')
 const oldVersion = '0.17.0'
-const expectedVersion = '0.18.0'
+const expectedVersion = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version
 const live = process.argv.includes('--run-live')
 assert.ok(process.argv.slice(2).every((arg) => arg === '--run-live'), 'Only --run-live is supported')
 assert.equal(process.platform, 'win32', 'This check uses the preserved Windows package')
