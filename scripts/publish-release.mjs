@@ -5,7 +5,7 @@ import { releaseFileNames } from './release-assets.mjs'
 
 export async function publishRelease(repos, repo, tag, sha, log = console.log) {
   const names = releaseFileNames(tag)
-  const body = await readFile(`release-notes-${tag}.md`, 'utf8')
+  const body = await readFile(`docs/releases/bodies/${tag}.md`, 'utf8')
   let release
   try {
     release = (await repos.getReleaseByTag({ ...repo, tag })).data

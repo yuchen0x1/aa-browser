@@ -960,8 +960,7 @@ if (!process.versions.electron) {
       BaseWindow.getAllWindows()[0].show()
       chrome.setBackgroundThrottling(false)
       await pause(400)
-      fs.mkdirSync(path.join(ROOT, 'docs/screenshots'), { recursive: true })
-      fs.writeFileSync(path.join(ROOT, 'docs/screenshots/page-find-toolbar.png'), (await chrome.capturePage()).toPNG())
+      fs.writeFileSync(path.join(runDir, 'page-find-toolbar.png'), (await chrome.capturePage()).toPNG())
     }
     await ui('window.aa.find("definitely-absent")')
     await until(() => ui('document.querySelector("#find-status").textContent === (document.documentElement.lang === "en-US" ? "No matches" : "未找到匹配")'), 'no results')
@@ -1203,7 +1202,7 @@ if (!process.versions.electron) {
     // 收尾前断言整个会话没有产生未处理拒绝：否则这些错误只会表现为
     // 一个没有原因的退出码 1，或者被悄悄吞掉。
     assert.deepEqual(unhandledErrors, [], `desktop suite produced unhandled errors:\n${unhandledErrors.join('\n')}`)
-    fs.writeFileSync(path.join(runDir, 'result.json'), JSON.stringify({ status: 'PASS', checks: results, screenshot: process.env.AA_DESKTOP_SCREENSHOTS === '1' ? 'docs/screenshots/page-find-toolbar.png' : undefined }, null, 2))
+    fs.writeFileSync(path.join(runDir, 'result.json'), JSON.stringify({ status: 'PASS', checks: results, screenshot: process.env.AA_DESKTOP_SCREENSHOTS === '1' ? path.relative(ROOT, path.join(runDir, 'page-find-toolbar.png')).split(path.sep).join('/') : undefined }, null, 2))
     console.log(`PASS: all ${results.length} desktop checks; report ${path.join(runDir, 'result.json')}`)
     ws.close()
     server.close()

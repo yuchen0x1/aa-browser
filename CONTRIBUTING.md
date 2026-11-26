@@ -51,10 +51,10 @@ node scripts/test-workflows.mjs # 生产工作流：依赖、加密输入、崩�
 ## 仓库文件管理
 
 - 源码、测试、图标、客户端配置模板和 `package-lock.json` 需要提交；`node_modules/`、`out/`、`release/` 等生成目录不入库。
-- 临时审计报告、调试输出、测试 profile 和下载产物统一放在 `.local-verification/`；测试退出后可删除该目录。
+- 临时审计报告、调试输出、测试 profile 和下载产物统一放在 `.local-verification/`。运行 `npm run clean:artifacts` 预览可清理项，追加 `-- --apply` 执行；文档引用的证据、成功的真实旧版更新提示证据和旧版更新夹具会保留。需要清理本地打包输出时追加 `--include-release`；`node_modules/` 和个人浏览器数据不在清理范围。
 - `.env`、本机 MCP 配置、浏览器用户数据和签名私钥不入库；环境示例文件只能包含占位符。
 - 维护过程记录、审计和历史状态快照统一放在 `docs/internal/`，根目录不再堆放已归档的轮次文档。
-- `docs/releases/release-notes.md` 保留正式版本历史，根目录只保留当前版本的 `release-notes-v<版本>.md` 供发布流程读取；旧版本完整正文在 `docs/releases/bodies/`，也可从对应 Git 标签查看。
+- `docs/releases/release-notes.md` 保留正式版本历史；发布流程直接读取 `docs/releases/bodies/v<版本>.md`，根目录不再保留重复正文。历史正文也可从对应 Git 标签查看。
 - 推送前检查 `git status --short` 和 `git diff --cached --stat`；忽略规则不会自动移除已经被 Git 跟踪的文件。
 
 ## 测试数据与界面截图
@@ -69,4 +69,4 @@ npm run test:desktop
 Remove-Item Env:AA_DESKTOP_SCREENSHOTS
 ```
 
-截图写入 `docs/screenshots/page-find-toolbar.png`；被遮挡或无可见桌面的 Windows 环境可能导致 Chromium 截图失败，该次运行会报告失败。
+截图写入本次运行的 `.local-verification/desktop-<时间戳>-<进程号>/page-find-toolbar.png`，与 `result.json` 保存在一起，不入库；被遮挡或无可见桌面的 Windows 环境可能导致 Chromium 截图失败，该次运行会报告失败。

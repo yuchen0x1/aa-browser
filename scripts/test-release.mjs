@@ -83,13 +83,15 @@ async function publish({ existing, originalAssets = [], ignoreTag = false, corru
 }
 
 await mkdir(path.join(fixture, 'release'))
-await writeFile(path.join(fixture, `release-notes-${tag}.md`), '# Fixture')
+await mkdir(path.join(fixture, 'docs/releases/bodies'), { recursive: true })
+await writeFile(path.join(fixture, 'docs/releases/bodies', `${tag}.md`), '# Fixture')
 for (const name of names) await writeFile(path.join(fixture, 'release', name), name)
 process.chdir(fixture)
 try {
   await test('new release preserves its tag, publishes only after validating both platforms', async () => {
     const result = await publish()
     assert.equal(result.release.tag_name, tag)
+    assert.equal(result.release.body, '# Fixture')
     assert.equal(result.release.draft, false)
     assert.equal(result.release.immutable, true)
     assert.equal(result.assets.length, names.length)

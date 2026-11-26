@@ -52,3 +52,7 @@ PROJECT_AUDIT_REPORT.md
 /docs/EVOLUTION-*.md
 /docs/BUG_RECHECK-*.md
 /docs/RELEASE_AUDIT-*.md
+
+# 发布正文统一维护在 docs/releases/bodies/，自动 QA 截图写入 .local-verification/
+/release-notes-v*.md
+/docs/screenshots/page-find-toolbar.png

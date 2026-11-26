@@ -50,7 +50,7 @@ function isSuccessfulLiveUpdateEvidence(directory) {
   }
 }
 
-function assertSafeDirectory(root, parent, target) {
+function assertSafeArtifact(root, parent, target) {
   const rootPath = fs.realpathSync(root)
   const parentPath = fs.realpathSync(parent)
   const targetPath = path.resolve(target)
@@ -58,8 +58,8 @@ function assertSafeDirectory(root, parent, target) {
     throw new Error(`Refusing to remove a path outside the project cleanup roots: ${targetPath}`)
   }
   const stat = fs.lstatSync(targetPath)
-  if (!stat.isDirectory() || stat.isSymbolicLink()) {
-    throw new Error(`Refusing to remove a non-directory or linked path: ${targetPath}`)
+  if ((!stat.isDirectory() && !stat.isFile()) || stat.isSymbolicLink()) {
+    throw new Error(`Refusing to remove a non-file/directory or linked path: ${targetPath}`)
   }
   const realTarget = fs.realpathSync(targetPath)
   if (!isInside(parentPath, realTarget)) {
@@ -68,13 +68,14 @@ function assertSafeDirectory(root, parent, target) {
   return realTarget
 }
 
-export function planLocalArtifactCleanup(root = PROJECT_ROOT) {
+export function planLocalArtifactCleanup(root = PROJECT_ROOT, { includeRelease = false } = {}) {
   const rootPath = fs.realpathSync(root)
   const plan = []
-  const output = path.join(rootPath, 'out')
-  if (fs.existsSync(output)) {
-    assertSafeDirectory(rootPath, rootPath, output)
-    plan.push('out')
+  for (const name of includeRelease ? ['out', 'release'] : ['out']) {
+    const output = path.join(rootPath, name)
+    if (!fs.existsSync(output)) continue
+    assertSafeArtifact(rootPath, rootPath, output)
+    plan.push(name)
   }
 
   const fixtures = path.join(rootPath, FIXTURE_DIR)
@@ -90,27 +91,27 @@ export function planLocalArtifactCleanup(root = PROJECT_ROOT) {
   const documents = documentationContents(rootPath)
   const keep = referencedFixtureDirectories(documents)
   for (const entry of fs.readdirSync(fixtureRoot, { withFileTypes: true })) {
-    if (!entry.isDirectory() || entry.isSymbolicLink() || keep.has(entry.name)) continue
+    if ((!entry.isDirectory() && !entry.isFile()) || entry.isSymbolicLink() || keep.has(entry.name)) continue
     if (documents.some((document) => document.includes(entry.name))) continue
     const relative = path.join(FIXTURE_DIR, entry.name)
-    const directory = path.join(fixtureRoot, entry.name)
-    assertSafeDirectory(rootPath, fixtureRoot, directory)
-    if (isSuccessfulLiveUpdateEvidence(directory)) continue
+    const artifact = path.join(fixtureRoot, entry.name)
+    assertSafeArtifact(rootPath, fixtureRoot, artifact)
+    if (entry.isDirectory() && isSuccessfulLiveUpdateEvidence(artifact)) continue
     plan.push(relative)
   }
   return plan.sort((left, right) => left.localeCompare(right))
 }
 
-export function cleanLocalArtifacts({ root = PROJECT_ROOT, apply = false } = {}) {
+export function cleanLocalArtifacts({ root = PROJECT_ROOT, apply = false, includeRelease = false } = {}) {
   const rootPath = fs.realpathSync(root)
-  const plan = planLocalArtifactCleanup(rootPath)
+  const plan = planLocalArtifactCleanup(rootPath, { includeRelease })
   if (!apply) return { plan, removed: [] }
 
   const removed = []
   for (const relative of plan) {
     const target = path.resolve(rootPath, relative)
     const parent = path.dirname(target)
-    const safeTarget = assertSafeDirectory(rootPath, parent, target)
+    const safeTarget = assertSafeArtifact(rootPath, parent, target)
     fs.rmSync(safeTarget, { recursive: true })
     removed.push(relative)
   }
@@ -119,13 +120,13 @@ export function cleanLocalArtifacts({ root = PROJECT_ROOT, apply = false } = {})
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const args = new Set(process.argv.slice(2))
-  if ([...args].some((arg) => arg !== '--apply')) {
-    console.error('Usage: node scripts/clean-local-artifacts.mjs [--apply]')
+  if ([...args].some((arg) => !['--apply', '--include-release'].includes(arg))) {
+    console.error('Usage: node scripts/clean-local-artifacts.mjs [--apply] [--include-release]')
     process.exit(2)
   }
   const apply = args.has('--apply')
-  const result = cleanLocalArtifacts({ apply })
+  const result = cleanLocalArtifacts({ apply, includeRelease: args.has('--include-release') })
   if (!result.plan.length) console.log('No generated local artifacts to clean.')
   for (const item of result.plan) console.log(`${apply ? 'Removed' : 'Would remove'} ${item}`)
-  if (!apply && result.plan.length) console.log('Preview only. Re-run with --apply to remove these generated directories.')
+  if (!apply && result.plan.length) console.log('Preview only. Re-run with --apply to remove these generated artifacts.')
 }
