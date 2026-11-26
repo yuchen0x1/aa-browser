@@ -46,6 +46,8 @@ export interface PendingApprovalInfo {
   detail?: string
   /** permission 类型的权限名 */
   permission?: string
+  /** 可在本会话内记住同一操作（仅 operation 且主进程算出了稳定键）。 */
+  rememberable?: boolean
 }
 
 export interface ActionLogItem {

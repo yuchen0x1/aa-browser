@@ -2,7 +2,7 @@
   "name": "aa-browser",
   "productName": "Aa Browser",
   "desktopName": "aa-browser.desktop",
-  "version": "0.18.1",
+  "version": "0.18.2",
   "description": "AI-native browser — browse like a human, drive like an agent (为 Agent 而生的浏览器)",
   "license": "MIT",
   "author": {

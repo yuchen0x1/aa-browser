@@ -257,7 +257,7 @@ export function buildTools(
   }
 
   /** Risk approval is mandatory and cannot be disabled by legacy preferences. */
-  async function opGate(desc: { site: string; tabTitle: string; action: string; detail?: string }, signal?: unknown): Promise<void> {
+  async function opGate(desc: { site: string; tabTitle: string; action: string; detail?: string; rememberKey?: string }, signal?: unknown): Promise<void> {
     const sig = signal instanceof AbortSignal ? signal : undefined
     assertToolRunning(sig)
     const scope = permissionContext.getStore() ?? { profileId: getProfileManager().currentProfileId(), clientId: tabs.currentAgentClientId?.() }
@@ -266,8 +266,10 @@ export function buildTools(
     // the grant, then require a decision about this concrete operation.
     getPermissionManager().check(scope, level, desc.action)
     if (!approvals) throw new ActionError('此操作需要桌面人工审批，当前审批服务不可用。', 'PERMISSION_ERROR')
+    // 本会话自动放行严格限定在同一 Profile、同一 MCP 客户端、同一页面与同一目标/脚本内。
+    const rememberKey = [scope.profileId, scope.clientId ?? 'desktop', desc.rememberKey ?? '', desc.detail ?? ''].join('\u0000')
     const allowed = await approvals.opRequest(
-      { site: redactText(desc.site, 240), tabTitle: redactText(desc.tabTitle, 160), fieldLabel: desc.action, detail: desc.detail ? redactText(desc.detail, 600) : undefined },
+      { site: redactText(desc.site, 240), tabTitle: redactText(desc.tabTitle, 160), fieldLabel: desc.action, detail: desc.detail ? redactText(desc.detail, 600) : undefined, rememberKey },
       sig
     )
     getPermissionManager().record({ ...scope, level, action: desc.action, allowed: allowed === true })
@@ -309,7 +311,10 @@ export function buildTools(
       throw new ActionError('无法核验操作对象；请重新获取页面快照。', 'STALE_REF')
     }
     if (!opts.force && !before.some((target) => target.risky)) return
-    await opGate({ site: before[0].url, tabTitle: tab.title, action: opts.action || '执行可能产生副作用的页面操作', detail: [...before.map((target) => target.label), opts.detail].filter(Boolean).join('\n') }, signal)
+    // 同一页面上同一元素（指纹）且同一补充说明的同类操作才可被本会话记住；
+    // 不同“删除”按钮、不同上传文件或不同脚本不会互相放行。
+    const rememberKey = [before.map((target) => target.fingerprint).join('|'), opts.detail ?? ''].join('\u0000')
+    await opGate({ site: before[0].url, tabTitle: tab.title, action: opts.action || '执行可能产生副作用的页面操作', detail: [...before.map((target) => target.label), opts.detail].filter(Boolean).join('\n'), rememberKey }, signal)
     const after = await inspect()
     assertToolRunning(signal)
     if (before.some((target, index) => !after[index]?.ok || target.fingerprint !== after[index].fingerprint || target.document !== after[index].document || target.url !== after[index].url)) {
@@ -333,7 +338,7 @@ export function buildTools(
     return options
   }
 
-  async function documentGate(tab: ReturnType<typeof resolveWebContents>, desc: { action: string; detail?: string }, signal?: AbortSignal): Promise<void> {
+  async function documentGate(tab: ReturnType<typeof resolveWebContents>, desc: { action: string; detail?: string; rememberKey?: string }, signal?: AbortSignal): Promise<void> {
     const wc = tab.view.webContents
     const url = wc.getURL()
     const before = await wc.executeJavaScript('String(performance.timeOrigin)', false)
@@ -1711,7 +1716,9 @@ export function buildTools(
         await documentGate(tab,
           {
             action: '在网页中执行 JavaScript',
-            detail: expression.replace(/\s+/g, ' ').slice(0, 120)
+            detail: expression.replace(/\s+/g, ' ').slice(0, 120),
+            // 用完整表达式做本会话去重键：同一页面重复执行同一段脚本不再逐次确认。
+            rememberKey: expression
           },
           callSignal(args)
         )
@@ -1845,7 +1852,7 @@ export function buildTools(
           if (action === 'evaluate') {
             const expression = String(args['expression'] ?? '')
             if (!expression.trim()) throw new ActionError('expression 不能为空')
-            await targetGate(tab, { frameId, selector: 'html', force: true, action: '在网页中执行 JavaScript' }, signal)
+            await targetGate(tab, { frameId, selector: 'html', force: true, action: '在网页中执行 JavaScript', detail: expression }, signal)
             assertToolRunning(signal)
             const value = await raceAbort(frameEvaluate(wc, frameId, expression, signal), signal)
             let rendered: string

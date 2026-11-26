@@ -29,7 +29,7 @@ contextBridge.exposeInMainWorld('aa', {
   monitorTakeover: (): Promise<MonitorState | null> => ipcRenderer.invoke('aa:monitor-takeover'),
   monitorRelease: (): Promise<MonitorState | null> => ipcRenderer.invoke('aa:monitor-release'),
   taskAction: (action: 'pause' | 'resume' | 'cancel', id?: number, client?: number): Promise<boolean> => ipcRenderer.invoke('aa:tasks-control', action, id, client),
-  decideApproval: (id: string, allowed: boolean): Promise<boolean> => ipcRenderer.invoke('aa:approval-decide', id, allowed),
+  decideApproval: (id: string, allowed: boolean, remember = false): Promise<boolean> => ipcRenderer.invoke('aa:approval-decide', id, allowed, remember),
   interruptAgent: (): Promise<boolean> => ipcRenderer.invoke('aa:agent-interrupt'),
   resumeAgent: (): Promise<boolean> => ipcRenderer.invoke('aa:agent-resume'),
   cancelAgentCall: (id: number, client?: number): Promise<boolean> => ipcRenderer.invoke('aa:agent-cancel-call', id, client),

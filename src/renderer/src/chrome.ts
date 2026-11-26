@@ -1,6 +1,9 @@
 import type { TabInfo, UiState, DownloadInfo, HistoryEntry, AppSettings, SettingsView, AgentInfo, UpdateState, PagePointerForward, ExtensionInfo, BackgroundMode, MonitorState, AgentTaskRecord } from '@shared/types'
 import { resolveLocale, translate, type Locale, type LocaleKey } from '@shared/locale'
 import type { PlatformState, PlatformActionResult, PlatformWorkflow, ProfileView, ExtensionUpdateResult } from '@shared/platform-types'
+import { APPROVAL_BAND_HEIGHT, CHROME_HEIGHT, FIND_BAR_HEIGHT, UPDATE_NOTICE_HEIGHT } from '@shared/layout'
+
+document.documentElement.style.setProperty('--approval-band', `${APPROVAL_BAND_HEIGHT}px`)
 
 /** 与主进程 clients.ts 的 ClientDetectResult / ClientSetupResult 对应 */
 interface ClientDetectResult {
@@ -64,7 +67,7 @@ declare global {
       monitorTakeover: () => Promise<MonitorState | null>
       monitorRelease: () => Promise<MonitorState | null>
       taskAction: (action: 'pause' | 'resume' | 'cancel', id?: number, client?: number) => Promise<boolean>
-      decideApproval: (id: string, allowed: boolean) => Promise<boolean>
+      decideApproval: (id: string, allowed: boolean, remember?: boolean) => Promise<boolean>
       interruptAgent: () => Promise<boolean>
       resumeAgent: () => Promise<boolean>
       cancelAgentCall: (id: number, client?: number) => Promise<boolean>
@@ -453,8 +456,8 @@ function renderFind(): void {
   const hadFocus = findBar.contains(document.activeElement)
   findBar.hidden = !find?.open
   btnReopen.disabled = !state.canReopenClosed
-  document.documentElement.style.setProperty('--find-height', find?.open ? '48px' : '0px')
-  document.documentElement.style.setProperty('--page-top', `${84 + (state.update?.noticeVisible ? 44 : 0) + (find?.open ? 48 : 0) + (state.pendingApprovals.length ? 180 : 0)}px`)
+  document.documentElement.style.setProperty('--find-height', find?.open ? `${FIND_BAR_HEIGHT}px` : '0px')
+  document.documentElement.style.setProperty('--page-top', `${CHROME_HEIGHT + (state.update?.noticeVisible ? UPDATE_NOTICE_HEIGHT : 0) + (find?.open ? FIND_BAR_HEIGHT : 0) + (state.pendingApprovals.length ? APPROVAL_BAND_HEIGHT : 0)}px`)
   if (!find?.open) {
     // 查找条被关闭（Esc/按钮/主进程）后焦点不能留在隐藏输入框；仅当焦点原本就在查找条内时回收。
     if (!wasHidden && document.hasFocus() && hadFocus) {
@@ -650,7 +653,7 @@ function renderUpdate(update?: UpdateState): void {
   updatePill.title = labels[update.status]
   updatePill.classList.toggle('error', update.status === 'error')
   updateNotice.hidden = !update.noticeVisible
-  document.documentElement.style.setProperty('--notice-height', update.noticeVisible ? '44px' : '0px')
+  document.documentElement.style.setProperty('--notice-height', update.noticeVisible ? `${UPDATE_NOTICE_HEIGHT}px` : '0px')
   updateNotice.classList.toggle('error', update.status === 'error')
   const failedOperation = { check: ['check', '检查'], download: ['download', '下载'], install: ['installation', '安装'] }[update.failedOperation ?? 'check']
   const noticeBase = update.status === 'downloaded' ? (activeLocale === 'en-US' ? `${update.version} downloaded. Restart to install.` : `新版 ${update.version} 已下载完成，重启即可安装。`) : update.status === 'available' ? (activeLocale === 'en-US' ? `Version ${update.version} is available; current version is ${update.currentVersion}.` : `发现新版本 ${update.version}，当前为 ${update.currentVersion}。`) : update.status === 'error' ? (activeLocale === 'en-US' ? `Update ${failedOperation[0]} failed. ${update.retryAt ? 'It will retry automatically.' : 'Retry now or review settings.'}` : `更新${failedOperation[1]}失败，${update.retryAt ? '将自动重试，也可立即重试。' : '点击重试或在设置中查看原因。'}`) : labels[update.status]
@@ -998,26 +1001,54 @@ function renderApprovals(): void {
   if (settingsModal) settingsModal.inert = pending.some((item) => item.kind !== 'sensitive')
   approvalPanel.hidden = pending.length === 0
   approvalPanel.textContent = ''
-  for (const [index, item] of pending.entries()) {
+  // 一次只展示最早的一条：按钮固定在底部，不随说明文字滚出视野；处理完自动显示下一条。
+  const item = pending[0]
+  if (item) {
     const isOp = item.kind === 'operation'
     const isPermission = item.kind === 'permission'
+    const body = document.createElement('div')
+    body.className = 'approval-body'
     const title = document.createElement('div')
     title.className = 'approval-title'
-    if (index === 0) title.id = 'approval-title'
+    title.id = 'approval-title'
     title.textContent = isPermission ? uiText('网站请求设备权限', 'Website requests device permission') : isOp ? uiText('Agent 请求执行高危操作', 'Agent requests a high-risk action') : uiText('需要你亲自填写敏感信息', 'Sensitive information requires your input')
     const meta = document.createElement('div')
     meta.className = 'approval-meta'
     meta.textContent = `${uiText('网站：', 'Site: ')}${item.site} · ${uiText('标签：', 'Tab: ')}${item.tabTitle} · ${uiText('操作：', 'Action: ')}${item.fieldLabel}`
     const help = document.createElement('div')
     help.className = 'approval-help'
-    if (index === 0) help.id = 'approval-help'
+    help.id = 'approval-help'
     help.textContent = isPermission
       ? (item.detail || uiText('允许后该站点仅在本次浏览器会话内可使用此权限；拒绝则保持阻断。', 'After allowing, this site may use the permission only in this browser session; denying keeps it blocked.'))
       : isOp
         ? (item.detail || uiText('Agent 即将执行此操作。请确认后点“允许”，拒绝则中止该步骤。', 'The Agent is about to perform this action. Confirm with “Allow”; denying stops the step.'))
         : uiText('请直接在网页输入框中填写内容；敏感内容不会由 Agent 写入或回传。填写完成后再点“允许继续”。', 'Enter the value directly in the webpage; sensitive content is never written or returned by the Agent. Select “Continue” when finished.')
+    body.append(title, meta, help)
+    if (pending.length > 1) {
+      const count = document.createElement('div')
+      count.className = 'approval-count'
+      count.textContent = uiText(`待确认 1 / ${pending.length}，处理完自动显示下一条`, `1 of ${pending.length} pending; the next request appears after this one`)
+      body.appendChild(count)
+    }
+
     const actions = document.createElement('div')
     actions.className = 'approval-actions'
+    let remember: HTMLInputElement | null = null
+    if (isOp && item.rememberable) {
+      const rememberLabel = document.createElement('label')
+      rememberLabel.className = 'approval-remember'
+      rememberLabel.title = uiText('仅对同一页面上的同一操作生效；浏览器退出后失效。取消勾选则下次仍会询问。', 'Applies only to this exact action on this page for the current browser session. Uncheck to be asked again next time.')
+      remember = document.createElement('input')
+      remember.type = 'checkbox'
+      remember.checked = true
+      remember.dataset['focusKey'] = `approval-remember:${item.id}`
+      const rememberText = document.createElement('span')
+      rememberText.textContent = uiText('本会话内相同操作自动允许', 'Auto-allow this same action for this session')
+      rememberLabel.append(remember, rememberText)
+      actions.appendChild(rememberLabel)
+    }
+    const buttons = document.createElement('div')
+    buttons.className = 'approval-buttons'
     const deny = document.createElement('button')
     deny.className = 'approval-deny'
     deny.dataset['focusKey'] = `approval-deny:${item.id}`
@@ -1027,22 +1058,22 @@ function renderApprovals(): void {
     allow.className = 'approval-allow'
     allow.dataset['focusKey'] = `approval-allow:${item.id}`
     allow.textContent = isOp || isPermission ? uiText('允许', 'Allow') : uiText('允许继续', 'Continue')
-    allow.addEventListener('click', () => void window.aa.decideApproval(item.id, true))
-    actions.append(deny, allow)
-    approvalPanel.append(title, meta, help, actions)
+    allow.addEventListener('click', () => void window.aa.decideApproval(item.id, true, remember?.checked === true))
+    buttons.append(deny, allow)
+    actions.appendChild(buttons)
+    approvalPanel.append(body, actions)
+    // 新审批到达时把焦点移到“允许”按钮，屏幕阅读器可立即读到 alertdialog；
+    // 敏感输入例外：焦点应留在网页输入框，由用户亲自填写。队列中后续请求不抢焦点，
+    // 避免用户仍按着 Enter 时误批准下一条高危操作。
+    if (!knownApprovalIds.has(item.id) && item.kind !== 'sensitive' && document.hasFocus()) {
+      requestAnimationFrame(() => {
+        approvalPanel
+          .querySelector<HTMLButtonElement>(`[data-focus-key="approval-allow:${CSS.escape(item.id)}"]`)
+          ?.focus({ preventScroll: true })
+      })
+    }
   }
-  // 新审批到达时把焦点移到“允许”按钮，屏幕阅读器可立即读到 alertdialog；
-  // 敏感输入例外：焦点应留在网页输入框，由用户亲自填写。
-  const ids = new Set(pending.map((item) => item.id))
-  const fresh = pending.find((item) => !knownApprovalIds.has(item.id))
-  knownApprovalIds = ids
-  if (fresh && fresh.kind !== 'sensitive' && document.hasFocus()) {
-    requestAnimationFrame(() => {
-      approvalPanel
-        .querySelector<HTMLButtonElement>(`[data-focus-key="approval-allow:${CSS.escape(fresh.id)}"]`)
-        ?.focus({ preventScroll: true })
-    })
-  }
+  knownApprovalIds = new Set(pending.map((entry) => entry.id))
 }
 
 function renderFeed(): void {

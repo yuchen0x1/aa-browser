@@ -163,7 +163,7 @@ try {
   const compiled = spawnSync(process.execPath, [
     tsc, '--ignoreConfig', '--noCheck', '--noResolve', '--outDir', out,
     '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', '--esModuleInterop',
-    ...['tools', 'actions', ...SECURITY_MODULES].map((name) => path.join(root, `src/main/${name}.ts`))
+    ...['tools', 'actions', 'approvals', ...SECURITY_MODULES].map((name) => path.join(root, `src/main/${name}.ts`))
   ], { cwd: root, encoding: 'utf8' })
   assert.equal(compiled.status, 0, `Compilation failed: ${compiled.error ?? ''}\n${compiled.stdout}\n${compiled.stderr}`)
   security = securityFixture(out)
@@ -267,7 +267,7 @@ try {
     await tick()
     assert.equal(denied.calls.operation.length, 1)
     assert.equal(denied.calls.operation[0].fieldLabel, '在网页中执行 JavaScript')
-    assert.equal(denied.calls.operation[0].detail, 'Fixture frame')
+    assert.equal(denied.calls.operation[0].detail, `Fixture frame\n${expression}`)
     assert.equal(denied.calls.frameEvaluate.some((call) => call.expression === expression), false, 'denied evaluation must not reach page execution')
     denied.pending[0].resolve(false)
     await assert.rejects(deniedWork, /高危操作已取消/)
@@ -287,10 +287,83 @@ try {
     const work = f.tools.get('browser_evaluate').handler({ expression: 'window.fixture = 1' })
     await tick()
     assert.equal(f.calls.operation.length, 1)
+    assert.ok(f.calls.operation[0].rememberKey.startsWith('default\u0000desktop\u0000'), 'the session key is scoped to Profile and client')
+    assert.ok(f.calls.operation[0].rememberKey.includes('window.fixture = 1'), 'the exact script is part of the session key')
     f.pending[0].resolve(false)
     await assert.rejects(work, /高危操作已取消/)
     const unavailable = createFixture({ approvalService: false })
     await assert.rejects(unavailable.tools.get('browser_evaluate').handler({ expression: 'window.fixture = 1' }), /审批服务不可用/)
+  })
+
+  await test('session-remembered operation approvals only skip the exact same target and operation', async () => {
+    const { ApprovalManager } = loadMain('approvals', {})
+    const manager = new ApprovalManager()
+    const meta = { site: 'https://example.test/page', tabTitle: 'Example', fieldLabel: '在网页中执行 JavaScript', detail: 'document.title', rememberKey: 'script-a' }
+    const first = manager.opRequest(meta)
+    assert.equal(manager.list().length, 1)
+    assert.equal(manager.list()[0].rememberable, true)
+    manager.decide(manager.list()[0].id, true, true)
+    assert.equal(await first, true)
+    assert.equal(await manager.opRequest(meta), true)
+    assert.equal(manager.list().length, 0, 'a remembered operation resolves without a new prompt')
+    const otherTarget = manager.opRequest({ ...meta, detail: 'document.body.innerHTML', rememberKey: 'script-b' })
+    assert.equal(manager.list().length, 1, 'a different script or target still requires approval')
+    manager.decide(manager.list()[0].id, false)
+    assert.equal(await otherTarget, false)
+    const afterDenial = manager.opRequest(meta)
+    assert.equal(await afterDenial, true, 'the earlier grant survives an unrelated denial')
+    assert.equal(manager.list().length, 0)
+  })
+
+  await test('denial, allow-once, and sensitive input never create a session auto-allow', async () => {
+    const { ApprovalManager } = loadMain('approvals', {})
+    const manager = new ApprovalManager()
+    const meta = { site: 'https://example.test/page', tabTitle: 'Example', fieldLabel: '在网页中执行 JavaScript', detail: 'document.title' }
+    const denied = manager.opRequest(meta)
+    manager.decide(manager.list()[0].id, false, true)
+    assert.equal(await denied, false)
+    assert.equal(manager.list().length, 0)
+    const retry = manager.opRequest(meta)
+    assert.equal(manager.list().length, 1, 'a denial must not be remembered')
+    manager.decide(manager.list()[0].id, true, false)
+    assert.equal(await retry, true)
+    const third = manager.opRequest(meta)
+    assert.equal(manager.list().length, 1, 'allowing once without remember keeps the next prompt')
+    manager.decide(manager.list()[0].id, false)
+    assert.equal(await third, false)
+
+    const sensitive = { site: 'example.test', tabTitle: 'Example', fieldLabel: '填写密码', kind: 'sensitive' }
+    const input = manager.request(sensitive)
+    assert.equal(manager.list()[0].rememberable, false)
+    manager.decide(manager.list()[0].id, true, true)
+    assert.equal(await input, true)
+    const again = manager.request(sensitive)
+    assert.equal(manager.list().length, 1, 'sensitive input is never auto-allowed')
+    manager.decide(manager.list()[0].id, false)
+    assert.equal(await again, false)
+
+    const interrupted = manager.opRequest(meta)
+    assert.equal(manager.list().length, 1)
+    manager.interrupt()
+    assert.equal(await interrupted, false, 'interrupt denies the pending request')
+    assert.equal(manager.decide(manager.list()[0]?.id ?? 'gone', true, true), false, 'a late allow cannot attach to the interrupted request')
+    assert.throws(() => manager.opRequest(meta), /已被用户中断/)
+    manager.resume()
+    const afterResume = manager.opRequest(meta)
+    assert.equal(manager.list().length, 1, 'a late allow during interrupt never creates a session grant')
+    manager.decide(manager.list()[0].id, false)
+    assert.equal(await afterResume, false)
+  })
+
+  await test('DOM operation remember keys include the concrete target fingerprint', async () => {
+    const f = createFixture()
+    f.operationState.risky = true
+    const work = f.tools.get('browser_click').handler({ ref: 'e1', snapshot: false })
+    await tick()
+    assert.equal(f.calls.operation.length, 1)
+    assert.match(f.calls.operation[0].rememberKey, /fixture/, 'the session key includes the element fingerprint')
+    f.pending[0].resolve(false)
+    await assert.rejects(work, /高危操作已取消/)
   })
 
   await test('sensitive Cookie reads require approval while default reads remain available', async () => {

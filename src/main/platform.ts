@@ -190,7 +190,8 @@ export class BrowserPlatform implements PlatformAdapter {
     this.deps.controlAllowed()
     throwIfAborted(signal)
     this.profiles.assertLeaseAccess(profileId)
-    const allowed = await this.deps.approvals.opRequest({ site: this.profiles.get(profileId).name, tabTitle: 'Aa Browser', fieldLabel: action, detail: redactText(detail, 500) }, signal)
+    // Profile / 工作流等范围授权不参与本会话自动放行，始终保持逐次人工确认。
+    const allowed = await this.deps.approvals.opRequest({ site: this.profiles.get(profileId).name, tabTitle: 'Aa Browser', fieldLabel: action, detail: redactText(detail, 500), remember: false }, signal)
     this.permissions.record({ profileId, level: 'high-risk', action, allowed })
     this.deps.controlAllowed()
     throwIfAborted(signal)

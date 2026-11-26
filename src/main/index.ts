@@ -22,6 +22,7 @@ import { session } from 'electron'
 import type { PagePointerForward, UiState } from '@shared/types'
 import type { BackgroundMode } from '@shared/types'
 import { contextMenuLabels } from '@shared/menu-labels'
+import { APPROVAL_BAND_HEIGHT, CHROME_HEIGHT, FIND_BAR_HEIGHT, UPDATE_NOTICE_HEIGHT } from '@shared/layout'
 import { UpdateManager } from './updater'
 import { clearUpdateRestartMarker, writeUpdateRestartMarker } from './update-restart'
 import { PageFinder } from './page-finder'
@@ -52,7 +53,6 @@ function discoveryFile(): string {
   return process.env['AA_BROWSER_CONNECTION_FILE'] || path.join(os.homedir(), '.aabrowser', 'connection.json')
 }
 
-const CHROME_HEIGHT = 84
 let lastContentSize = { width: 1280, height: 840 }
 /** 页面视图在窗口内容区里的顶部偏移；外壳转发指针事件时用它区分工具栏与页面。 */
 let lastPageTop = CHROME_HEIGHT
@@ -134,7 +134,7 @@ function layout(): void {
   const currentSize = win.getContentBounds()
   if (!win.isMinimized() && currentSize.width > 0 && currentSize.height > CHROME_HEIGHT) lastContentSize = currentSize
   const { width, height } = lastContentSize
-  const panelHeight = (approvals.list().length ? 180 : 0) + (finder?.getState().open ? 48 : 0) + (updater?.getState().noticeVisible ? 44 : 0)
+  const panelHeight = (approvals.list().length ? APPROVAL_BAND_HEIGHT : 0) + (finder?.getState().open ? FIND_BAR_HEIGHT : 0) + (updater?.getState().noticeVisible ? UPDATE_NOTICE_HEIGHT : 0)
   const showActivityOverlay = agentActivity.active || agentActivity.paused
   const chromeHeight = settingsOpen || showActivityOverlay
     ? height
@@ -851,9 +851,9 @@ function registerIpc(): void {
     agentServer?.resume()
     return monitor.releaseToAi()
   })
-  ipcMain.handle('aa:approval-decide', (event, id: string, allowed: boolean) => {
+  ipcMain.handle('aa:approval-decide', (event, id: string, allowed: boolean, remember: boolean) => {
     if (!isTrustedSender(event)) return false
-    return approvals.decide(String(id), allowed === true)
+    return approvals.decide(String(id), allowed === true, remember === true)
   })
   ipcMain.handle('aa:agent-interrupt', (event) => {
     if (!isTrustedSender(event)) return false

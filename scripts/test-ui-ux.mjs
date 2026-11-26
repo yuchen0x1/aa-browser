@@ -96,12 +96,13 @@ if (!process.versions.electron) {
       try {
         // State-only HUD fixtures bypass main-process activity; reproduce its full-window view bounds for evidence.
         let clip
-        if (wc === chrome && name.endsWith('-agent-progress') && await ui('!document.querySelector("#agent-activity-overlay").hidden')) {
+        const evidenceSelector = name.endsWith('-approval') ? '#approval-panel' : name.endsWith('-agent-progress') ? '#agent-activity-card' : ''
+        if (wc === chrome && evidenceSelector && await ui(`!document.querySelector(${literal(evidenceSelector)}).hidden`)) {
           const content = win.getContentBounds()
           originalBounds = view.getBounds()
           view.setBounds({x:0,y:0,width:content.width,height:content.height})
           // Crop to the HUD itself: capturing transparent gaps can return unrelated compositor output.
-          clip = await ui(`(() => {const r=document.querySelector('#agent-activity-card').getBoundingClientRect();return {x:Math.floor(r.x),y:Math.floor(r.y),width:Math.ceil(r.width),height:Math.ceil(r.height)};})()`)
+          clip = await ui(`(() => {const r=document.querySelector(${literal(evidenceSelector)}).getBoundingClientRect();return {x:Math.floor(r.x),y:Math.floor(r.y),width:Math.ceil(r.width),height:Math.ceil(r.height)};})()`)
         }
         await pause(400)
         const image = await wc.capturePage(clip)
@@ -365,7 +366,7 @@ if (!process.versions.electron) {
     const live = await ui('window.aa.getState()')
     const fixture = { ...live,
       downloads: [{ id: 'ui-download', filename: 'UI regression — completed.txt', url: 'https://example.com/fixture', state: 'completed', receivedBytes: 2048, totalBytes: 2048, startedAt: Date.now() }],
-      pendingApprovals: [{ id: 'ui-approval', kind: 'operation', site: 'https://example.com', tabTitle: 'UI regression', fieldLabel: 'Submit test form', detail: 'Isolated UI fixture — no action will be submitted.' }],
+      pendingApprovals: [{ id: 'ui-approval', kind: 'operation', site: 'https://example.com', tabTitle: 'UI regression', fieldLabel: 'Submit test form', detail: 'Isolated UI fixture — no action will be submitted.', rememberable: true }],
       agentActivity: { active: true, paused: false, tool: 'browser_wait', startedAt: Date.now(), calls: [{ id: 999, client: 1, tool: 'browser_wait', startedAt: Date.now(), progress: 1, total: 10, message: 'UI regression progress' }] }
     }
     const send = async (value) => { chrome.send('aa:state', value); await pause(100) }
@@ -461,6 +462,21 @@ if (!process.versions.electron) {
       await capture(`${theme}-downloads`)
       await click('#btn-downloads')
       await send({ ...live, pendingApprovals: fixture.pendingApprovals })
+      const approvalLayout = await ui(`(() => {
+        const panel = document.querySelector('#approval-panel')
+        const panelRect = panel.getBoundingClientRect()
+        const bodyRect = document.querySelector('.approval-body').getBoundingClientRect()
+        const allowRect = document.querySelector('.approval-allow').getBoundingClientRect()
+        const body = document.querySelector('.approval-body')
+        return {
+          centerGap: Math.abs((panelRect.left + panelRect.right) / 2 - innerWidth / 2),
+          actionsInside: allowRect.top >= panelRect.top && allowRect.bottom <= panelRect.bottom && allowRect.left >= panelRect.left && allowRect.right <= panelRect.right,
+          actionsPinned: allowRect.top >= bodyRect.bottom,
+          noScroll: body.scrollHeight <= body.clientHeight,
+          remember: document.querySelector('.approval-remember input')?.checked === true
+        }
+      })()`)
+      check(`${theme} approval panel is centered with pinned actions`, approvalLayout.centerGap <= 1 && approvalLayout.actionsInside && approvalLayout.actionsPinned && approvalLayout.noScroll && approvalLayout.remember, approvalLayout)
       await capture(`${theme}-approval`)
       const longProgress = {...fixture.agentActivity, calls:fixture.agentActivity.calls.map(call=>({...call,message:'UnbrokenViewportName'.repeat(10)}))}
       await send({ ...live, agentActivity: longProgress })
