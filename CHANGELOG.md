@@ -2,6 +2,13 @@
 
 产品版本摘要见 [`docs/releases/release-notes.md`](./docs/releases/release-notes.md)，与 GitHub Release 逐字同步的正文归档位于 [`docs/releases/bodies/`](./docs/releases/bodies/)；新版本使用 [`release-notes-template.md`](./docs/releases/release-notes-template.md)。
 
+## v0.19.0 — 2026-11-26
+
+- **点击网页接管操作**：AI 操作网页时页面默认只读；第一次点击网页或 HUD 的「接管页面」会暂停 AI 并把操作权交给用户，第一次点击不会投递给网页，避免误点链接或提交导致整页跳转。
+- **无限期接管**：接管会取消在途调用并保持暂停，直到用户点「继续 AI」；HUD 接管、任务中心「暂停全部」、后台预览接管与 `browser_window action=takeover` 使用同一套语义。
+- **页面输入切换**：AI 操作期间不转发点击、滚轮和悬停；接管后才恢复页面指针转发并把键盘焦点交给网页。工具栏「中断」仍保留 30 秒后自动继续的快速暂停。
+- **兼容性**：浏览器用户数据、Profile、设置、MCP 配置和 Windows/Linux 更新源格式不变。
+
 ## v0.18.2 — 2026-11-26
 
 - **审批面板位置与按钮**：高危操作审批改为页面保留区顶部居中，说明文字独立滚动，「拒绝 / 允许」固定在底部，不再被面板高度裁切；更新提示条或查找条显示时面板随之下移。

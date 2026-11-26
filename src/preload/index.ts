@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('aa', {
   taskAction: (action: 'pause' | 'resume' | 'cancel', id?: number, client?: number): Promise<boolean> => ipcRenderer.invoke('aa:tasks-control', action, id, client),
   decideApproval: (id: string, allowed: boolean, remember = false): Promise<boolean> => ipcRenderer.invoke('aa:approval-decide', id, allowed, remember),
   interruptAgent: (): Promise<boolean> => ipcRenderer.invoke('aa:agent-interrupt'),
+  takeoverAgent: (): Promise<boolean> => ipcRenderer.invoke('aa:agent-takeover'),
   resumeAgent: (): Promise<boolean> => ipcRenderer.invoke('aa:agent-resume'),
   cancelAgentCall: (id: number, client?: number): Promise<boolean> => ipcRenderer.invoke('aa:agent-cancel-call', id, client),
   downloadsList: (): Promise<DownloadInfo[]> => ipcRenderer.invoke('aa:downloads-list'),

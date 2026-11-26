@@ -13,6 +13,7 @@ const dualPlatformTag = 'v0.16.0'
 const nextDualPlatformTag = 'v0.17.0'
 const platformUpgradeTag = 'v0.18.0'
 const approvalFixTag = 'v0.18.2'
+const takeoverTag = 'v0.19.0'
 const names = releaseFileNames(tag)
 assert.ok(names.includes('sbom.cdx.json'), 'v0.2.0 releases must include the SBOM')
 const windowsOnlyNames = releaseFileNames(windowsOnlyTag)
@@ -61,6 +62,15 @@ assert.deepEqual(releaseFileNames(approvalFixTag), [
   'latest.yml',
   'sbom.cdx.json'
 ].sort(), 'v0.18.2 must keep both installed-client update feeds')
+assert.deepEqual(releaseFileNames(takeoverTag), [
+  'SHA256SUMS.txt',
+  'aa-browser-0.19.0-linux-x86_64.AppImage',
+  'aa-browser-setup-0.19.0.exe',
+  'aa-browser-setup-0.19.0.exe.blockmap',
+  'latest-linux.yml',
+  'latest.yml',
+  'sbom.cdx.json'
+].sort(), 'v0.19.0 must keep both installed-client update feeds')
 const repo = { owner: 'fixture', repo: 'fixture' }
 const sha = 'a'.repeat(40)
 const digest = (data) => 'sha256:' + createHash('sha256').update(data).digest('hex')

@@ -96,7 +96,7 @@ if (!process.versions.electron) {
       try {
         // State-only HUD fixtures bypass main-process activity; reproduce its full-window view bounds for evidence.
         let clip
-        const evidenceSelector = name.endsWith('-approval') ? '#approval-panel' : name.endsWith('-agent-progress') ? '#agent-activity-card' : ''
+        const evidenceSelector = name.endsWith('-approval') ? '#approval-panel' : (name.endsWith('-agent-progress') || name.endsWith('-agent-takeover')) ? '#agent-activity-card' : ''
         if (wc === chrome && evidenceSelector && await ui(`!document.querySelector(${literal(evidenceSelector)}).hidden`)) {
           const content = win.getContentBounds()
           originalBounds = view.getBounds()
@@ -493,6 +493,15 @@ if (!process.versions.electron) {
       const stopClicked = await ui('document.querySelector(".agent-call-stop").dataset.testClicks === "1"')
       check(`${theme} long agent progress keeps its stop action visible and clickable`, progressFits.scroll <= progressFits.client+1 && progressFits.stopFits && progressFits.hit && stopClicked, {...progressFits,stopClicked})
       await capture(`${theme}-agent-progress`)
+      const activeHud = await ui(`({takeover:!!document.querySelector('#agent-activity-takeover') && !document.querySelector('#agent-activity-takeover').hidden, action:document.querySelector('#agent-activity-action').textContent})`)
+      check(`${theme} active HUD offers takeover alongside interrupt`, activeHud.takeover && activeHud.action.includes('中断'), activeHud)
+      const takeoverFixture = { ...fixture, agentInterrupted: true, monitor: { ...(live.monitor ?? {}), control: 'human' }, agentActivity: { ...fixture.agentActivity, active: false, paused: true, calls: [] } }
+      await send(takeoverFixture)
+      const takeoverHud = await ui(`(() => {const b=document.querySelector('#agent-activity-takeover');const a=document.querySelector('#agent-activity-action');return {hidden:!!b&&b.hidden,action:a?.textContent,detail:document.querySelector('#agent-activity-detail')?.textContent,title:document.querySelector('#agent-activity-title')?.textContent};})()`)
+      check(`${theme} takeover HUD hides takeover and offers resume`, takeoverHud.hidden && takeoverHud.action?.includes('继续 AI') && takeoverHud.detail?.includes('接管') && takeoverHud.title?.includes('接管'), takeoverHud)
+      await capture(`${theme}-agent-takeover`)
+      // 恢复活动 fixture，后续用例仍按原状态断言。
+      await send(fixture)
       hudView.setBounds(hudBounds)
       await send(live)
       await click('#btn-feed')

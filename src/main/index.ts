@@ -90,6 +90,24 @@ let updater: UpdateManager | null = null
 let monitor: BrowserMonitor | null = null
 let platform: BrowserPlatform | null = null
 function desktopProfileId(): string { return platform?.desktopProfileId() ?? getProfileManager().defaultId }
+
+/**
+ * 人工接管：先把浏览器操作权锁给用户，再无限期暂停审批与 Agent 调用。
+ * 与工具栏「中断 30 秒」不同，这里不会自动恢复，避免用户操作页面时 AI 突然抢回输入。
+ */
+function takeoverBrowser(): void {
+  monitor?.takeover()
+  approvals.pauseIndefinitely()
+  agentServer?.pause()
+}
+
+/** 交还 AI：解除人工接管并恢复后续调用。 */
+function releaseBrowserToAi(): void {
+  approvals.resume()
+  agentServer?.resume()
+  // 普通「中断 30 秒」不会设置人工接管；只有真正的接管才需要释放监控锁。
+  if (monitor?.getState().control === 'human') monitor.releaseToAi()
+}
 /** 由 whenReady 注入：立即写入跨会话标签记录（final=true 时允许清空过期记录） */
 let flushSessionRecord: ((final?: boolean) => void) | null = null
 /** 由 whenReady 注入：标签变化后延迟写入跨会话记录 */
@@ -838,18 +856,13 @@ function registerIpc(): void {
   })
   ipcMain.handle('aa:monitor-takeover', (event) => {
     if (!isTrustedSender(event) || !monitor) return null
-    const next = monitor.takeover()
-    setImmediate(() => {
-      approvals.interrupt()
-      agentServer?.pause()
-    })
-    return next
+    takeoverBrowser()
+    return monitor.getState()
   })
   ipcMain.handle('aa:monitor-release', (event) => {
     if (!isTrustedSender(event) || !monitor) return null
-    approvals.resume()
-    agentServer?.resume()
-    return monitor.releaseToAi()
+    releaseBrowserToAi()
+    return monitor.getState()
   })
   ipcMain.handle('aa:approval-decide', (event, id: string, allowed: boolean, remember: boolean) => {
     if (!isTrustedSender(event)) return false
@@ -861,10 +874,15 @@ function registerIpc(): void {
     agentServer?.pause(approvals.getResumeAt())
     return true
   })
+  /** HUD 接管：暂停 AI 并无限期把网页操作权交给用户，直到用户点「继续 AI」。 */
+  ipcMain.handle('aa:agent-takeover', (event) => {
+    if (!isTrustedSender(event)) return false
+    takeoverBrowser()
+    return true
+  })
   ipcMain.handle('aa:agent-resume', (event) => {
     if (!isTrustedSender(event)) return false
-    approvals.resume()
-    agentServer?.resume()
+    releaseBrowserToAi()
     return true
   })
   /** HUD 上“停止此调用”：只取消指定调用，不影响其他客户端/其他并发调用。 */
@@ -876,13 +894,11 @@ function registerIpc(): void {
     return guard(event, false, () => {
       if (action === 'cancel') return agentServer?.cancelCall(Number(callId), client === undefined ? undefined : Number(client)) ?? false
       if (action === 'pause') {
-        approvals.pauseIndefinitely()
-        agentServer?.pause()
+        takeoverBrowser()
         return true
       }
       if (action === 'resume') {
-        approvals.resume()
-        agentServer?.resume()
+        releaseBrowserToAi()
         return true
       }
       return false
@@ -1319,18 +1335,18 @@ app.whenReady().then(async () => {
       takeover: () => {
         if (!monitor) throw new Error('人工接管服务未就绪')
         const next = monitor.takeover()
-        // 让 takeover 自身先返回成功；下一轮事件循环再中断其它调用。
+        // 让 browser_window takeover 自身先返回成功；下一轮事件循环再暂停
+        // 审批与其它调用，避免把发起接管的这次工具调用一并中止。
         setImmediate(() => {
-          approvals.interrupt()
+          approvals.pauseIndefinitely()
           agentServer?.pause()
         })
         return next
       },
       releaseToAi: () => {
         if (!monitor) throw new Error('人工接管服务未就绪')
-        approvals.resume()
-        agentServer?.resume()
-        return monitor.releaseToAi()
+        releaseBrowserToAi()
+        return monitor.getState()
       },
       assertAiControl: () => {
         if (monitor?.getState().control === 'human') throw new Error('当前处于人工接管，AI 操作已锁定；请先调用 browser_window action=release。')

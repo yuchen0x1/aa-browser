@@ -353,7 +353,8 @@ export interface ToolContent {
 
 /**
  * 活动 HUD 展开成整窗外壳视图时，页面区域被透明但仍参与命中测试的外壳覆盖。
- * 外壳把落在页面区域的指针事件转发给活动页，坐标使用窗口内容区 DIP。
+ * AI 操作中首次点击会触发人工接管；接管后外壳才把页面区域的指针事件转发给
+ * 活动页，坐标使用窗口内容区 DIP。
  */
 export interface PagePointerForward {
   type: 'mouseDown' | 'mouseUp' | 'mouseMove' | 'mouseWheel'

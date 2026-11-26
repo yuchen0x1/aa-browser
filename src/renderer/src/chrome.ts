@@ -69,6 +69,7 @@ declare global {
       taskAction: (action: 'pause' | 'resume' | 'cancel', id?: number, client?: number) => Promise<boolean>
       decideApproval: (id: string, allowed: boolean, remember?: boolean) => Promise<boolean>
       interruptAgent: () => Promise<boolean>
+      takeoverAgent: () => Promise<boolean>
       resumeAgent: () => Promise<boolean>
       cancelAgentCall: (id: number, client?: number) => Promise<boolean>
       downloadsList: () => Promise<DownloadInfo[]>
@@ -122,6 +123,7 @@ const agentActivityTitle = document.getElementById('agent-activity-title') as HT
 const agentActivityTool = document.getElementById('agent-activity-tool') as HTMLElement | null
 const agentActivityDetail = document.getElementById('agent-activity-detail') as HTMLElement | null
 const agentActivityAction = document.getElementById('agent-activity-action') as HTMLButtonElement | null
+const agentActivityTakeover = document.getElementById('agent-activity-takeover') as HTMLButtonElement | null
 const agentActivityCalls = document.getElementById('agent-activity-calls') as HTMLElement | null
 const approvalPanel = document.getElementById('approval-panel') as HTMLDivElement
 const btnFeed = document.getElementById('btn-feed') as HTMLButtonElement | null
@@ -541,16 +543,24 @@ for (const panel of [suggestPanel, dlPanel, feedDrawer, monitorPanel, taskCenter
 }
 window.addEventListener('resize', syncOverlayExtent)
 
-/* ── 活动 HUD 期间把页面区域的指针事件转发给网页 ─────────────
+/* ── 活动 HUD 期间处理页面区域的指针事件 ─────────────────────
  * 活动 HUD 会把外壳视图展开到整窗，透明视图仍参与命中测试，而页面视图在外壳
- * 下面，所以网页收不到点击/滚轮。这里只转发落在页面区域（y > --page-top）、
- * 且不在 HUD 卡片上的事件；主进程校验坐标并换算成页面视图坐标。 */
+ * 下面，所以网页收不到点击/滚轮。
+ *
+ * AI 正在操作时页面默认只读：第一次点击页面不会落到网页上，而是暂停 AI 并把
+ * 操作权交给用户，避免误点链接导致整页跳转、打断 Agent。只有接管/中断后
+ * （paused）才把页面区域的指针事件转发给网页。主进程校验坐标并换算成页面
+ * 视图坐标。 */
 let pointerMoveFrame = 0
 let pendingPointerMove: { x: number; y: number } | null = null
+/** 触发接管的 mousedown 对应的 mouseup 也不能落到网页，否则会形成一次“半击”。 */
+let swallowNextMouseUp = false
+let swallowMouseUpTimer: number | undefined
 
 function overlayCoversPage(): boolean {
   const activity = state.agentActivity
-  if (!activity || (!activity.active && !activity.paused)) return false
+  const activeOrPaused = !!activity && (activity.active || activity.paused)
+  if (!activeOrPaused && !state.agentInterrupted) return false
   return !(settingsModal && !settingsModal.hidden)
 }
 
@@ -564,11 +574,32 @@ function isHudCardTarget(target: EventTarget | null): boolean {
   return target instanceof Element && !!target.closest('#agent-activity-card')
 }
 
-/** 只有页面区域才会转发；HUD 卡片和工具栏保留外壳自己的点击行为。 */
+/** 指针是否落在网页区域（而不是工具栏、HUD 卡片）。 */
+function isPagePointer(event: MouseEvent | WheelEvent): boolean {
+  return overlayCoversPage() && !isHudCardTarget(event.target) && event.clientY > pageTopPx()
+}
+
+/** AI 正在控制页面：点击先接管，避免误触网页。 */
+function aiOwnsPage(): boolean {
+  const activity = state.agentActivity
+  return !!activity && activity.active === true && activity.paused !== true && !state.agentInterrupted
+}
+
+function takeOverPage(): void {
+  if (swallowNextMouseUp) return
+  swallowNextMouseUp = true
+  if (swallowMouseUpTimer !== undefined) window.clearTimeout(swallowMouseUpTimer)
+  // 1.2 秒内没有等到 mouseup（例如在窗口外松开）就自动解除，避免吞掉下一次点击。
+  swallowMouseUpTimer = window.setTimeout(() => {
+    swallowNextMouseUp = false
+    swallowMouseUpTimer = undefined
+  }, 1200)
+  void window.aa.takeoverAgent()
+}
+
+/** paused 时才把页面事件转发给网页；active 时点击用于接管。 */
 function shouldForwardPointer(event: MouseEvent | WheelEvent): boolean {
-  if (!overlayCoversPage()) return false
-  if (isHudCardTarget(event.target)) return false
-  return event.clientY > pageTopPx()
+  return isPagePointer(event) && !aiOwnsPage()
 }
 
 function forwardPointer(event: MouseEvent | WheelEvent, type: PagePointerForward['type']): void {
@@ -586,11 +617,29 @@ function forwardPointer(event: MouseEvent | WheelEvent, type: PagePointerForward
 }
 
 document.addEventListener('mousedown', (event) => {
+  if (!isPagePointer(event)) return
+  if (aiOwnsPage()) {
+    // 第一次点击只接管，不能落到网页上，否则会误触链接/提交。
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    takeOverPage()
+    return
+  }
   if (!shouldForwardPointer(event)) return
   event.preventDefault()
   forwardPointer(event, 'mouseDown')
 }, true)
 document.addEventListener('mouseup', (event) => {
+  if (swallowNextMouseUp) {
+    event.preventDefault()
+    event.stopImmediatePropagation()
+    swallowNextMouseUp = false
+    if (swallowMouseUpTimer !== undefined) {
+      window.clearTimeout(swallowMouseUpTimer)
+      swallowMouseUpTimer = undefined
+    }
+    return
+  }
   if (!shouldForwardPointer(event)) return
   event.preventDefault()
   forwardPointer(event, 'mouseUp')
@@ -607,6 +656,12 @@ document.addEventListener('mousemove', (event) => {
   })
 }, true)
 document.addEventListener('wheel', (event) => {
+  if (!isPagePointer(event)) return
+  if (aiOwnsPage()) {
+    // 页面锁定期间也不滚动页面，避免 AI 的坐标基准被用户滚动改变。
+    event.preventDefault()
+    return
+  }
   if (!shouldForwardPointer(event)) return
   event.preventDefault()
   forwardPointer(event, 'mouseWheel')
@@ -912,6 +967,7 @@ function renderAgentActivity(): void {
     paused: state.agentInterrupted
   }
   const paused = activity.paused || state.agentInterrupted
+  const human = state.monitor?.control === 'human'
   const visible = activity.active || paused
   agentActivityOverlay.hidden = !visible
   agentActivityOverlay.setAttribute('aria-hidden', String(!visible))
@@ -923,17 +979,32 @@ function renderAgentActivity(): void {
     return
   }
 
-  if (agentActivityTitle) agentActivityTitle.textContent = paused ? uiText('AI 操作已暂停', 'AI operation paused') : uiText('AI 工具正在操作中', 'AI tool is working')
+  if (agentActivityTitle) {
+    agentActivityTitle.textContent = paused
+      ? human ? uiText('你已接管网页操作', 'You have taken over') : uiText('AI 操作已暂停', 'AI operation paused')
+      : uiText('AI 工具正在操作中', 'AI tool is working')
+  }
   const callCount = activity.calls?.length ?? 0
   if (agentActivityTool) {
-    agentActivityTool.textContent = activity.tool
-      ? `${uiText('工具：', 'Tool: ')}${activity.tool}${callCount > 1 ? uiText(`（共 ${callCount} 个并发调用）`, ` (${callCount} concurrent calls)`) : ''}`
-      : (paused ? uiText('等待 AI 恢复…', 'Waiting for AI to resume…') : uiText('正在准备浏览器操作…', 'Preparing browser action…'))
+    agentActivityTool.textContent = paused
+      ? human ? uiText('AI 已暂停，网页现在可以点击', 'AI paused; the page is yours') : uiText('等待 AI 恢复…', 'Waiting for AI to resume…')
+      : activity.tool
+        ? `${uiText('工具：', 'Tool: ')}${activity.tool}${callCount > 1 ? uiText(`（共 ${callCount} 个并发调用）`, ` (${callCount} concurrent calls)`) : ''}`
+        : uiText('正在准备浏览器操作…', 'Preparing browser action…')
   }
   renderAgentCallList(activity, paused)
+  if (agentActivityTakeover) {
+    agentActivityTakeover.hidden = paused
+    agentActivityTakeover.textContent = uiText('接管页面', 'Take over')
+    agentActivityTakeover.title = uiText('暂停 AI，把网页操作权交给你；操作完点「继续 AI」', 'Pause AI and take control of the page; select “Resume AI” when done')
+    agentActivityTakeover.setAttribute('aria-label', agentActivityTakeover.title)
+  }
   if (agentActivityAction) {
-    agentActivityAction.textContent = paused ? t('resume') : t('interrupt')
-    agentActivityAction.title = paused ? uiText('立即恢复 AI 的浏览器操作', 'Resume AI browser actions now') : uiText('立即中断 AI 的后续浏览器操作', 'Interrupt further AI browser actions now')
+    agentActivityAction.textContent = paused ? uiText('继续 AI', 'Resume AI') : t('interrupt')
+    agentActivityAction.title = paused
+      ? uiText('恢复 AI 的浏览器操作', 'Resume AI browser actions now')
+      : uiText('中断 AI 的当前操作（30 秒后自动继续）', 'Interrupt current AI actions (auto-resume in 30s)')
+    agentActivityAction.setAttribute('aria-label', agentActivityAction.title)
   }
 
   const updateCountdown = (): void => {
@@ -941,10 +1012,12 @@ function renderAgentActivity(): void {
     const remaining = resumeAt ? Math.max(0, Math.ceil((resumeAt - Date.now()) / 1000)) : 0
     if (agentActivityDetail) {
       agentActivityDetail.textContent = paused
-        ? resumeAt
-          ? remaining > 0 ? uiText(`已中断，${remaining} 秒后自动继续`, `Interrupted; continuing in ${remaining}s`) : uiText('已中断，等待自动继续…', 'Interrupted; waiting to continue…')
-          : uiText('已由用户暂停，等待手动恢复', 'Paused by the user; resume manually')
-        : uiText('浏览器由 AI 控制', 'Browser controlled by AI')
+        ? human
+          ? uiText('你已接管网页操作 · 完成后点「继续 AI」', 'You have control · select “Resume AI” when done')
+          : resumeAt
+            ? remaining > 0 ? uiText(`已中断，${remaining} 秒后自动继续`, `Interrupted; continuing in ${remaining}s`) : uiText('已中断，等待自动继续…', 'Interrupted; waiting to continue…')
+            : uiText('已暂停，等待手动恢复', 'Paused; resume manually')
+        : uiText('AI 正在操作 · 点击网页可接管', 'AI is working · click the page to take over')
     }
     if (remaining <= 0 && agentActivityTimer) {
       clearInterval(agentActivityTimer)
@@ -1530,7 +1603,7 @@ function findFocusFallback(key: string): HTMLElement | null {
     case 'call-stop': {
       const nextCall = document.querySelector<HTMLElement>('[data-focus-key^="call-stop:"]')
       if (isFocusable(nextCall)) return nextCall
-      const action = [agentActivityAction, agentStop].find(isFocusable)
+      const action = [agentActivityAction, agentActivityTakeover, agentStop].find(isFocusable)
       if (action) return action
       break
     }
@@ -1630,6 +1703,7 @@ agentActivityAction?.addEventListener('click', () => {
   const paused = state.agentInterrupted || !!state.agentActivity?.paused
   void (paused ? window.aa.resumeAgent() : window.aa.interruptAgent())
 })
+agentActivityTakeover?.addEventListener('click', () => void window.aa.takeoverAgent())
 document.getElementById('btn-newtab')?.addEventListener('click', () => void window.aa.tabNew())
 
 tabsEl.addEventListener('keydown', (event: KeyboardEvent) => {

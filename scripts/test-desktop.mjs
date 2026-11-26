@@ -595,25 +595,49 @@ if (!process.versions.electron) {
       const r = document.querySelector('#hud-target').getBoundingClientRect()
       return { x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2) }
     })()`, false)
-    chrome.focus()
-    let forwarded = false
-    for (let attempt = 0; attempt < 4 && !forwarded; attempt++) {
-      chrome.sendInputEvent({ type: 'mouseMove', x: hudPoint.x, y: hudPoint.y + hudPageTop })
-      chrome.sendInputEvent({ type: 'mouseDown', x: hudPoint.x, y: hudPoint.y + hudPageTop, button: 'left', clickCount: 1 })
-      chrome.sendInputEvent({ type: 'mouseUp', x: hudPoint.x, y: hudPoint.y + hudPageTop, button: 'left', clickCount: 1 })
-      await pause(200)
-      forwarded = await hudPage.executeJavaScript('window.__hudClicks >= 1', false)
-    }
-    assert.equal(forwarded, true, 'click in the page area must be forwarded through the full-window HUD shell')
-    // 页面内的 DOM wheel（deltaY 正 = 向下）也应被转发；直接派发可绕开原生输入的符号不确定性。
-    await chrome.executeJavaScript(`(() => {
+    const wheelInPage = () => chrome.executeJavaScript(`(() => {
       const x = 40, y = ${hudPageTop + 300}
       const event = new WheelEvent('wheel', { deltaY: 300, clientX: x, clientY: y, bubbles: true, cancelable: true })
       document.elementFromPoint(x, y)?.dispatchEvent(event) ?? document.body.dispatchEvent(event)
     })()`, true)
-    await until(() => hudPage.executeJavaScript('window.scrollY > 0', false), 'wheel forwarded through the activity HUD', 5000)
+    const clickPage = async () => {
+      chrome.sendInputEvent({ type: 'mouseMove', x: hudPoint.x, y: hudPoint.y + hudPageTop })
+      chrome.sendInputEvent({ type: 'mouseDown', x: hudPoint.x, y: hudPoint.y + hudPageTop, button: 'left', clickCount: 1 })
+      chrome.sendInputEvent({ type: 'mouseUp', x: hudPoint.x, y: hudPoint.y + hudPageTop, button: 'left', clickCount: 1 })
+      await pause(250)
+    }
+    chrome.focus()
+    // AI 操作中页面只读：滚轮不改变页面基准，点击也不会误触网页。
+    await wheelInPage()
+    await pause(300)
+    assert.equal(await hudPage.executeJavaScript('window.scrollY', false), 0, 'wheel must not scroll the page while AI owns it')
+    const hudActiveUi = await ui(`({takeoverHidden:document.querySelector('#agent-activity-takeover')?.hidden, action:document.querySelector('#agent-activity-action')?.textContent})`)
+    assert.equal(hudActiveUi.takeoverHidden, false, 'active HUD offers an explicit takeover')
+    assert.ok(hudActiveUi.action?.includes('中断'), `active HUD keeps the interrupt action: ${JSON.stringify(hudActiveUi)}`)
+    await clickPage()
+    await until(async () => (await state()).agentActivity?.paused === true, 'first page click takes over', 5000)
+    assert.equal(await hudPage.executeJavaScript('window.__hudClicks', false), 0, 'takeover click must not reach the webpage')
+    const takeoverState = await state()
+    assert.equal(takeoverState.monitor?.control, 'human', 'page click locks the browser to human control')
+    const hudPausedUi = await ui(`({takeoverHidden:document.querySelector('#agent-activity-takeover')?.hidden, action:document.querySelector('#agent-activity-action')?.textContent, detail:document.querySelector('#agent-activity-detail')?.textContent})`)
+    assert.equal(hudPausedUi.takeoverHidden, true, 'takeover action is hidden while paused')
+    assert.ok(hudPausedUi.action?.includes('继续 AI'), `paused HUD offers resume: ${JSON.stringify(hudPausedUi)}`)
+    assert.ok(hudPausedUi.detail?.includes('接管'), `paused HUD explains the handover: ${JSON.stringify(hudPausedUi)}`)
+    // 接管后第二次点击才落到网页；点击同时把焦点交给页面，键盘输入才能继续。
+    let forwarded = false
+    for (let attempt = 0; attempt < 4 && !forwarded; attempt++) {
+      await clickPage()
+      forwarded = await hudPage.executeJavaScript('window.__hudClicks >= 1', false)
+    }
+    assert.equal(forwarded, true, 'page clicks work after takeover')
+    assert.equal(webContents.getFocusedWebContents(), hudPage, 'forwarded click focuses the webpage for keyboard input')
+    await wheelInPage()
+    await until(() => hudPage.executeJavaScript('window.scrollY > 0', false), 'wheel forwarded after takeover', 5000)
     await hudWait
-    pass('activity HUD forwards page-area mouse clicks and wheel scrolling instead of swallowing them')
+    await chrome.executeJavaScript('window.aa.resumeAgent()', true)
+    await until(async () => (await state()).agentActivity?.paused === false, 'AI resumes after takeover', 5000)
+    assert.equal((await state()).monitor?.control, 'ai', 'resume returns browser control to AI')
+    pass('activity HUD click takes over the page without mis-navigation, forwards input after takeover and resumes AI')
     // 恢复原地址：后续地址栏用例按会话记录里的 restored-a URL 断言。
     await tool('browser_navigate', { url: base + '/restored-a', tabId: hudTabId, snapshot: false })
     await until(() => hudPage.getURL() === base + '/restored-a', 'hud fixture tab restored to its session URL')

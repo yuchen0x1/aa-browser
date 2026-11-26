@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-globalThis.__AA_BRIDGE_VERSION__ = "0.18.2";
+globalThis.__AA_BRIDGE_VERSION__ = "0.19.0";
 // \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;

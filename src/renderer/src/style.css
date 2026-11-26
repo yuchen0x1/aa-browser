@@ -831,7 +831,41 @@ textarea:focus-visible,
 }
 .agent-call-stop:hover { background: var(--danger-hover); color: var(--text-title); }
 .agent-call-more { color: var(--text-muted); font-size: 10px; padding-left: 8px; }
-.agent-activity-foot { margin-top: 12px; }
+.agent-activity-foot {
+  margin-top: 12px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+#agent-activity-detail {
+  flex: 1 1 120px;
+  min-width: 0;
+  line-height: 1.35;
+}
+.agent-activity-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  margin-left: auto;
+}
+.agent-activity-takeover {
+  min-width: 84px;
+  padding: 6px 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: 7px;
+  background: var(--accent-soft);
+  color: var(--accent-cyan);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 650;
+  transition: all 0.16s ease;
+}
+.agent-activity-takeover:hover {
+  background: var(--accent-glow-soft);
+  border-color: var(--accent-cyan);
+  color: var(--text-title);
+  box-shadow: 0 0 12px var(--accent-glow-soft);
+}
 .agent-activity-action {
   min-width: 72px;
   padding: 6px 12px;
